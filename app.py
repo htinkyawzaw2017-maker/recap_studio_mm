@@ -18,7 +18,6 @@ import yt_dlp
 from google.cloud import texttospeech
 from google.oauth2 import service_account
 
-
 APP_DIR = Path(__file__).resolve().parent
 SESSIONS_DIR = APP_DIR / "user_sessions"
 SESSIONS_DIR.mkdir(exist_ok=True)
@@ -106,7 +105,7 @@ def pronunciation_dictionary():
 def require_ffmpeg():
     if shutil.which("ffmpeg") and shutil.which("ffprobe"):
         return True
-    st.error("FFmpeg မတွေ့ပါ။ packages.txt အတိုင်း FFmpeg ကို install လုပ်ပြီး ပြန်စမ်းပါ။")
+    st.error("FFmpeg မတွေ့ပါ။")
     return False
 
 
@@ -132,23 +131,43 @@ def save_upload(upload, destination):
     destination.write_bytes(upload.getbuffer())
 
 
-@st.cache_resource(show_spinner=False)
-def load_whisper():
-    return whisper.load_model("tiny")
-
-
 def transcribe(video, audio, language=None):
+    """Render Free Tier RAM (512MB) သက်သာစေရန် Gemini API ဖြင့် တိုက်ရိုက် transcribe လုပ်ခြင်း"""
     if not require_ffmpeg():
         return None, None
-    ok, details = run_media(["ffmpeg", "-y", "-i", str(video), "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", str(audio)])
+    ok, details = run_media(["ffmpeg", "-y", "-i", str(video), "-vn", "-acodec", "libmp3lame", "-b:a", "64k", str(SESSION_DIR / "audio_small.mp3")])
     if not ok:
         st.error(f"အသံထုတ်မရပါ — {details}")
         return None, None
+
+    if st.session_state.api_keys:
+        try:
+            genai.configure(api_key=st.session_state.api_keys[0])
+            small_audio = SESSION_DIR / "audio_small.mp3"
+            audio_file = genai.upload_file(path=str(small_audio))
+            while audio_file.state.name == "PROCESSING":
+                time.sleep(1)
+                audio_file = genai.get_file(audio_file.name)
+            
+            prompt = "Transcribe the spoken audio into plain text accurately without timestamps or commentary."
+            if language:
+                prompt += f" The language is {language}."
+                
+            model = genai.GenerativeModel(st.session_state.model_name)
+            response = model.generate_content([audio_file, prompt])
+            genai.delete_file(audio_file.name)
+            text = response.text.strip() if response.text else ""
+            return text, []
+        except Exception as api_err:
+            st.warning(f"Cloud transcription error, falling back to local: {api_err}")
+
+    # Fallback to tiny whisper if Gemini fails
     try:
+        model = whisper.load_model("tiny")
         options = {"task": "transcribe"}
         if language:
             options["language"] = language
-        data = load_whisper().transcribe(str(audio), **options)
+        data = model.transcribe(str(SESSION_DIR / "audio_small.mp3"), **options)
         return data.get("text", "").strip(), data.get("segments", [])
     except Exception as error:
         st.error(f"Speech recognition မအောင်မြင်ပါ — {error}")
@@ -521,7 +540,7 @@ with recap_tab:
             seconds = duration_of(PATHS["source"])
             st.info(f"Source ready · {seconds:.0f} sec" if seconds else "Source ready")
     with right:
-        recap_mode = st.radio("Recap ရေးနည်း", ["အသံမှရေးမည်", "ဗီဒီယိုကို AI ကြည့်ပြီးရေးမည်"])
+        recap_mode = st.radio("Recap ရေးနည်း", ["ဗီဒီယိုကို AI ကြည့်ပြီးရေးမည် (Render RAM လွတ် - အကြံပြု)", "အသံမှရေးမည်"])
         narration_language = st.selectbox("Narration language", ["မြန်မာ", "English"])
         tone = st.selectbox("Narration tone", ["Movie recap — တင်းကျပ်ပြီးစီးဆင်း", "Documentary — ရှင်းလင်းတည်ငြိမ်", "News recap — အချက်အလက်ဦးစားပေး", "High energy — မြန်ပြီးထိရောက်"])
         source_language = st.selectbox("မူရင်းအသံဘာသာ", ["Auto detect", "မြန်မာ", "English", "Japanese", "Chinese", "Thai"])
@@ -532,20 +551,7 @@ with recap_tab:
             st.warning("အရင်ဆုံး ဗီဒီယိုဖိုင် upload လုပ်ပါ သို့မဟုတ် sidebar က link import လုပ်ပါ။")
         elif not st.session_state.api_keys:
             st.warning("AI narration ဖန်တီးရန် sidebar မှာ Gemini API key ထည့်ပါ။")
-        elif recap_mode == "အသံမှရေးမည်":
-            codes = {"မြန်မာ": "my", "English": "en", "Japanese": "ja", "Chinese": "zh", "Thai": "th"}
-            code = None if source_language == "Auto detect" else codes[source_language]
-            with st.spinner("အသံကိုနားထောင်ပြီး recap ရေးနေသည်…"):
-                transcript, _ = transcribe(PATHS["source"], PATHS["audio"], code)
-                script, error = generate(recap_prompt(transcript, tone, narration_language)) if transcript else (None, "Transcript မရပါ။")
-            if script:
-                st.session_state.raw_transcript = transcript
-                st.session_state.final_script = script
-                st.session_state.script_editor = script
-                st.success("Recap narration ready ဖြစ်ပါပြီ။")
-            else:
-                st.error(f"Recap မဖန်တီးနိုင်ပါ — {error}")
-        else:
+        elif recap_mode.startswith("ဗီဒီယိုကို AI ကြည့်ပြီးရေးမည်"):
             with st.spinner("ဗီဒီယိုကိုစိစစ်ပြီး recap ရေးနေသည်…"):
                 try:
                     genai.configure(api_key=st.session_state.api_keys[0])
@@ -566,6 +572,20 @@ with recap_tab:
                 st.success("Recap narration ready ဖြစ်ပါပြီ။")
             else:
                 st.error(f"Recap မဖန်တီးနိုင်ပါ — {error}")
+        else:
+            codes = {"မြန်မာ": "my", "English": "en", "Japanese": "ja", "Chinese": "zh", "Thai": "th"}
+            code = None if source_language == "Auto detect" else codes[source_language]
+            with st.spinner("အသံကိုနားထောင်ပြီး recap ရေးနေသည်…"):
+                transcript, _ = transcribe(PATHS["source"], PATHS["audio"], code)
+                script, error = generate(recap_prompt(transcript, tone, narration_language)) if transcript else (None, "Transcript မရပါ။")
+            if script:
+                st.session_state.raw_transcript = transcript
+                st.session_state.final_script = script
+                st.session_state.script_editor = script
+                st.success("Recap narration ready ဖြစ်ပါပြီ။")
+            else:
+                st.error(f"Recap မဖန်တီးနိုင်ပါ — {error}")
+
     if st.session_state.raw_transcript:
         with st.expander("မူရင်း transcript ကိုကြည့်ရန်"):
             st.write(st.session_state.raw_transcript)
