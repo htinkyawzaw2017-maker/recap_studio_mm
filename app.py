@@ -134,7 +134,7 @@ def save_upload(upload, destination):
 
 @st.cache_resource(show_spinner=False)
 def load_whisper():
-    return whisper.load_model("base")
+    return whisper.load_model("tiny")
 
 
 def transcribe(video, audio, language=None):
