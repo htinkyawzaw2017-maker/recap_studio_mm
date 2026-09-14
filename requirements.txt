@@ -6,4 +6,4 @@ pydub
 requests
 google-cloud-texttospeech
 google-auth
-yt-dlp
+yt-dlp>=2026.08.19
