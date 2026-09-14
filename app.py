@@ -1,9 +1,11 @@
 """Recap Studio MM: a Burmese-first video recap, voice-over and subtitle app."""
 
+import importlib
 import json
 import re
 import shutil
 import subprocess
+import sys
 import textwrap
 import time
 import uuid
@@ -49,7 +51,21 @@ PATHS = {
     "caption_srt": SESSION_DIR / "captions.srt",
     "caption_video": SESSION_DIR / "captioned_video.mp4",
     "dub_audio": SESSION_DIR / "dubbed_audio.mp3",
+    "cookies": SESSION_DIR / "cookies.txt",
 }
+
+# Two ways a video can reach Subtitle Studio:
+#  1. It has real speech -> transcribe the audio directly.
+#  2. It is silent footage that Recap Builder's "AI ကြည့်ပြီးရေးမည်" mode
+#     already turned into a finished script -> that script must be time
+#     aligned to the video's visuals instead of transcribing (there is no
+#     audio to transcribe). Putting this option first and auto-selecting it
+#     when a silent-video script is handed over avoids the previous mistake
+#     of users landing on the audio-transcription mode and getting a
+#     confusing "no speech found" error.
+SUBTITLE_MODE_SCRIPT_ALIGN = "Recap Builder ရဲ့ AI script ကို timing ချိန်ညှိမည် (အသံမပါသော ဗီဒီယိုအတွက် — အကြံပြု)"
+SUBTITLE_MODE_AUDIO = "ဗီဒီယို အသံမှ တိုက်ရိုက်ထုတ်မည် (video မှာ မူရင်းအသံပါလျှင်)"
+SUBTITLE_MODE_OPTIONS = [SUBTITLE_MODE_SCRIPT_ALIGN, SUBTITLE_MODE_AUDIO]
 
 st.markdown(
     """
@@ -147,6 +163,7 @@ def init_state():
         "caption_video": None, "srt_path": None, "publish_kit": "",
         "segments": None, "dub_language": None, "dubbed_video": None,
         "last_download_url": "", "script_language": "မြန်မာ", "script_video_is_silent": False,
+        "subtitle_mode": SUBTITLE_MODE_AUDIO, "has_cookies": False,
     }.items():
         st.session_state.setdefault(key, value)
     if st.session_state.google_creds is None:
@@ -264,40 +281,75 @@ def _clear_destination(destination):
             pass
 
 
-def download_video(url, destination):
+def installed_ytdlp_version():
+    return getattr(yt_dlp, "version", None) and getattr(yt_dlp.version, "__version__", "unknown") or "unknown"
+
+
+def update_ytdlp():
+    """YouTube frequently breaks whichever player-client yt-dlp uses by
+    default (android_sdkless / android_vr have both broken in 2026, each
+    time fixed within days by a new yt-dlp release). Pulling the latest
+    release into the *running* process is the single highest-success fix,
+    so we expose it as a one-click sidebar action instead of only relying
+    on requirements.txt (which only gets picked up on a fresh redeploy)."""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-U", "--no-cache-dir", "yt-dlp"],
+            capture_output=True, text=True, check=False, timeout=120,
+        )
+        if result.returncode != 0:
+            return False, (result.stderr or "pip install မအောင်မြင်ပါ။")[-600:]
+        importlib.reload(yt_dlp)
+        return True, installed_ytdlp_version()
+    except Exception as error:
+        return False, str(error)
+
+
+def download_video(url, destination, cookies_path=None):
     """Robust YouTube / public-video download that always lands on `destination`.
 
-    YouTube regularly changes what it serves to yt-dlp's default ("web")
-    client, which causes "Requested format is not available" even though the
-    video plays fine in a browser. The fix is to retry with the other player
-    clients (android / ios / tv_embedded) that yt-dlp supports, each with a
-    permissive format string, before giving up.
+    YouTube regularly changes what it serves to yt-dlp's default player
+    client, which causes "Requested format is not available" / HTTP 403
+    even though the video plays fine in a browser. yt-dlp itself usually
+    ships a fix within days, so the two most reliable mitigations are (1)
+    keeping yt-dlp itself up to date — see the sidebar "yt-dlp update"
+    button — and (2) retrying the extraction with several different player
+    clients (and, for videos that need a login, browser-exported cookies)
+    before giving up.
     """
     _clear_destination(destination)
+    cookies_path = cookies_path if cookies_path and Path(cookies_path).exists() else None
 
     attempts = [
-        {"player_client": ["android"]},
+        {"player_client": ["default", "-android_sdkless"]},
         {"player_client": ["ios"]},
+        {"player_client": ["android"]},
         {"player_client": ["tv_embedded"]},
-        {"player_client": ["web", "web_embedded"]},
+        {"player_client": ["web_embedded"]},
+        {"player_client": ["mweb"]},
+        {"player_client": ["web", "tv_embedded"]},
+        {"format": "b"},  # best single progressive stream, no client override
         {},  # yt-dlp default behaviour as a last resort
     ]
-    format_string = "bestvideo*+bestaudio/best"
     last_error = ""
     for extra_args in attempts:
         _clear_destination(destination)
+        player_client = extra_args.get("player_client")
         options = {
-            "format": format_string,
+            "format": extra_args.get("format", "bestvideo*+bestaudio/best"),
             "outtmpl": str(destination),
             "merge_output_format": "mp4",
             "quiet": True,
             "no_warnings": True,
             "noplaylist": True,
             "retries": 3,
+            "extractor_retries": 3,
             "http_headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
         }
-        if extra_args:
-            options["extractor_args"] = {"youtube": {**extra_args, "formats": ["missing_pot"]}}
+        if cookies_path:
+            options["cookiefile"] = str(cookies_path)
+        if player_client:
+            options["extractor_args"] = {"youtube": {"player_client": player_client, "formats": ["missing_pot"]}}
         try:
             with yt_dlp.YoutubeDL(options) as client:
                 client.download([url])
@@ -310,11 +362,11 @@ def download_video(url, destination):
     if last_error:
         lowered = last_error.lower()
         if "sign in" in lowered or "bot" in lowered or "confirm" in lowered:
-            return False, "ဒီဗီဒီယိုကို YouTube က bot-check / login လိုအပ်အောင် ကန့်သတ်ထားပါတယ်။ တခြား public ဗီဒီယို link နဲ့စမ်းကြည့်ပါ။"
+            return False, "ဒီဗီဒီယိုကို YouTube က bot-check / login လိုအပ်အောင် ကန့်သတ်ထားပါတယ်။ Sidebar ရဲ့ 'YouTube cookies.txt' ကိုတင်ပြီး ပြန်စမ်းကြည့်ပါ။"
         if "private" in lowered or "unavailable" in lowered:
             return False, "ဒီဗီဒီယိုကို ဒေါင်းလုဒ်လုပ်ခွင့်မရှိပါ (private/unavailable)။"
-        if "format is not available" in lowered or "requested format" in lowered:
-            return False, "YouTube ဘက်က format ချထားမှု ပြောင်းသွားလို့ ဒေါင်းလုဒ်မရပါ။ server ပေါ်က yt-dlp ကို နောက်ဆုံး version အဖြစ် update (requirements.txt ထဲ yt-dlp ကို version မတပ်ဘဲ ထားပါ) လုပ်ပြီး ပြန်စမ်းပေးပါ။"
+        if "format is not available" in lowered or "requested format" in lowered or "403" in lowered:
+            return False, "YouTube ဘက်က format ချထားမှု ပြောင်းသွားလို့ ဒေါင်းလုဒ်မရပါ။ Sidebar ရဲ့ '🔄 yt-dlp ကို update လုပ်မည်' ခလုတ်ကို နှိပ်ပြီး (yt-dlp ဗားရှင်းအသစ်ဆွဲမည်) ထပ်စမ်းပါ — YouTube ပြောင်းလိုက်တိုင်း yt-dlp ကလိုက်ပြင်ပေးလေ့ရှိပြီး ဗားရှင်းအဟောင်းသုံးနေရင် ဒီ error တက်တတ်ပါတယ်။ ဆက်မရပါက cookies.txt တင်ပြီးထပ်စမ်းပါ။"
     return False, last_error or "ဗီဒီယိုကို ဒေါင်းလုဒ်လုပ်၍မရပါ။ Link ကိုပြန်စစ်ပါ။"
 
 
@@ -797,12 +849,37 @@ with st.sidebar:
                 st.rerun()
     with st.expander("📥 Video link import", expanded=True):
         link = st.text_input("YouTube / public video URL")
+        cookies_upload = st.file_uploader(
+            "YouTube cookies.txt (optional)", type=["txt"], key="cookies_upload",
+            help="'Sign in to confirm you're not a bot' သို့မဟုတ် 'Requested format is not available' error ဆက်တက်နေရင် browser extension (ဥပမာ - Get cookies.txt LOCALLY) နဲ့ youtube.com ကနေ login ဝင်ထားစဉ် cookies.txt ကို export လုပ်ပြီး ဒီနေရာမှာတင်ပါ။",
+        )
+        if cookies_upload:
+            save_upload(cookies_upload, PATHS["cookies"])
+            st.session_state.has_cookies = True
+            st.success("cookies.txt ကို ဒေါင်းလုဒ်တွေအတွက် အသုံးပြုပါမည်။")
+        elif PATHS["cookies"].exists():
+            st.caption("✅ cookies.txt လက်ရှိအသုံးပြုနေသည်")
+            if st.button("🗑️ cookies.txt ဖျက်မည်", use_container_width=True):
+                PATHS["cookies"].unlink(missing_ok=True)
+                st.session_state.has_cookies = False
+                st.rerun()
+        version_col, update_col = st.columns([1.3, 1])
+        with version_col:
+            st.caption(f"yt-dlp ဗားရှင်း — {installed_ytdlp_version()}")
+        with update_col:
+            if st.button("🔄 yt-dlp update", use_container_width=True, help="YouTube ဘက်က format ချထားမှု ပြောင်းသွားတိုင်း yt-dlp က ရက်ပိုင်းအတွင်း fix ထုတ်ပေးလေ့ရှိသည်။ ဒေါင်းလုဒ်မရတဲ့အခါ ဒီခလုတ်ကို အရင်နှိပ်ကြည့်ပါ။"):
+                with st.spinner("yt-dlp ကို နောက်ဆုံးဗားရှင်းသို့ update လုပ်နေသည်…"):
+                    ok, info = update_ytdlp()
+                if ok:
+                    st.success(f"yt-dlp ကို v{info} အဖြစ် update လုပ်ပြီးပါပြီ။")
+                else:
+                    st.error(f"Update မအောင်မြင်ပါ — {info}")
         if st.button("ဗီဒီယိုဒေါင်းလုဒ်", use_container_width=True):
             if not link.strip():
                 st.warning("Video URL ထည့်ပါ။")
             else:
                 with st.spinner("ဗီဒီယို ရယူနေသည်… (ဗီဒီယိုအရွယ်အစားပေါ်မူတည်၍ အချိန်ယူနိုင်သည်)"):
-                    ok, error = download_video(link.strip(), PATHS["source"])
+                    ok, error = download_video(link.strip(), PATHS["source"], PATHS["cookies"] if PATHS["cookies"].exists() else None)
                 if ok:
                     st.session_state.last_download_url = link.strip()
                     st.success("ဗီဒီယိုရပြီ — 'Recap Builder' tab ရဲ့ ဗီဒီယိုနေရာမှာ အလိုအလျောက်ပါသွားပါပြီ။")
@@ -925,7 +1002,13 @@ with recap_tab:
         st.session_state.segments = None
         st.session_state.caption_video = None
         st.session_state.dubbed_video = None
-        st.success("Script နှင့် ဗီဒီယိုကို 'Subtitle Studio' tab ဆီ ပို့ပြီးပါပြီ — ဒီနေရာက tab ကိုသွားပြီး 'Recap Builder script ကို timing ချိန်ညှိမည်' ကိုရွေးပါ။")
+        # This is the fix for the hand-off ordering: when the video came from
+        # the silent "AI ကြည့်ပြီးရေးမည်" mode there is no audio track to
+        # transcribe, so Subtitle Studio must default straight into the
+        # script-timing-alignment mode instead of the audio-transcription
+        # mode (which would otherwise fail with "no speech found").
+        st.session_state.subtitle_mode = SUBTITLE_MODE_SCRIPT_ALIGN if st.session_state.script_video_is_silent else SUBTITLE_MODE_AUDIO
+        st.success("Script နှင့် ဗီဒီယိုကို 'Subtitle Studio' tab ဆီ ပို့ပြီးပါပြီ — ဒီနေရာက tab ကိုသွားလိုက်ရုံပါပဲ၊ မှန်ကန်တဲ့ mode ကို အလိုအလျောက် ရွေးပေးထားပါပြီ။")
     st.caption("မှတ်ချက် — ဗီဒီယိုမှာ မူရင်းအသံမပါလျှင် (AI ကြည့်ပြီးရေးထားသော script ဖြစ်လျှင်) ဒီ button ကို သုံးပြီး Subtitle Studio ထဲ တိုက်ရိုက်ပို့နိုင်ပါတယ်။")
     voice_column, export_column = st.columns([1.1, 1])
     with voice_column:
@@ -984,10 +1067,11 @@ with subtitle_tab:
 
     subtitle_mode = st.radio(
         "Subtitle စာသားရင်းမြစ်",
-        ["ဗီဒီယို အသံမှ တိုက်ရိုက်ထုတ်မည် (video မှာ အသံပါလျှင်)", "Recap Builder ရဲ့ AI script ကို timing ချိန်ညှိမည် (အသံမပါသော ဗီဒီယိုအတွက်)"],
-        help="User တင်ပေးသော ဗီဒီယိုမှာ မူရင်းအသံမပါဘဲ Recap Builder က AI ကြည့်ပြီးရေးထားသော script ကိုသာသုံးထားလျှင် ဒုတိယရွေးစရာကို သုံးပါ။",
+        SUBTITLE_MODE_OPTIONS,
+        key="subtitle_mode",
+        help="User တင်ပေးသော ဗီဒီယိုမှာ မူရင်းအသံမပါဘဲ Recap Builder က AI ကြည့်ပြီးရေးထားသော script ကိုသာသုံးထားလျှင် ပထမရွေးစရာ (script timing ချိန်ညှိမည်) ကိုသုံးပါ — ဒါသည် 'Recap Builder' tab ရဲ့ 'ပို့ပါ' ခလုတ်ကိုနှိပ်ချိန်တွင် အလိုအလျောက် ရွေးပေးပါလိမ့်မည်။",
     )
-    is_script_mode = subtitle_mode.startswith("Recap Builder")
+    is_script_mode = subtitle_mode == SUBTITLE_MODE_SCRIPT_ALIGN
 
     caption_upload = st.file_uploader("Caption လိုချင်သောဗီဒီယို", type=["mp4", "mov", "mkv", "webm"], key="caption_upload")
     if caption_upload:
