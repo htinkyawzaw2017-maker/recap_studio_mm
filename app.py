@@ -146,7 +146,7 @@ def init_state():
         "script_editor": "", "processed_video": None, "processed_audio": None,
         "caption_video": None, "srt_path": None, "publish_kit": "",
         "segments": None, "dub_language": None, "dubbed_video": None,
-        "last_download_url": "",
+        "last_download_url": "", "script_language": "မြန်မာ", "script_video_is_silent": False,
     }.items():
         st.session_state.setdefault(key, value)
     if st.session_state.google_creds is None:
@@ -251,8 +251,7 @@ def transcribe(video, audio, language=None):
         return None, None
 
 
-def download_video(url, destination):
-    """Robust YouTube / public-video download that always lands on `destination`."""
+def _clear_destination(destination):
     if destination.exists():
         try:
             destination.unlink()
@@ -264,15 +263,31 @@ def download_video(url, destination):
         except OSError:
             pass
 
-    format_attempts = [
-        "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-        "best[ext=mp4]/best",
-        "best",
+
+def download_video(url, destination):
+    """Robust YouTube / public-video download that always lands on `destination`.
+
+    YouTube regularly changes what it serves to yt-dlp's default ("web")
+    client, which causes "Requested format is not available" even though the
+    video plays fine in a browser. The fix is to retry with the other player
+    clients (android / ios / tv_embedded) that yt-dlp supports, each with a
+    permissive format string, before giving up.
+    """
+    _clear_destination(destination)
+
+    attempts = [
+        {"player_client": ["android"]},
+        {"player_client": ["ios"]},
+        {"player_client": ["tv_embedded"]},
+        {"player_client": ["web", "web_embedded"]},
+        {},  # yt-dlp default behaviour as a last resort
     ]
+    format_string = "bestvideo*+bestaudio/best"
     last_error = ""
-    for fmt in format_attempts:
+    for extra_args in attempts:
+        _clear_destination(destination)
         options = {
-            "format": fmt,
+            "format": format_string,
             "outtmpl": str(destination),
             "merge_output_format": "mp4",
             "quiet": True,
@@ -281,6 +296,8 @@ def download_video(url, destination):
             "retries": 3,
             "http_headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
         }
+        if extra_args:
+            options["extractor_args"] = {"youtube": {**extra_args, "formats": ["missing_pot"]}}
         try:
             with yt_dlp.YoutubeDL(options) as client:
                 client.download([url])
@@ -288,19 +305,16 @@ def download_video(url, destination):
                 return True, ""
         except Exception as error:
             last_error = str(error)
-        for leftover in destination.parent.glob(destination.stem + ".*"):
-            if leftover != destination:
-                try:
-                    leftover.unlink()
-                except OSError:
-                    pass
 
+    _clear_destination(destination)
     if last_error:
         lowered = last_error.lower()
         if "sign in" in lowered or "bot" in lowered or "confirm" in lowered:
             return False, "ဒီဗီဒီယိုကို YouTube က bot-check / login လိုအပ်အောင် ကန့်သတ်ထားပါတယ်။ တခြား public ဗီဒီယို link နဲ့စမ်းကြည့်ပါ။"
         if "private" in lowered or "unavailable" in lowered:
             return False, "ဒီဗီဒီယိုကို ဒေါင်းလုဒ်လုပ်ခွင့်မရှိပါ (private/unavailable)။"
+        if "format is not available" in lowered or "requested format" in lowered:
+            return False, "YouTube ဘက်က format ချထားမှု ပြောင်းသွားလို့ ဒေါင်းလုဒ်မရပါ။ server ပေါ်က yt-dlp ကို နောက်ဆုံး version အဖြစ် update (requirements.txt ထဲ yt-dlp ကို version မတပ်ဘဲ ထားပါ) လုပ်ပြီး ပြန်စမ်းပေးပါ။"
     return False, last_error or "ဗီဒီယိုကို ဒေါင်းလုဒ်လုပ်၍မရပါ။ Link ကိုပြန်စစ်ပါ။"
 
 
@@ -341,6 +355,71 @@ def visual_prompt(tone, language):
 def clean_ai_text(text):
     text = text.strip()
     return re.sub(r"^(?:final script|recap narration|narration)\s*[:：]\s*", "", text, flags=re.I).strip()
+
+
+def extract_json_array(text):
+    text = text.strip()
+    text = re.sub(r"^```(?:json)?", "", text.strip(), flags=re.I).strip()
+    text = re.sub(r"```$", "", text.strip()).strip()
+    match = re.search(r"\[.*\]", text, flags=re.S)
+    return match.group(0) if match else text
+
+
+def align_script_to_video(video_path, script_text, language):
+    """For videos that have no usable speech (e.g. silent footage that the
+    Recap Builder already turned into a script via 'AI ကြည့်ပြီးရေးမည်' mode),
+    ask Gemini to split that finished script into short lines and time-align
+    each line to the video's visuals, so Subtitle Studio can turn it into
+    accurately-timed captions and dubbing without needing original audio."""
+    if not st.session_state.api_keys:
+        return None, "Gemini API key ကို sidebar မှာ ထည့်ပါ။"
+    if not script_text.strip():
+        return None, "Recap Builder ကနေ script မရှိသေးပါ။"
+    duration = duration_of(video_path)
+    try:
+        genai.configure(api_key=st.session_state.api_keys[0])
+        remote = genai.upload_file(path=str(video_path))
+        while remote.state.name == "PROCESSING":
+            time.sleep(2)
+            remote = genai.get_file(remote.name)
+        if remote.state.name == "FAILED":
+            return None, "Gemini video processing မအောင်မြင်ပါ။"
+        prompt = f"""
+ဤအောက်ပါစာသားသည် ဒီဗီဒီယို (မူရင်းအသံမပါ) အတွက် ရေးထားပြီးသား {language} recap narration ဖြစ်သည်။
+Video ၏ စက္ကန့်ပေါင်း {duration:.1f} sec ရှိသည်။
+Narration စာသားကို အဓိပ္ပာယ်၊ စကားလုံး၊ အစီအစဉ် လုံးဝမပြောင်းလဲစေဘဲ တိုတောင်းသော caption လိုင်းများအဖြစ် ပိုင်းခြားပြီး၊ video ထဲက မြင်ကွင်းအစီအစဉ်နှင့် ကိုက်ညီအောင် timestamp ချိတ်ဆက်ပါ။
+
+စည်းကမ်းများ
+1. Narration ရှိ စကားလုံးအားလုံးကို အစဉ်လိုက်၊ ချန်လှပ်မထားဘဲ၊ ထပ်မထည့်ဘဲ အကုန်သုံးပါ။
+2. line တစ်ကြောင်းစီသည် စကားလုံး ၄-၁၄ လုံးခန့်၊ (တစ်ထွက်ရှူငင်ချိန်) အရှည်ရှိရမည်။
+3. start/end timestamp များသည် စက္ကန့်ဖြင့် ဂဏန်းဖြစ်ရမည်၊ တဖြည်းဖြည်းများလာရမည်၊ 0 နှင့် {duration:.1f} ကြားတွင်ရှိရမည်၊ line တစ်ခုနှင့်တစ်ခု overlap မဖြစ်ရ။
+4. Video ၏ visual pacing (ပြောင်းလဲမှု၊ အရေးကြီးသည့်မြင်ကွင်း) နှင့် ကိုက်ညီအောင် timing ချထားပါ။
+5. JSON array တစ်ခုတည်းသာ ပြန်ပေးပါ — [{{"start": 0.0, "end": 3.2, "text": "..."}}, ...] ပုံစံ။ အခြားစာသား၊ ရှင်းလင်းချက် လုံးဝမထည့်ပါနှင့်။
+
+Narration script:
+{script_text}
+""".strip()
+        model = genai.GenerativeModel(st.session_state.model_name)
+        response = model.generate_content([remote, prompt])
+        genai.delete_file(remote.name)
+        raw = extract_json_array(response.text or "")
+        data = json.loads(raw)
+    except Exception as error:
+        return None, str(error)
+
+    segments = []
+    for item in data if isinstance(data, list) else []:
+        try:
+            start, end = float(item["start"]), float(item["end"])
+            text = str(item["text"]).strip()
+        except (KeyError, TypeError, ValueError):
+            continue
+        if text and end > start:
+            segments.append({"start": max(start, 0.0), "end": end, "text": text})
+    segments.sort(key=lambda seg: seg["start"])
+    if not segments:
+        return None, "AI ကနေ timing ချထားမှုမရပါ။ ထပ်စမ်းကြည့်ပါ။"
+    return segments, None
 
 
 def generate(prompt):
@@ -812,7 +891,9 @@ with recap_tab:
             if script:
                 st.session_state.final_script = script
                 st.session_state.script_editor = script
-                st.success("Recap narration ready ဖြစ်ပါပြီ။")
+                st.session_state.script_language = narration_language
+                st.session_state.script_video_is_silent = True
+                st.success("Recap narration ready ဖြစ်ပါပြီ — ဒီ script ကို 'Subtitle Studio' tab ရဲ့ 'Recap Builder script ကို timing ချိန်ညှိမည်' mode မှာ ဆက်သုံးနိုင်ပါတယ်။")
             else:
                 st.error(f"Recap မဖန်တီးနိုင်ပါ — {error}")
         else:
@@ -825,6 +906,8 @@ with recap_tab:
                 st.session_state.raw_transcript = transcript
                 st.session_state.final_script = script
                 st.session_state.script_editor = script
+                st.session_state.script_language = narration_language
+                st.session_state.script_video_is_silent = False
                 st.success("Recap narration ready ဖြစ်ပါပြီ။")
             else:
                 st.error(f"Recap မဖန်တီးနိုင်ပါ — {error}")
@@ -837,6 +920,13 @@ with recap_tab:
     st.markdown('<p class="section-title">🎙️ Narration editor & export</p><p class="section-lead">စကားလုံးနှင့်အမည်များကိုစစ်ပြီး export လုပ်ပါ။ [action], [sad], [happy], [whisper] ကိုလိုအပ်မှသာ ထည့်ပါ။</p>', unsafe_allow_html=True)
     script_text = st.text_area("Final recap narration", key="script_editor", height=310, placeholder="Recap script ကို ဒီနေရာမှာ တိုက်ရိုက်ရေးနိုင်ပါတယ်။")
     st.session_state.final_script = script_text
+    if st.button("➜ ဒီ script နဲ့ ဗီဒီယိုကို Subtitle Studio ကို ပို့ပါ", use_container_width=True, disabled=not (script_text.strip() and PATHS["source"].exists())):
+        shutil.copyfile(PATHS["source"], PATHS["caption_source"])
+        st.session_state.segments = None
+        st.session_state.caption_video = None
+        st.session_state.dubbed_video = None
+        st.success("Script နှင့် ဗီဒီယိုကို 'Subtitle Studio' tab ဆီ ပို့ပြီးပါပြီ — ဒီနေရာက tab ကိုသွားပြီး 'Recap Builder script ကို timing ချိန်ညှိမည်' ကိုရွေးပါ။")
+    st.caption("မှတ်ချက် — ဗီဒီယိုမှာ မူရင်းအသံမပါလျှင် (AI ကြည့်ပြီးရေးထားသော script ဖြစ်လျှင်) ဒီ button ကို သုံးပြီး Subtitle Studio ထဲ တိုက်ရိုက်ပို့နိုင်ပါတယ်။")
     voice_column, export_column = st.columns([1.1, 1])
     with voice_column:
         voice_engine = st.radio("Voice engine", ["Edge TTS (free)", "Google Cloud TTS"], horizontal=True)
@@ -891,45 +981,104 @@ with recap_tab:
 
 with subtitle_tab:
     st.markdown('<p class="section-title">▣ Subtitle Studio</p><p class="section-lead">ဗီဒီယိုအသံကို timestamp တိကျစွာဖြင့် subtitle အဖြစ်ထုတ်ပြီး SRT၊ burned-in MP4 နှင့် timing-ကိုက်ညီသော dubbed voice video ထုတ်နိုင်သည်။</p>', unsafe_allow_html=True)
+
+    subtitle_mode = st.radio(
+        "Subtitle စာသားရင်းမြစ်",
+        ["ဗီဒီယို အသံမှ တိုက်ရိုက်ထုတ်မည် (video မှာ အသံပါလျှင်)", "Recap Builder ရဲ့ AI script ကို timing ချိန်ညှိမည် (အသံမပါသော ဗီဒီယိုအတွက်)"],
+        help="User တင်ပေးသော ဗီဒီယိုမှာ မူရင်းအသံမပါဘဲ Recap Builder က AI ကြည့်ပြီးရေးထားသော script ကိုသာသုံးထားလျှင် ဒုတိယရွေးစရာကို သုံးပါ။",
+    )
+    is_script_mode = subtitle_mode.startswith("Recap Builder")
+
     caption_upload = st.file_uploader("Caption လိုချင်သောဗီဒီယို", type=["mp4", "mov", "mkv", "webm"], key="caption_upload")
-    subtitle_language = st.selectbox("Subtitle language", ["မူရင်းအသံအတိုင်း", "မြန်မာ (တိကျသောဘာသာပြန်)"])
-    subtitle_source = st.selectbox("မူရင်းအသံဘာသာ", ["Auto detect", "မြန်မာ", "English", "Japanese", "Chinese", "Thai"], key="subtitle_source")
     if caption_upload:
         save_upload(caption_upload, PATHS["caption_source"])
+        st.session_state.segments = None
+        st.session_state.caption_video = None
+        st.session_state.dubbed_video = None
         st.success(f"{caption_upload.name} ကို ready လုပ်ပြီးပါပြီ။")
-    if st.button("Subtitle ဖန်တီးပါ", type="primary", use_container_width=True):
-        if not PATHS["caption_source"].exists():
-            st.warning("ဗီဒီယိုဖိုင်ကို အရင်ထည့်ပါ။")
-        elif subtitle_language.startswith("မြန်မာ") and not st.session_state.api_keys:
-            st.warning("မြန်မာဘာသာပြန် subtitle အတွက် sidebar မှာ Gemini API key ထည့်ပါ။")
-        else:
-            codes = {"မြန်မာ": "my", "English": "en", "Japanese": "ja", "Chinese": "zh", "Thai": "th"}
-            code = None if subtitle_source == "Auto detect" else codes[subtitle_source]
-            with st.spinner("အသံကို subtitle အဖြစ်ပြောင်းနေသည်…"):
-                _, segments = transcribe(PATHS["caption_source"], PATHS["caption_audio"], code)
-            if not segments:
-                st.error("Subtitle မထုတ်နိုင်ပါ — အသံစာသားမတွေ့ပါ။")
+
+    if not is_script_mode:
+        subtitle_language = st.selectbox("Subtitle language", ["မူရင်းအသံအတိုင်း", "မြန်မာ (တိကျသောဘာသာပြန်)"])
+        subtitle_source = st.selectbox("မူရင်းအသံဘာသာ", ["Auto detect", "မြန်မာ", "English", "Japanese", "Chinese", "Thai"], key="subtitle_source")
+        if st.button("Subtitle ဖန်တီးပါ", type="primary", use_container_width=True):
+            if not PATHS["caption_source"].exists():
+                st.warning("ဗီဒီယိုဖိုင်ကို အရင်ထည့်ပါ။")
+            elif subtitle_language.startswith("မြန်မာ") and not st.session_state.api_keys:
+                st.warning("မြန်မာဘာသာပြန် subtitle အတွက် sidebar မှာ Gemini API key ထည့်ပါ။")
             else:
-                if subtitle_language.startswith("မြန်မာ"):
-                    with st.spinner("မိနစ်၊ စက္ကန့်အတိုင်း မြန်မာဘာသာသို့ တစ်ကြောင်းချင်း ပြန်ဆိုနေသည်…"):
-                        segments, warn_msg = translate_segments(segments)
-                    if warn_msg:
-                        st.warning(warn_msg)
-                font = padauk_font()
-                if not font:
-                    st.error("မြန်မာ subtitle font ကိုရယူမရပါ။ Network ကိုစစ်ပြီး ပြန်စမ်းပါ။")
+                codes = {"မြန်မာ": "my", "English": "en", "Japanese": "ja", "Chinese": "zh", "Thai": "th"}
+                code = None if subtitle_source == "Auto detect" else codes[subtitle_source]
+                with st.spinner("အသံကို subtitle အဖြစ်ပြောင်းနေသည်…"):
+                    _, segments = transcribe(PATHS["caption_source"], PATHS["caption_audio"], code)
+                if not segments:
+                    st.error("Subtitle မထုတ်နိုင်ပါ — အသံစာသားမတွေ့ပါ (ဗီဒီယိုမှာ မူရင်းအသံမပါလျှင် အပေါ်က 'Recap Builder ရဲ့ AI script ကို timing ချိန်ညှိမည်' ကိုရွေးပါ)။")
                 else:
-                    write_subtitles(segments)
-                    ok, error = run_media(["ffmpeg", "-y", "-i", str(PATHS["caption_source"]), "-vf", f"ass={PATHS['caption_ass']}:fontsdir={font.parent}", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "copy", str(PATHS["caption_video"])])
-                    if ok:
-                        st.session_state.caption_video = str(PATHS["caption_video"])
-                        st.session_state.srt_path = str(PATHS["caption_srt"])
-                        st.session_state.segments = segments
-                        st.session_state.dub_language = "မြန်မာ" if subtitle_language.startswith("မြန်မာ") else (subtitle_source if subtitle_source in ("မြန်မာ", "English") else None)
-                        st.session_state.dubbed_video = None
-                        st.success("Subtitle MP4 နှင့် SRT ပြီးပါပြီ။ အောက်မှာ dubbing ကိုလည်း ဆက်လုပ်နိုင်ပါတယ်။")
+                    if subtitle_language.startswith("မြန်မာ"):
+                        with st.spinner("မိနစ်၊ စက္ကန့်အတိုင်း မြန်မာဘာသာသို့ တစ်ကြောင်းချင်း ပြန်ဆိုနေသည်…"):
+                            segments, warn_msg = translate_segments(segments)
+                        if warn_msg:
+                            st.warning(warn_msg)
+                    font = padauk_font()
+                    if not font:
+                        st.error("မြန်မာ subtitle font ကိုရယူမရပါ။ Network ကိုစစ်ပြီး ပြန်စမ်းပါ။")
                     else:
-                        st.error(f"Caption video မထုတ်နိုင်ပါ — {error}")
+                        write_subtitles(segments)
+                        ok, error = run_media(["ffmpeg", "-y", "-i", str(PATHS["caption_source"]), "-vf", f"ass={PATHS['caption_ass']}:fontsdir={font.parent}", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "copy", str(PATHS["caption_video"])])
+                        if ok:
+                            st.session_state.caption_video = str(PATHS["caption_video"])
+                            st.session_state.srt_path = str(PATHS["caption_srt"])
+                            st.session_state.segments = segments
+                            st.session_state.dub_language = "မြန်မာ" if subtitle_language.startswith("မြန်မာ") else (subtitle_source if subtitle_source in ("မြန်မာ", "English") else None)
+                            st.session_state.dubbed_video = None
+                            st.success("Subtitle MP4 နှင့် SRT ပြီးပါပြီ။ အောက်မှာ dubbing ကိုလည်း ဆက်လုပ်နိုင်ပါတယ်။")
+                        else:
+                            st.error(f"Caption video မထုတ်နိုင်ပါ — {error}")
+    else:
+        if not st.session_state.final_script.strip():
+            st.markdown('<div class="callout warn">Recap Builder tab မှာ script တစ်ခု အရင်ဖန်တီးပါ၊ ပြီးရင် "ဒီ script နဲ့ ဗီဒီယိုကို Subtitle Studio ကို ပို့ပါ" ခလုတ်ကို နှိပ်ပါ။</div>', unsafe_allow_html=True)
+        else:
+            script_language_for_align = st.selectbox(
+                "ဒီ script က ဘယ်ဘာသာနဲ့ ရေးထားလဲ",
+                ["မြန်မာ", "English"],
+                index=0 if st.session_state.get("script_language", "မြန်မာ") == "မြန်မာ" else 1,
+                key="align_script_language",
+            )
+            translate_to_burmese = script_language_for_align == "English" and st.checkbox("Caption ကို မြန်မာဘာသာသို့ ထပ်ပြန်ဆိုမည်", value=True)
+            with st.expander("Script preview", expanded=False):
+                st.write(st.session_state.final_script)
+            if st.button("Script ကို Video timing နဲ့ချိန်ညှိပြီး Subtitle ဖန်တီးပါ", type="primary", use_container_width=True):
+                if not PATHS["caption_source"].exists():
+                    st.warning("ဗီဒီယိုဖိုင်ကို အရင်ထည့်ပါ (Recap Builder ကနေ 'ပို့ပါ' ခလုတ်နဲ့လည်း ရနိုင်ပါတယ်)။")
+                elif not st.session_state.api_keys:
+                    st.warning("Sidebar မှာ Gemini API key ထည့်ပါ။")
+                else:
+                    with st.spinner("Video ရဲ့ မြင်ကွင်းအစီအစဉ်နဲ့ script ကို timing ချိန်ညှိနေသည် (အနည်းငယ်အချိန်ယူနိုင်သည်)…"):
+                        segments, error = align_script_to_video(PATHS["caption_source"], st.session_state.final_script, script_language_for_align)
+                    if not segments:
+                        st.error(f"Timing ချိန်ညှိမရပါ — {error}")
+                    else:
+                        if translate_to_burmese:
+                            with st.spinner("မြန်မာဘာသာသို့ တစ်ကြောင်းချင်း ပြန်ဆိုနေသည်…"):
+                                segments, warn_msg = translate_segments(segments)
+                            if warn_msg:
+                                st.warning(warn_msg)
+                        font = padauk_font()
+                        if not font:
+                            st.error("မြန်မာ subtitle font ကိုရယူမရပါ။ Network ကိုစစ်ပြီး ပြန်စမ်းပါ။")
+                        else:
+                            write_subtitles(segments)
+                            burn_command = ["ffmpeg", "-y", "-i", str(PATHS["caption_source"]), "-vf", f"ass={PATHS['caption_ass']}:fontsdir={font.parent}", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]
+                            burn_command += ["-an"] if st.session_state.get("script_video_is_silent") else ["-c:a", "copy"]
+                            ok, error = run_media(burn_command + [str(PATHS["caption_video"])])
+                            if ok:
+                                st.session_state.caption_video = str(PATHS["caption_video"])
+                                st.session_state.srt_path = str(PATHS["caption_srt"])
+                                st.session_state.segments = segments
+                                st.session_state.dub_language = "မြန်မာ" if (translate_to_burmese or script_language_for_align == "မြန်မာ") else "English"
+                                st.session_state.dubbed_video = None
+                                st.success("Video timing နဲ့ ကိုက်ညီသော Subtitle MP4 နှင့် SRT ပြီးပါပြီ။ အောက်မှာ dubbing ကိုလည်း ဆက်လုပ်နိုင်ပါတယ်။")
+                            else:
+                                st.error(f"Caption video မထုတ်နိုင်ပါ — {error}")
     if st.session_state.caption_video and Path(st.session_state.caption_video).exists():
         caption_video, srt = Path(st.session_state.caption_video), Path(st.session_state.srt_path)
         st.video(str(caption_video))
