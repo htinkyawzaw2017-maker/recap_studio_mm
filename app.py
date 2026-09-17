@@ -2,6 +2,7 @@
 
 import importlib
 import json
+import random
 import re
 import shutil
 import subprocess
@@ -210,19 +211,56 @@ def init_state():
 init_state()
 
 
+def js_runtime_available():
+    """Since 2024 YouTube requires a BotGuard-minted "PO token" for most
+    player clients, and yt-dlp can only mint one if an external JavaScript
+    runtime (Deno, Node.js, or Bun) is on PATH. Without one, yt-dlp silently
+    drops protected formats and the download regularly falls straight into
+    the "Sign in to confirm you're not a bot" wall — this is one of the
+    single biggest causes of the 403 / bot-check errors this app used to hit
+    on hosts like Streamlit Community Cloud, which ship neither by default."""
+    return any(shutil.which(binary) for binary in ("deno", "node", "nodejs", "bun"))
+
+
+def _pip_install_latest_ytdlp(timeout=120):
+    """Prefer installing yt-dlp straight from the GitHub `master` branch:
+    YouTube breaks the extractor every few weeks, and the yt-dlp project
+    usually ships the counter-fix to `master` days (sometimes hours) before
+    the next PyPI release goes out. Falls back to the regular PyPI release
+    if GitHub is unreachable or the archive install fails for any reason, so
+    a flaky network never leaves yt-dlp completely unpatched."""
+    master_url = "https://github.com/yt-dlp/yt-dlp/archive/refs/heads/master.zip"
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-U", "--no-cache-dir", f"yt-dlp[default] @ {master_url}"],
+            capture_output=True, text=True, check=False, timeout=timeout,
+        )
+        if result.returncode == 0:
+            return True, "master"
+    except Exception:
+        pass
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-U", "--no-cache-dir", "yt-dlp[default]"],
+            capture_output=True, text=True, check=False, timeout=timeout,
+        )
+        if result.returncode == 0:
+            return True, "pypi"
+        return False, (result.stderr or "pip install မအောင်မြင်ပါ။")[-600:]
+    except Exception as error:
+        return False, str(error)
+
+
 @st.cache_resource(ttl=24 * 3600, show_spinner=False)
 def ensure_ytdlp_fresh():
     """YouTube changes what it serves to yt-dlp every few weeks, and the
     single highest-success mitigation is simply always running the newest
-    yt-dlp release (the project usually ships a counter-fix within days).
-    This runs at most once per day per server process — cheap, silent, and
-    means users do not have to remember to click the manual update button
-    in the sidebar for downloads to keep working."""
+    yt-dlp build (see `_pip_install_latest_ytdlp`). This runs at most once
+    per day per server process — cheap, silent, and means users do not have
+    to remember to click the manual update button in the sidebar for
+    downloads to keep working."""
     try:
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-U", "--no-cache-dir", "yt-dlp"],
-            capture_output=True, text=True, check=False, timeout=90,
-        )
+        _pip_install_latest_ytdlp(timeout=110)
         importlib.reload(yt_dlp)
     except Exception:
         pass
@@ -278,7 +316,8 @@ def duration_of(path):
 def atempo_filter_chain(factor):
     """ffmpeg's atempo filter is documented as safe within 0.5x-2.0x per
     instance, so factors outside that range (needed for the 0.4x-3.0x
-    narration-speed slider) are decomposed into a chain of atempo stages
+    narration-speed slider, and for stretching/compressing dubbed lines to
+    fit their caption slot) are decomposed into a chain of atempo stages
     that multiply out to the exact requested factor."""
     factor = max(0.1, min(factor, 20.0))
     remaining = factor
@@ -362,15 +401,12 @@ def update_ytdlp():
     button — useful right after YouTube ships a breaking change and a user
     does not want to wait for the daily automatic refresh."""
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-U", "--no-cache-dir", "yt-dlp"],
-            capture_output=True, text=True, check=False, timeout=120,
-        )
-        if result.returncode != 0:
-            return False, (result.stderr or "pip install မအောင်မြင်ပါ။")[-600:]
+        ok, info = _pip_install_latest_ytdlp(timeout=180)
+        if not ok:
+            return False, info or "pip install မအောင်မြင်ပါ။"
         importlib.reload(yt_dlp)
         ensure_ytdlp_fresh.clear()
-        return True, installed_ytdlp_version()
+        return True, f"{installed_ytdlp_version()} ({info})"
     except Exception as error:
         return False, str(error)
 
@@ -381,51 +417,63 @@ def download_video(url, destination, cookies_path=None, proxy=None):
     YouTube regularly changes what it serves to yt-dlp, which causes
     "Sign in to confirm you're not a bot" / "Requested format is not
     available" / HTTP 403 even though the video plays fine in a browser.
-    Two real bugs were found and fixed here versus the previous version:
+    Three real, confirmed bugs were found and fixed here versus the previous
+    version:
 
-    1. A hard-coded desktop Chrome User-Agent was sent for *every* attempt,
-       including attempts that told YouTube we were the "ios", "android" or
-       "mweb" client. A user-agent that contradicts the claimed client is
-       one of the most reliable ways to fail YouTube's bot check, so it is
-       no longer overridden — each client now gets the correct UA that
-       yt-dlp itself picks for it.
-    2. The very first attempts hard-coded specific player clients
-       (tv_embedded, tv, mweb, ...). When YouTube changes what those
-       clients are served, the hard-coded list goes stale until this file
-       is edited again. The first attempt now uses yt-dlp's own default
-       client-selection logic (no override at all), which the yt-dlp
-       project keeps up to date in every release — combined with the daily
-       auto-update this means the app tends to self-heal within a day of a
-       YouTube-side change instead of needing a code fix.
+    1. `formats=missing_pot` was being forced on almost every attempt. That
+       extractor-arg tells yt-dlp to keep listing formats it already knows
+       require a "PO token" (a BotGuard-signed proof-of-origin token) it does
+       not have — i.e. formats it already expects to fail with 403. Forcing
+       this on every attempt is what turned every single retry into a
+       guaranteed 403 in practice. It is now only used as the very last,
+       explicit last-resort attempt.
+    2. YouTube recently broke yt-dlp's default `android_sdkless` client. The
+       documented workaround (`player_client=default,-android_sdkless`) is
+       now the first attempt instead of an unqualified default client list
+       that silently keeps hitting the broken client.
+    3. A hard-coded desktop Chrome User-Agent was previously sent for every
+       attempt, including attempts that told YouTube we were the "ios",
+       "android" or "mweb" client. A user-agent that contradicts the claimed
+       client is one of the most reliable ways to fail YouTube's bot check,
+       so it is never overridden — each client gets the correct UA yt-dlp
+       itself picks for it.
 
-    Remaining mitigations, in order of real-world effectiveness: always run
-    the freshest yt-dlp (`ensure_ytdlp_fresh`, once a day, plus the
-    sidebar's manual update button), retry with several different player
-    clients, prefer IPv4 egress (trusted more than many hosts' IPv6
-    ranges), accept browser-exported cookies for logged-in-only videos, and
-    optionally route through a user-supplied HTTP/SOCKS proxy — datacenter
-    IPs (which is what most app hosting runs on) get YouTube's strictest
-    bot-detection tier, and a residential/mobile proxy is the only reliable
-    escape hatch once every client + cookie combination is exhausted.
+    Remaining mitigations, in rough order of real-world effectiveness in
+    2025/2026: always run the freshest yt-dlp straight from its GitHub
+    `master` branch (`ensure_ytdlp_fresh`, once a day, plus the sidebar's
+    manual update button — PyPI releases can lag days behind a YouTube-side
+    break), have a JavaScript runtime available so yt-dlp can mint PO tokens
+    (see `js_runtime_available`), retry with several different player
+    clients, prefer IPv4 egress (trusted more than many hosts' IPv6 ranges),
+    add jittered delays between attempts (tight retry loops make
+    bot-detection worse, not better), accept browser-exported cookies for
+    logged-in-only videos, and optionally route through a user-supplied
+    HTTP/SOCKS proxy — datacenter IPs (what most app hosting runs on) get
+    YouTube's strictest bot-detection tier, and a residential/mobile proxy is
+    the only reliable escape hatch once every client + cookie combination is
+    exhausted.
     """
     _clear_destination(destination)
     cookies_path = cookies_path if cookies_path and Path(cookies_path).exists() else None
+    has_js_runtime = js_runtime_available()
 
     attempts = [
-        {"player_client": None, "ipv4": True},  # yt-dlp's own self-updating default client chain
-        {"player_client": ["tv", "web_safari"], "ipv4": True},
+        {"player_client": ["default", "-android_sdkless"], "ipv4": True},
+        {"player_client": ["tv"], "ipv4": True},
+        {"player_client": ["tv_embedded"], "ipv4": True},
+        {"player_client": ["web_embedded"], "ipv4": True},
+        {"player_client": ["mweb"], "ipv4": True},
         {"player_client": ["ios"], "ipv4": True},
         {"player_client": ["android"], "ipv4": True},
-        {"player_client": ["mweb"], "ipv4": True},
-        {"player_client": ["web_embedded"], "ipv4": True},
-        {"format": "b", "player_client": None, "ipv4": False},  # best single progressive stream, no client override
-        {"player_client": None, "ipv4": False},  # yt-dlp default behaviour as a last resort
+        {"format": "b", "player_client": ["tv"], "ipv4": False},  # best single progressive stream
+        {"player_client": None, "ipv4": False},  # yt-dlp's own default behaviour as a further fallback
+        {"player_client": None, "ipv4": False, "formats_missing_pot": True},  # absolute last resort
     ]
     last_error = ""
     for attempt_index, extra_args in enumerate(attempts):
         _clear_destination(destination)
         if attempt_index > 0:
-            time.sleep(1.5)  # avoid tight retry loops, which make bot-detection worse, not better
+            time.sleep(2 + random.random() * 1.5)  # jittered backoff — tight retry loops make bot-detection worse
         player_client = extra_args.get("player_client")
         options = {
             "format": extra_args.get("format", "bestvideo*+bestaudio/best"),
@@ -438,6 +486,7 @@ def download_video(url, destination, cookies_path=None, proxy=None):
             "extractor_retries": 3,
             "geo_bypass": True,
             "nocheckcertificate": True,
+            "sleep_interval_requests": 1,
             # Intentionally no "http_headers" User-Agent override here — a
             # UA that does not match the claimed player_client is a common,
             # avoidable cause of bot detection. Let yt-dlp set the correct
@@ -449,10 +498,13 @@ def download_video(url, destination, cookies_path=None, proxy=None):
             options["cookiefile"] = str(cookies_path)
         if proxy:
             options["proxy"] = proxy
+        youtube_args = {}
         if player_client:
-            options["extractor_args"] = {"youtube": {"player_client": player_client, "formats": ["missing_pot"]}}
-        else:
-            options["extractor_args"] = {"youtube": {"formats": ["missing_pot"]}}
+            youtube_args["player_client"] = player_client
+        if extra_args.get("formats_missing_pot"):
+            youtube_args["formats"] = ["missing_pot"]
+        if youtube_args:
+            options["extractor_args"] = {"youtube": youtube_args}
         try:
             with yt_dlp.YoutubeDL(options) as client:
                 client.download([url])
@@ -464,9 +516,14 @@ def download_video(url, destination, cookies_path=None, proxy=None):
     _clear_destination(destination)
     if last_error:
         lowered = last_error.lower()
+        js_hint = "" if has_js_runtime else (
+            " ⚠️ ဒီ server ပေါ်မှာ JavaScript runtime (Deno/Node.js) မတွေ့ပါ — YouTube ရဲ့ verification token "
+            "(PO token) ကိုဖန်တီးဖို့ လိုအပ်ပါတယ်။ App ရဲ့ packages.txt ဖိုင်ထဲမှာ 'nodejs' ကိုထည့်ပြီး redeploy "
+            "ပြန်လုပ်ကြည့်ပါ။"
+        )
         if "sign in" in lowered or "bot" in lowered or "confirm" in lowered:
             return False, (
-                "ဒီဗီဒီယိုကို YouTube က bot-check / login လိုအပ်အောင် ကန့်သတ်ထားပါတယ်။ "
+                "ဒီဗီဒီယိုကို YouTube က bot-check / login လိုအပ်အောင် ကန့်သတ်ထားပါတယ်။" + js_hint + " "
                 "(1) Sidebar ရဲ့ 'YouTube cookies.txt' ကိုတင်ပြီး ပြန်စမ်းကြည့်ပါ (Chrome/Firefox extension ဖြင့် "
                 "youtube.com ကို login ဝင်ထားစဉ် export လုပ်ပါ)။ (2) App ကိုတင်ထားတဲ့ server ရဲ့ IP ကို YouTube က "
                 "datacenter IP အဖြစ်မှတ်ပြီး တင်းကျပ်စွာစစ်နေခြင်းလည်းဖြစ်နိုင်လို့ Sidebar ရဲ့ Proxy (HTTP/SOCKS) "
@@ -476,12 +533,41 @@ def download_video(url, destination, cookies_path=None, proxy=None):
             return False, "ဒီဗီဒီယိုကို ဒေါင်းလုဒ်လုပ်ခွင့်မရှိပါ (private/unavailable)။"
         if "format is not available" in lowered or "requested format" in lowered or "403" in lowered:
             return False, (
-                "YouTube ဘက်က format ချထားမှု ပြောင်းသွားလို့ ဒေါင်းလုဒ်မရပါ။ App က yt-dlp ကို တစ်နေ့တစ်ခါ "
-                "အလိုအလျောက် update လုပ်ပေးထားပေမယ့်၊ YouTube ပြောင်းလိုက်ပြီး မကြာသေးရင် Sidebar ရဲ့ "
-                "'🔄 yt-dlp update' ခလုတ်ကို နှိပ်ပြီး ချက်ချင်း update ဆွဲကြည့်ပါ။ ဆက်မရပါက cookies.txt "
-                "တင်ပြီး၊ လိုအပ်ရင် Proxy ထည့်ပြီး ထပ်စမ်းပါ။"
+                "YouTube ဘက်က format ချထားမှု ပြောင်းသွားလို့ ဒေါင်းလုဒ်မရပါ။" + js_hint + " App က yt-dlp ကို "
+                "GitHub ရဲ့ အသစ်ဆုံး master branch ကနေ တစ်နေ့တစ်ခါ auto-update လုပ်ပေးထားပေမယ့်၊ YouTube "
+                "ပြောင်းလိုက်ပြီး မကြာသေးရင် Sidebar ရဲ့ '🔄 yt-dlp update' ခလုတ်ကို နှိပ်ပြီး ချက်ချင်း update "
+                "ဆွဲကြည့်ပါ။ ဆက်မရပါက cookies.txt တင်ပြီး၊ လိုအပ်ရင် Proxy ထည့်ပြီး ထပ်စမ်းပါ။"
             )
     return False, last_error or "ဗီဒီယိုကို ဒေါင်းလုဒ်လုပ်၍မရပါ။ Link ကိုပြန်စစ်ပါ။"
+
+
+def normalize_segment_timing(segments, total_duration=None):
+    """Guarantee subtitle/dubbing segments are valid, strictly increasing and
+    non-overlapping in time — regardless of whether they came from Whisper,
+    from Gemini's video-timing alignment, or survived a translation pass.
+    AI-estimated timing occasionally produces overlapping or out-of-order
+    timestamps, which would otherwise make burned-in captions flicker and
+    make dubbed lines talk over each other. This is applied once, right
+    before subtitles/dubbing are generated, regardless of source."""
+    cleaned = []
+    for item in sorted(segments or [], key=lambda seg: float(seg["start"])):
+        text = str(item.get("text", "")).strip()
+        if not text:
+            continue
+        try:
+            start = max(float(item["start"]), 0.0)
+            end = float(item["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if cleaned and start < cleaned[-1]["end"]:
+            start = cleaned[-1]["end"]
+        end = max(end, start + 0.15)
+        if total_duration:
+            end = min(end, float(total_duration))
+        if end <= start:
+            continue
+        cleaned.append({"start": start, "end": end, "text": text})
+    return cleaned
 
 
 # Shared, strongly-worded fidelity + colloquial-tone contract used by every
@@ -602,7 +688,7 @@ Narration script:
             continue
         if text and end > start:
             segments.append({"start": max(start, 0.0), "end": end, "text": text})
-    segments.sort(key=lambda seg: seg["start"])
+    segments = normalize_segment_timing(segments, total_duration=duration)
     if not segments:
         return None, "AI ကနေ timing ချထားမှုမရပါ။ ထပ်စမ်းကြည့်ပါ။"
     return segments, None
@@ -953,6 +1039,9 @@ def build_dubbed_audio(segments, language, gender, engine, accent="US"):
     it starts and ends at the same second as the original subtitle."""
     if not require_ffmpeg():
         return None, "FFmpeg မရှိပါ။"
+    segments = normalize_segment_timing(segments)
+    if not segments:
+        return None, "Dubbing အတွက် သုံးနိုင်သော caption timing မတွေ့ပါ။"
     chunks = []
     cursor = 0.0
     for index, segment in enumerate(segments):
@@ -979,10 +1068,18 @@ def build_dubbed_audio(segments, language, gender, engine, accent="US"):
         target = max(end - start, 0.2)
         fitted = raw
         if raw_duration > 0.05:
-            tempo = max(0.5, min(2.0, raw_duration / target))
+            # Speeding speech up to fit a shorter slot sounds natural well
+            # past ffmpeg's single-stage atempo limit (2.0x) once chained via
+            # atempo_filter_chain, so lines that ran long get sped up rather
+            # than abruptly truncated. Slowing speech down is capped much
+            # closer to 1.0x (never below 0.82x) because a voice dragged out
+            # to match a long slot sounds far worse than simply padding the
+            # remainder with silence.
+            raw_tempo = raw_duration / target
+            tempo = max(0.82, min(2.6, raw_tempo))
             if abs(tempo - 1.0) > 0.03:
                 candidate = SESSION_DIR / f"dub_fit_{index}.mp3"
-                ok, _ = run_media(["ffmpeg", "-y", "-i", str(raw), "-filter:a", f"atempo={tempo:.3f}", "-c:a", "libmp3lame", "-q:a", "2", str(candidate)])
+                ok, _ = run_media(["ffmpeg", "-y", "-i", str(raw), "-filter:a", atempo_filter_chain(tempo), "-c:a", "libmp3lame", "-q:a", "2", str(candidate)])
                 if ok:
                     fitted = candidate
         fitted_duration = duration_of(fitted)
@@ -992,6 +1089,9 @@ def build_dubbed_audio(segments, language, gender, engine, accent="US"):
             if silence_file(target - fitted_duration, pad):
                 chunks.append(pad)
         elif fitted_duration > target + 0.05:
+            # Only reached if even a 2.6x speed-up was not enough (a very
+            # long line crammed into a very short caption slot) — trim as a
+            # last resort rather than letting it overrun into the next line.
             trimmed = SESSION_DIR / f"dub_trim_{index}.mp3"
             ok, _ = run_media(["ffmpeg", "-y", "-i", str(fitted), "-t", f"{target:.3f}", "-c:a", "libmp3lame", "-q:a", "2", str(trimmed)])
             chunks.append(trimmed if ok else fitted)
@@ -1074,15 +1174,19 @@ with st.sidebar:
         save_local_config(raw_keys, st.session_state.model_name, st.session_state.proxy_url)
         version_col, update_col = st.columns([1.3, 1])
         with version_col:
-            st.caption(f"yt-dlp ဗားရှင်း — {installed_ytdlp_version()} · daily auto-update ✅")
+            runtime_note = "JS runtime ✅" if js_runtime_available() else "JS runtime ⚠️ (packages.txt မှာ nodejs ထည့်ပါ)"
+            st.caption(f"yt-dlp — {installed_ytdlp_version()} · daily auto-update (GitHub master) ✅")
+            st.caption(runtime_note)
         with update_col:
             if st.button("🔄 yt-dlp update", use_container_width=True, help="App က yt-dlp ကို တစ်နေ့တစ်ခါ အလိုအလျောက် update လုပ်ပေးနေပေမယ့်၊ YouTube ပြောင်းလိုက်ပြီး ချက်ချင်း update ဆွဲချင်ရင် ဒီခလုတ်ကိုနှိပ်ပါ။"):
-                with st.spinner("yt-dlp ကို နောက်ဆုံးဗားရှင်းသို့ update လုပ်နေသည်…"):
+                with st.spinner("yt-dlp ကို GitHub master branch ကနေ နောက်ဆုံးဗားရှင်းသို့ update လုပ်နေသည်…"):
                     ok, info = update_ytdlp()
                 if ok:
                     st.success(f"yt-dlp ကို v{info} အဖြစ် update လုပ်ပြီးပါပြီ။")
                 else:
                     st.error(f"Update မအောင်မြင်ပါ — {info}")
+        if not js_runtime_available():
+            st.markdown('<div class="callout warn" style="margin-top:.5rem;">YouTube ရဲ့ bot-check token (PO token) ကိုဖန်တီးဖို့ JavaScript runtime လိုအပ်ပါတယ်။ Repo ရဲ့ <code>packages.txt</code> ထဲမှာ <code>nodejs</code> ထည့်ပြီး app ကို redeploy လုပ်ကြည့်ပါ — download error ဖြေရှင်းရာမှာ အထောက်အကူအများဆုံးဖြစ်ပါလိမ့်မယ်။</div>', unsafe_allow_html=True)
         if st.button("ဗီဒီယိုဒေါင်းလုဒ်", use_container_width=True):
             if not link.strip():
                 st.warning("Video URL ထည့်ပါ။")
@@ -1312,6 +1416,7 @@ with recap_tab:
                 code = None if subtitle_source == "Auto detect" else codes[subtitle_source]
                 with st.spinner("အသံကို subtitle အဖြစ်ပြောင်းနေသည်…"):
                     _, segments = transcribe(PATHS["source"], PATHS["audio"], code)
+                segments = normalize_segment_timing(segments or [], total_duration=duration_of(PATHS["source"]))
                 if not segments:
                     st.error("Subtitle မထုတ်နိုင်ပါ — အသံစာသားမတွေ့ပါ (ဗီဒီယိုမှာ မူရင်းအသံမပါလျှင် အပေါ်က 'AI script ကို timing ချိန်ညှိမည်' ကိုရွေးပါ)။")
                 else:
@@ -1368,6 +1473,7 @@ with recap_tab:
                         if not font:
                             st.error("မြန်မာ subtitle font ကိုရယူမရပါ။ Network ကိုစစ်ပြီး ပြန်စမ်းပါ။")
                         else:
+                            segments = normalize_segment_timing(segments, total_duration=duration_of(PATHS["source"]))
                             write_subtitles(segments)
                             burn_command = ["ffmpeg", "-y", "-i", str(PATHS["source"]), "-vf", f"ass={PATHS['caption_ass']}:fontsdir={font.parent}", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]
                             burn_command += ["-an"] if st.session_state.get("script_video_is_silent") else ["-c:a", "copy"]
