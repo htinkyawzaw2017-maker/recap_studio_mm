@@ -70,7 +70,7 @@ SUBTITLE_MODE_OPTIONS = [SUBTITLE_MODE_SCRIPT_ALIGN, SUBTITLE_MODE_AUDIO]
 st.markdown(
     """
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Noto+Sans+Myanmar:wght@400;500;600;700&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800;900&family=Noto+Sans+Myanmar:wght@400;500;600;700&display=swap');
       :root { --ink:#eef1f8; --muted:#97a3ba; --line:rgba(193,207,232,.13); --aqua:#30d5c8; --violet:#8e7dff; }
       * { box-sizing:border-box; }
       .stApp { background:radial-gradient(circle at 12% -10%,rgba(48,213,200,.16),transparent 30rem),radial-gradient(circle at 94% 0%,rgba(142,125,255,.15),transparent 30rem),#0a0e1a; color:var(--ink); font-family:"Noto Sans Myanmar","DM Sans",sans-serif; }
@@ -85,29 +85,39 @@ st.markdown(
       .hero { position:relative; overflow:hidden; padding:2rem 2.2rem; margin:0 0 1.6rem; border:1px solid rgba(96,225,216,.24); border-radius:24px; background:linear-gradient(125deg,rgba(19,38,54,.96),rgba(28,29,60,.9)); box-shadow:0 20px 60px rgba(0,0,0,.28); }
       .hero::after { content:""; position:absolute; inset:0; background:linear-gradient(120deg,transparent,rgba(142,125,255,.08),transparent); pointer-events:none; }
       .eyebrow { display:inline-flex; align-items:center; gap:.4rem; color:var(--aqua) !important; font-size:.72rem; font-weight:700; letter-spacing:.14em; text-transform:uppercase; margin:0 0 .7rem; padding:.3rem .7rem; border:1px solid rgba(48,213,200,.3); border-radius:999px; background:rgba(48,213,200,.08); }
-      .hero h1 { font-family:"DM Sans","Noto Sans Myanmar",sans-serif; font-size:2.3rem; margin:0; font-weight:800; letter-spacing:-.01em; }
+      .hero h1 { font-family:"DM Sans","Noto Sans Myanmar",sans-serif; font-size:2.3rem; margin:0; font-weight:900; letter-spacing:-.02em; background:linear-gradient(100deg,#eef1f8,#bfeee8 60%,#eef1f8); -webkit-background-clip:text; background-clip:text; }
       .hero p { color:#c4cee0 !important; margin:.6rem 0 0; font-size:1.02rem; max-width:52rem; line-height:1.6; }
+      .hero-badges { display:flex; gap:.5rem; flex-wrap:wrap; margin-top:1rem; }
+      .hero-badge { font-size:.74rem; font-weight:600; color:#bcd8ff !important; padding:.28rem .65rem; border-radius:999px; background:rgba(142,125,255,.12); border:1px solid rgba(142,125,255,.28); }
 
-      .step-card { display:flex; gap:.85rem; align-items:flex-start; padding:1rem 1.05rem; min-height:5.4rem; border-radius:16px; border:1px solid var(--line); background:rgba(18,26,42,.78); transition:transform .15s ease, border-color .15s ease; }
-      .step-card:hover { transform:translateY(-2px); border-color:rgba(48,213,200,.4); }
+      .step-card { display:flex; gap:.85rem; align-items:flex-start; padding:1rem 1.05rem; min-height:5.4rem; border-radius:16px; border:1px solid var(--line); background:rgba(18,26,42,.78); transition:transform .15s ease, border-color .15s ease, box-shadow .15s ease; }
+      .step-card:hover { transform:translateY(-2px); border-color:rgba(48,213,200,.4); box-shadow:0 12px 30px rgba(0,0,0,.25); }
       .step-icon { font-size:1.35rem; line-height:1.4rem; }
       .step-num { font:800 .72rem "DM Sans"; color:var(--aqua); letter-spacing:.08em; }
       .step-label { color:#d6dded !important; font-size:.87rem; margin-top:.15rem; line-height:1.35; }
 
       .label,.section-lead,.small-note { color:var(--muted) !important; font-size:.86rem; margin-top:.35rem; }
-      .section-title { font:800 1.2rem "DM Sans","Noto Sans Myanmar",sans-serif; margin:.2rem 0; display:flex; align-items:center; gap:.5rem; }
+      .section-title { font:800 1.2rem "DM Sans","Noto Sans Myanmar",sans-serif; margin:.2rem 0; display:flex; align-items:center; gap:.5rem; letter-spacing:-.01em; }
       .section-lead { margin:0 0 1.1rem; font-size:.92rem; line-height:1.55; }
 
-      .stButton > button,.stDownloadButton > button { border:0; border-radius:12px; color:#06161a !important; font-weight:700; background:linear-gradient(100deg,var(--aqua),#7ce6d5); min-height:2.75rem; transition:filter .15s ease, transform .15s ease; }
-      .stButton > button:hover,.stDownloadButton > button:hover { filter:brightness(1.08); transform:translateY(-1px); }
+      .stButton > button,.stDownloadButton > button { border:0; border-radius:12px; color:#06161a !important; font-weight:700; letter-spacing:.01em; background:linear-gradient(100deg,var(--aqua),#7ce6d5); min-height:2.75rem; box-shadow:0 8px 20px rgba(48,213,200,.16); transition:filter .15s ease, transform .15s ease, box-shadow .15s ease; }
+      .stButton > button:hover,.stDownloadButton > button:hover { filter:brightness(1.08); transform:translateY(-1px); box-shadow:0 12px 26px rgba(48,213,200,.26); }
+      .stButton > button:focus,.stDownloadButton > button:focus { outline:2px solid rgba(48,213,200,.55) !important; outline-offset:2px; }
       .stTextInput input,.stTextArea textarea,[data-baseweb="select"] > div,[data-testid="stFileUploader"] { background:#111a2a !important; color:var(--ink) !important; border-color:rgba(193,207,232,.18) !important; border-radius:12px !important; }
       .stTextArea textarea { line-height:1.9; }
       [data-testid="stFileUploader"] { padding:.4rem; }
+      .stRadio label p, .stSelectbox label p, .stTextInput label p, .stTextArea label p, .stSlider label p, .stFileUploader label p, .stCheckbox label p { color:#cdd8e9 !important; font-weight:600 !important; font-size:.86rem !important; }
 
       [data-baseweb="tab-list"] { gap:.5rem; border-bottom:1px solid var(--line); }
       button[data-baseweb="tab"] { color:var(--muted); font-weight:700; padding:.8rem 1.1rem; border-radius:10px 10px 0 0; }
       button[data-baseweb="tab"]:hover { color:#cdd8e9; background:rgba(48,213,200,.05); }
       button[data-baseweb="tab"][aria-selected="true"] { color:var(--aqua); border-bottom-color:var(--aqua); }
+
+      [data-baseweb="slider"] div[role="slider"] { background:var(--aqua) !important; box-shadow:0 0 0 5px rgba(48,213,200,.16) !important; }
+      [data-baseweb="slider"] > div > div { background:rgba(48,213,200,.4) !important; }
+
+      [data-testid="stExpander"] { border:1px solid var(--line) !important; border-radius:14px !important; background:rgba(15,22,36,.6) !important; overflow:hidden; }
+      .stAlert { border-radius:14px !important; border:1px solid var(--line) !important; }
 
       .callout { padding:1rem 1.15rem; margin:.7rem 0 1.1rem; border-left:3px solid var(--aqua); border-radius:0 12px 12px 0; background:rgba(48,213,200,.07); color:#cdd8e9; font-size:.9rem; line-height:1.6; }
       .callout.warn { border-left-color:#ffb454; background:rgba(255,180,84,.08); }
@@ -178,6 +188,28 @@ def init_state():
 init_state()
 
 
+@st.cache_resource(ttl=24 * 3600, show_spinner=False)
+def ensure_ytdlp_fresh():
+    """YouTube changes what it serves to yt-dlp every few weeks, and the
+    single highest-success mitigation is simply always running the newest
+    yt-dlp release (the project usually ships a counter-fix within days).
+    This runs at most once per day per server process — cheap, silent, and
+    means users do not have to remember to click the manual update button
+    in the sidebar for downloads to keep working."""
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-U", "--no-cache-dir", "yt-dlp"],
+            capture_output=True, text=True, check=False, timeout=90,
+        )
+        importlib.reload(yt_dlp)
+    except Exception:
+        pass
+    return True
+
+
+ensure_ytdlp_fresh()
+
+
 def load_dictionary():
     path = APP_DIR / "dictionary.txt"
     return path.read_text(encoding="utf-8") if path.exists() else ""
@@ -219,6 +251,24 @@ def duration_of(path):
         return float(json.loads(result.stdout)["format"]["duration"])
     except (KeyError, ValueError, TypeError, json.JSONDecodeError):
         return 0
+
+
+def atempo_filter_chain(factor):
+    """ffmpeg's atempo filter is documented as safe within 0.5x-2.0x per
+    instance, so factors outside that range (needed for the 0.4x-3.0x
+    narration-speed slider) are decomposed into a chain of atempo stages
+    that multiply out to the exact requested factor."""
+    factor = max(0.1, min(factor, 20.0))
+    remaining = factor
+    stages = []
+    while remaining > 2.0:
+        stages.append(2.0)
+        remaining /= 2.0
+    while remaining < 0.5:
+        stages.append(0.5)
+        remaining /= 0.5
+    stages.append(remaining)
+    return ",".join(f"atempo={stage:.6f}" for stage in stages)
 
 
 def save_upload(upload, destination):
@@ -286,12 +336,9 @@ def installed_ytdlp_version():
 
 
 def update_ytdlp():
-    """YouTube frequently breaks whichever player-client yt-dlp uses by
-    default (android_sdkless / android_vr have both broken in 2026, each
-    time fixed within days by a new yt-dlp release). Pulling the latest
-    release into the *running* process is the single highest-success fix,
-    so we expose it as a one-click sidebar action instead of only relying
-    on requirements.txt (which only gets picked up on a fresh redeploy)."""
+    """Manual, on-demand version of ensure_ytdlp_fresh() for the sidebar
+    button — useful right after YouTube ships a breaking change and a user
+    does not want to wait for the daily automatic refresh."""
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pip", "install", "-U", "--no-cache-dir", "yt-dlp"],
@@ -300,6 +347,7 @@ def update_ytdlp():
         if result.returncode != 0:
             return False, (result.stderr or "pip install မအောင်မြင်ပါ။")[-600:]
         importlib.reload(yt_dlp)
+        ensure_ytdlp_fresh.clear()
         return True, installed_ytdlp_version()
     except Exception as error:
         return False, str(error)
@@ -310,30 +358,38 @@ def download_video(url, destination, cookies_path=None):
 
     YouTube regularly changes what it serves to yt-dlp's default player
     client, which causes "Requested format is not available" / HTTP 403
-    even though the video plays fine in a browser. yt-dlp itself usually
-    ships a fix within days, so the two most reliable mitigations are (1)
-    keeping yt-dlp itself up to date — see the sidebar "yt-dlp update"
-    button — and (2) retrying the extraction with several different player
-    clients (and, for videos that need a login, browser-exported cookies)
-    before giving up.
+    even though the video plays fine in a browser. The mitigations applied
+    here, in order of real-world effectiveness, are: (1) always run the
+    freshest yt-dlp (see `ensure_ytdlp_fresh`, which runs automatically once
+    a day, plus the sidebar's manual update button), (2) retry extraction
+    with several different player clients — starting with the ones that
+    currently need no proof-of-origin token for most public videos — before
+    falling back to ones that do, (3) prefer IPv4 egress, which YouTube's
+    bot-detection trusts more than many hosting providers' IPv6 ranges, and
+    (4) accept browser-exported cookies for videos that require a
+    logged-in session.
     """
     _clear_destination(destination)
     cookies_path = cookies_path if cookies_path and Path(cookies_path).exists() else None
 
     attempts = [
-        {"player_client": ["default", "-android_sdkless"]},
-        {"player_client": ["ios"]},
-        {"player_client": ["android"]},
-        {"player_client": ["tv_embedded"]},
-        {"player_client": ["web_embedded"]},
-        {"player_client": ["mweb"]},
-        {"player_client": ["web", "tv_embedded"]},
-        {"format": "b"},  # best single progressive stream, no client override
-        {},  # yt-dlp default behaviour as a last resort
+        {"player_client": ["tv_embedded"], "ipv4": True},
+        {"player_client": ["tv"], "ipv4": True},
+        {"player_client": ["mweb"], "ipv4": True},
+        {"player_client": ["ios"], "ipv4": True},
+        {"player_client": ["android"], "ipv4": True},
+        {"player_client": ["web_embedded"], "ipv4": True},
+        {"player_client": ["web_safari"], "ipv4": True},
+        {"player_client": ["default", "-android_sdkless"], "ipv4": True},
+        {"player_client": ["web", "tv_embedded"], "ipv4": True},
+        {"format": "b", "ipv4": False},  # best single progressive stream, no client override
+        {"ipv4": False},  # yt-dlp default behaviour as a last resort
     ]
     last_error = ""
-    for extra_args in attempts:
+    for attempt_index, extra_args in enumerate(attempts):
         _clear_destination(destination)
+        if attempt_index > 0:
+            time.sleep(1.2)  # avoid tight retry loops, which make bot-detection worse, not better
         player_client = extra_args.get("player_client")
         options = {
             "format": extra_args.get("format", "bestvideo*+bestaudio/best"),
@@ -344,8 +400,12 @@ def download_video(url, destination, cookies_path=None):
             "noplaylist": True,
             "retries": 3,
             "extractor_retries": 3,
+            "geo_bypass": True,
+            "nocheckcertificate": True,
             "http_headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
         }
+        if extra_args.get("ipv4"):
+            options["source_address"] = "0.0.0.0"
         if cookies_path:
             options["cookiefile"] = str(cookies_path)
         if player_client:
@@ -362,11 +422,11 @@ def download_video(url, destination, cookies_path=None):
     if last_error:
         lowered = last_error.lower()
         if "sign in" in lowered or "bot" in lowered or "confirm" in lowered:
-            return False, "ဒီဗီဒီယိုကို YouTube က bot-check / login လိုအပ်အောင် ကန့်သတ်ထားပါတယ်။ Sidebar ရဲ့ 'YouTube cookies.txt' ကိုတင်ပြီး ပြန်စမ်းကြည့်ပါ။"
+            return False, "ဒီဗီဒီယိုကို YouTube က bot-check / login လိုအပ်အောင် ကန့်သတ်ထားပါတယ်။ Sidebar ရဲ့ 'YouTube cookies.txt' ကိုတင်ပြီး ပြန်စမ်းကြည့်ပါ (Chrome/Firefox extension ဖြင့် youtube.com ကို login ဝင်ထားစဉ် export လုပ်ပါ)။"
         if "private" in lowered or "unavailable" in lowered:
             return False, "ဒီဗီဒီယိုကို ဒေါင်းလုဒ်လုပ်ခွင့်မရှိပါ (private/unavailable)။"
         if "format is not available" in lowered or "requested format" in lowered or "403" in lowered:
-            return False, "YouTube ဘက်က format ချထားမှု ပြောင်းသွားလို့ ဒေါင်းလုဒ်မရပါ။ Sidebar ရဲ့ '🔄 yt-dlp ကို update လုပ်မည်' ခလုတ်ကို နှိပ်ပြီး (yt-dlp ဗားရှင်းအသစ်ဆွဲမည်) ထပ်စမ်းပါ — YouTube ပြောင်းလိုက်တိုင်း yt-dlp ကလိုက်ပြင်ပေးလေ့ရှိပြီး ဗားရှင်းအဟောင်းသုံးနေရင် ဒီ error တက်တတ်ပါတယ်။ ဆက်မရပါက cookies.txt တင်ပြီးထပ်စမ်းပါ။"
+            return False, "YouTube ဘက်က format ချထားမှု ပြောင်းသွားလို့ ဒေါင်းလုဒ်မရပါ။ App က yt-dlp ကို တစ်နေ့ တစ်ခါ အလိုအလျောက် update လုပ်ပေးထားပေမယ့်၊ YouTube ပြောင်းလိုက်ပြီး မကြာသေးရင် Sidebar ရဲ့ '🔄 yt-dlp update' ခလုတ်ကို နှိပ်ပြီး ချက်ချင်း update ဆွဲကြည့်ပါ။ ဆက်မရပါက cookies.txt တင်ပြီးထပ်စမ်းပါ။"
     return False, last_error or "ဗီဒီယိုကို ဒေါင်းလုဒ်လုပ်၍မရပါ။ Link ကိုပြန်စစ်ပါ။"
 
 
@@ -377,8 +437,8 @@ BURMESE_RULES = """
 မဖြစ်မနေလိုက်နာရမည့် စည်းကမ်းများ
 1. စဖွင့်ချိတ်ဆက်ချက် → အခြေအနေ/နောက်ခံ → ပြဿနာ → အလှည့်အပြောင်း → ရလဒ် → အဆုံးသတ်အနှစ်ချုပ် အစဉ်လိုက်စီးဆင်းအောင်ရေးပါ။
 2. မြင်ကွင်းဖော်ပြချက်၊ shot, scene, camera, timestamp၊ ခေါင်းစဉ်၊ bullet list နှင့် meta စာသားများ လုံးဝမထည့်ပါနှင့်။
-3. လူအမည်၊ နေရာအမည်၊ ငွေပမာဏ၊ အစဉ်လိုက်ဖြစ်ရပ်ကို transcript ထဲကအတိုင်း တိတိကျကျထိန်းပါ။ ခန့်မှန်းချက် မရေးပါနှင့်။
-4. စံမြန်မာစကားပြောပုံကိုသုံးပါ။ ဝါကျတစ်ကြောင်းလျှင် အဓိပ္ပာယ်တစ်ခုသာပါအောင် ရှင်းလင်းအောင်ရေးပါ။
+3. လူအမည်၊ နေရာအမည်၊ ငွေပမာဏ၊ အစဉ်လိုက်ဖြစ်ရပ်ကို transcript ထဲကအတိုင်း တိတိကျကျထိန်းပါ။ ခန့်မှန်းချက် မရေးပါနှင့်။ ဘာသာပြန်သော်လည်း အချက်အလက်ကို အပိုထည့်ခြင်း၊ ချန်လှပ်ချန်ခြင်း လုံးဝမပြုလုပ်ရ — မူရင်းအဓိပ္ပာယ်နှင့် အတိအကျကိုက်ညီရမည်။
+4. စာပေဆန်၊ ရေးဟန်ကျသော မြန်မာစာအရေးအသား (ဥပမာ - ၍၊ ဖြစ်ပေသည်၊ ထိုအခါ၊ ၏) ကို လုံးဝမသုံးပါနှင့်။ မြန်မာလူမျိုးများ နေ့စဉ်ပြောဆိုနေကျ၊ သဘာဝကျသော အပြောစကား (colloquial spoken Burmese) ကိုသာသုံးပါ။ ဝါကျတစ်ကြောင်းလျှင် အဓိပ္ပာယ်တစ်ခုသာပါအောင် ရှင်းလင်းအောင်ရေးပါ။
 5. အသံပြောအရှိန်ပြောင်းရန်လိုမှသာ [action], [sad], [happy], [whisper], [normal] tag ကို ဝါကျမတိုင်မီ ထည့်နိုင်သည်။
 6. Output တွင် recap narration စာသားသီးသန့်သာ ပြန်ပေးပါ။
 """.strip()
@@ -390,7 +450,7 @@ def recap_prompt(transcript, tone, language):
     return f"""
 You are a professional recap narrator. Rewrite this transcript as a natural {language} voice-over.
 Use this order: hook, context, conflict, turning point, outcome, takeaway.
-Preserve facts only. Do not output headings, scene directions, timestamps, bullets, or translation notes.
+Preserve facts only — do not add or drop information. Do not output headings, scene directions, timestamps, bullets, or translation notes.
 Return only the finished narration.
 
 Tone: {tone}
@@ -494,13 +554,19 @@ def generate(prompt):
     return None, errors[-1] if errors else "AI response မရပါ။"
 
 
+# Edge TTS defaults intentionally use the "standard" Neural voices (Jenny /
+# Guy) instead of the newer expressive ones (Aria / Christopher). The
+# expressive voices apply more dynamic internal prosody, which is what was
+# causing short function words like "the" to occasionally come out as a
+# clipped "tee" — the standard voices read English with a clearer, more
+# neutral international accent and stay stable across rate/pitch changes.
 VOICE_MAP = {
     "မြန်မာ": {"ကျား": "my-MM-ThihaNeural", "မ": "my-MM-NilarNeural"},
-    "English": {"ကျား": "en-US-ChristopherNeural", "မ": "en-US-AriaNeural"},
+    "English": {"ကျား": "en-US-GuyNeural", "မ": "en-US-JennyNeural"},
 }
 GOOGLE_VOICE_MAP = {
     "မြန်မာ": {"ကျား": "my-MM-Standard-A", "မ": "my-MM-Standard-A"},
-    "English": {"ကျား": "en-US-Neural2-D", "မ": "en-US-Neural2-F"},
+    "English": {"ကျား": "en-US-Neural2-D", "မ": "en-US-Neural2-C"},
 }
 VOICE_MODES = {
     "Recap — ပြတ်သားမြန်ဆန်": ("+6%", "+0Hz"),
@@ -581,7 +647,13 @@ def create_voice(script, language, gender, delivery, speed, engine):
     if not require_ffmpeg():
         return False, "FFmpeg မရှိပါ။"
     base_rate, base_pitch = VOICE_MODES[delivery]
-    current_rate = int_value(base_rate) + round((speed - 1) * 100)
+    # TTS engines only sound natural within roughly 0.7x-1.4x of their
+    # default rate; anything more aggressive is applied afterwards as a
+    # precise ffmpeg atempo pass so the 0.4x-3.0x slider is always accurate
+    # without ever sending a distorted rate string to the voice engine.
+    engine_speed = max(0.7, min(1.4, speed))
+    residual_speed = speed / engine_speed
+    current_rate = int_value(base_rate) + round((engine_speed - 1) * 100)
     current_pitch = int_value(base_pitch)
     chunks, index = [], 0
     for item in re.split(r"(\[.*?\])", script):
@@ -591,7 +663,7 @@ def create_voice(script, language, gender, delivery, speed, engine):
         tag = item.lower()
         if tag in EMOTIONS:
             rate, pitch = EMOTIONS[tag]
-            current_rate = int_value(base_rate) + round((speed - 1) * 100) + int_value(rate)
+            current_rate = int_value(base_rate) + round((engine_speed - 1) * 100) + int_value(rate)
             current_pitch = int_value(base_pitch) + int_value(pitch)
             continue
         if tag == "[p]":
@@ -615,7 +687,15 @@ def create_voice(script, language, gender, delivery, speed, engine):
     listing = SESSION_DIR / "voice_list.txt"
     listing.write_text("".join(f"file '{chunk}'\n" for chunk in chunks), encoding="utf-8")
     ok, error = run_media(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-c:a", "libmp3lame", "-q:a", "2", str(PATHS["voice"])])
-    return (True, "") if ok and PATHS["voice"].exists() else (False, error)
+    if not (ok and PATHS["voice"].exists()):
+        return False, error
+    if abs(residual_speed - 1.0) > 0.02:
+        adjusted = SESSION_DIR / "voice_speed_adjusted.mp3"
+        ok, error = run_media(["ffmpeg", "-y", "-i", str(PATHS["voice"]), "-filter:a", atempo_filter_chain(residual_speed), "-c:a", "libmp3lame", "-q:a", "2", str(adjusted)])
+        if not (ok and adjusted.exists()):
+            return False, error or "Narration speed ချိန်ညှိ၍မရပါ။"
+        shutil.copyfile(adjusted, PATHS["voice"])
+    return True, ""
 
 
 def parse_points(raw, source_duration):
@@ -722,17 +802,22 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 
 
 def translate_segments(segments):
-    """Translate each subtitle line into natural, dubbing-friendly Burmese.
-    Never aborts the whole batch — a single failed line falls back to the
-    original text so subtitle/dubbing generation can still complete."""
+    """Translate each subtitle line into natural, dubbing-friendly spoken
+    Burmese (not a stiff literal/literary translation) while keeping facts,
+    names and numbers exactly intact. Never aborts the whole batch — a
+    single failed line falls back to the original text so subtitle/dubbing
+    generation can still complete."""
     output = []
     failed = 0
     for item in segments:
         prompt = (
-            "Translate this subtitle line into natural spoken Burmese suitable for dubbing. "
-            "Keep it concise and close in length to the original so it fits the same time slot. "
-            "Preserve names, numbers and factual meaning exactly. Do not add commentary, titles, "
-            "or turn it into a recap. Return only the translated line, nothing else.\n\n"
+            "အောက်ပါ subtitle line ကို ရိုးရိုးရှင်းရှင်း literal (တိုက်ရိုက်) ဘာသာပြန်မဟုတ်ဘဲ၊ "
+            "မြန်မာလူမျိုးများ နေ့စဉ်ပြောဆိုနေကျ၊ သဘာဝကျသော အပြောစကား (colloquial spoken Burmese) ဖြင့် ပြန်ဆိုပါ။\n"
+            "- မူရင်းစာသား၏ အဓိပ္ပာယ်၊ အချက်အလက်၊ နာမည်၊ နေရာအမည်၊ ဂဏန်းများကို အတိအကျ ထိန်းသိမ်းပါ — ဖြည့်စွက်ခြင်း၊ "
+            "ချန်လှပ်ခြင်း (extra သို့မဟုတ် ချန်ချွင်းမှု) လုံးဝမပြုလုပ်ပါနှင့်။\n"
+            "- Dubbing တွင်တွဲသုံးရန်ဖြစ်၍ စာကြောင်းအရှည်ကို မူရင်းနှင့်နီးစပ်အောင်ထိန်းပါ။\n"
+            "- စာပေဆန်၊ ရေးဟန်ကျသော မြန်မာစာအသုံးအနှုန်း (ဥပမာ - ၍၊ ဖြစ်ပေသည်၊ ထိုအခါ၊ ၏) များကို လုံးဝရှောင်ပါ။\n"
+            "- ရှင်းလင်းချက်၊ ခေါင်းစဉ်၊ မှတ်ချက် လုံးဝမထည့်ပါနှင့်— ဘာသာပြန်ထားသော line တစ်ကြောင်းတည်းသာ ပြန်ပေးပါ။\n\n"
             f"Subtitle: {item['text'].strip()}"
         )
         translated, _ = generate(prompt)
@@ -865,9 +950,9 @@ with st.sidebar:
                 st.rerun()
         version_col, update_col = st.columns([1.3, 1])
         with version_col:
-            st.caption(f"yt-dlp ဗားရှင်း — {installed_ytdlp_version()}")
+            st.caption(f"yt-dlp ဗားရှင်း — {installed_ytdlp_version()} · daily auto-update ✅")
         with update_col:
-            if st.button("🔄 yt-dlp update", use_container_width=True, help="YouTube ဘက်က format ချထားမှု ပြောင်းသွားတိုင်း yt-dlp က ရက်ပိုင်းအတွင်း fix ထုတ်ပေးလေ့ရှိသည်။ ဒေါင်းလုဒ်မရတဲ့အခါ ဒီခလုတ်ကို အရင်နှိပ်ကြည့်ပါ။"):
+            if st.button("🔄 yt-dlp update", use_container_width=True, help="App က yt-dlp ကို တစ်နေ့တစ်ခါ အလိုအလျောက် update လုပ်ပေးနေပေမယ့်၊ YouTube ပြောင်းလိုက်ပြီး ချက်ချင်း update ဆွဲချင်ရင် ဒီခလုတ်ကိုနှိပ်ပါ။"):
                 with st.spinner("yt-dlp ကို နောက်ဆုံးဗားရှင်းသို့ update လုပ်နေသည်…"):
                     ok, info = update_ytdlp()
                 if ok:
@@ -908,6 +993,12 @@ st.markdown(
       <span class="eyebrow">✦ Burmese video storytelling workflow</span>
       <h1>Recap Studio MM</h1>
       <p>ဗီဒီယိုတစ်ခုကို ရှင်းလင်းတိကျသော မြန်မာ recap narration၊ voice-over၊ subtitle နှင့် timing-ကိုက်ညီသော dubbing အဖြစ် စနစ်တကျထုတ်လုပ်ပါ။</p>
+      <div class="hero-badges">
+        <span class="hero-badge">🎯 Fact-safe Burmese narration</span>
+        <span class="hero-badge">🗣️ Natural colloquial translation</span>
+        <span class="hero-badge">⬇️ Self-updating YouTube import</span>
+        <span class="hero-badge">🎚️ 0.4x–3.0x speed control</span>
+      </div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -944,7 +1035,7 @@ with recap_tab:
         tone = st.selectbox("Narration tone", ["Movie recap — တင်းကျပ်ပြီးစီးဆင်း", "Documentary — ရှင်းလင်းတည်ငြိမ်", "News recap — အချက်အလက်ဦးစားပေး", "High energy — မြန်ပြီးထိရောက်"])
         source_language = st.selectbox("မူရင်းအသံဘာသာ", ["Auto detect", "မြန်မာ", "English", "Japanese", "Chinese", "Thai"])
     with st.expander("မြန်မာ recap narration ကို ဘယ်လိုတိကျအောင်ပြင်ထားလဲ"):
-        st.markdown('<div class="callout">AI ကို စဖွင့်ချိတ်ဆက်ချက် → နောက်ခံ → ပြဿနာ → အလှည့်အပြောင်း → ရလဒ် → အနှစ်ချုပ် အစဉ်လိုက်ရေးရန် ညွှန်ကြားထားပါတယ်။ လူအမည်၊ နေရာအမည်၊ ဂဏန်းနှင့်ဖြစ်ရပ်ကို မူရင်း transcript ထဲကအတိုင်းသာ ထိန်းရပြီး scene, camera, timestamp တို့ကို ထည့်မရေးနိုင်အောင် ကန့်သတ်ထားပါတယ်။</div>', unsafe_allow_html=True)
+        st.markdown('<div class="callout">AI ကို စဖွင့်ချိတ်ဆက်ချက် → နောက်ခံ → ပြဿနာ → အလှည့်အပြောင်း → ရလဒ် → အနှစ်ချုပ် အစဉ်လိုက်ရေးရန် ညွှန်ကြားထားပါတယ်။ လူအမည်၊ နေရာအမည်၊ ဂဏန်းနှင့်ဖြစ်ရပ်ကို မူရင်း transcript ထဲကအတိုင်းသာ ထိန်းရပြီး scene, camera, timestamp တို့ကို ထည့်မရေးနိုင်အောင် ကန့်သတ်ထားပါတယ်။ ဘာသာပြန်တဲ့အခါလည်း စာပေဆန်တဲ့ ရေးဟန်မဟုတ်ဘဲ လူတွေနေ့စဉ်ပြောနေကျ သဘာဝကျတဲ့ အပြောစကားနဲ့ တိတိကျကျ (အပို၊ အလို မရှိအောင်) ရေးရန် သီးသန့်ညွှန်ကြားထားပါတယ်။</div>', unsafe_allow_html=True)
     if st.button("Recap script ဖန်တီးပါ", type="primary", use_container_width=True):
         if not PATHS["source"].exists():
             st.warning("အရင်ဆုံး ဗီဒီယိုဖိုင် upload လုပ်ပါ သို့မဟုတ် sidebar က link import လုပ်ပါ။")
@@ -1009,17 +1100,19 @@ with recap_tab:
         # mode (which would otherwise fail with "no speech found").
         st.session_state.subtitle_mode = SUBTITLE_MODE_SCRIPT_ALIGN if st.session_state.script_video_is_silent else SUBTITLE_MODE_AUDIO
         st.success("Script နှင့် ဗီဒီယိုကို 'Subtitle Studio' tab ဆီ ပို့ပြီးပါပြီ — ဒီနေရာက tab ကိုသွားလိုက်ရုံပါပဲ၊ မှန်ကန်တဲ့ mode ကို အလိုအလျောက် ရွေးပေးထားပါပြီ။")
-    st.caption("မှတ်ချက် — ဗီဒီယိုမှာ မူရင်းအသံမပါလျှင် (AI ကြည့်ပြီးရေးထားသော script ဖြစ်လျှင်) ဒီ button ကို သုံးပြီး Subtitle Studio ထဲ တိုက်ရိုက်ပို့နိုင်ပါတယ်။")
+    st.caption("မှတ်ချက် — ဗီဒီယိုမှာ မူရင်းအသံမပါလျှင် (AI ကြည့်ပြီးရေးထားသော script ဖြစ်လျှင်) ဒီ button ကို သုံးပြီး Subtitle Studio ထဲ တိုက်ရိုက်ပို့နိုင်ပါတယ်။ ဗီဒီယို-အသံ-စာတန်း timing ချိန်ညှိပေးတဲ့ logic အားလုံးက ဒီ Recap Builder flow ထဲမှာသာ ရှိပါတယ်။")
     voice_column, export_column = st.columns([1.1, 1])
     with voice_column:
         voice_engine = st.radio("Voice engine", ["Edge TTS (free)", "Google Cloud TTS"], horizontal=True)
         voice_language = st.selectbox("Voice language", list(VOICE_MAP))
+        if voice_language == "English":
+            st.caption("English voice ကို international, ရှင်းလင်းပီသတဲ့ standard neural voice (Jenny/Guy) ဖြင့် default သုံးထားပါတယ် — 'the' ကဲ့သို့ short word အသံထွက်မှားမှု လျော့ချရန်ဖြစ်ပါတယ်။")
         gender = st.selectbox("Voice", ["ကျား", "မ"], index=1)
         delivery = st.selectbox("Delivery", list(VOICE_MODES))
-        voice_speed = st.slider("Narration speed", .75, 1.35, 1.0, .05)
+        voice_speed = st.slider("Narration speed", 0.4, 3.0, 1.0, 0.05, help="0.4x (အလွန်နှေး) မှ 3.0x (အလွန်မြန်) အထိ တိကျစွာ ချိန်ညှိနိုင်သည်။")
     with export_column:
         export = st.radio("Export", ["🎬 Recap video (MP4)", "🎧 Voice-over only (MP3)"], horizontal=True)
-        video_speed = st.slider("Video speed", .75, 1.5, 1.0, .05)
+        video_speed = st.slider("Video speed", 0.4, 3.0, 1.0, 0.05, help="0.4x (အလွန်နှေး) မှ 3.0x (အလွန်မြန်) အထိ တိကျစွာ ချိန်ညှိနိုင်သည်။")
         freeze = st.text_input("Freeze-frame emphasis (seconds, optional)", placeholder="ဥပမာ 30, 65")
         bgm = st.file_uploader("Background music (optional)", type=["mp3", "wav", "m4a"], key="bgm")
         if bgm:
@@ -1098,7 +1191,7 @@ with subtitle_tab:
                     st.error("Subtitle မထုတ်နိုင်ပါ — အသံစာသားမတွေ့ပါ (ဗီဒီယိုမှာ မူရင်းအသံမပါလျှင် အပေါ်က 'Recap Builder ရဲ့ AI script ကို timing ချိန်ညှိမည်' ကိုရွေးပါ)။")
                 else:
                     if subtitle_language.startswith("မြန်မာ"):
-                        with st.spinner("မိနစ်၊ စက္ကန့်အတိုင်း မြန်မာဘာသာသို့ တစ်ကြောင်းချင်း ပြန်ဆိုနေသည်…"):
+                        with st.spinner("မိနစ်၊ စက္ကန့်အတိုင်း သဘာဝကျသော မြန်မာအပြောစကားသို့ တစ်ကြောင်းချင်း ပြန်ဆိုနေသည်…"):
                             segments, warn_msg = translate_segments(segments)
                         if warn_msg:
                             st.warning(warn_msg)
@@ -1142,7 +1235,7 @@ with subtitle_tab:
                         st.error(f"Timing ချိန်ညှိမရပါ — {error}")
                     else:
                         if translate_to_burmese:
-                            with st.spinner("မြန်မာဘာသာသို့ တစ်ကြောင်းချင်း ပြန်ဆိုနေသည်…"):
+                            with st.spinner("သဘာဝကျသော မြန်မာအပြောစကားသို့ တစ်ကြောင်းချင်း ပြန်ဆိုနေသည်…"):
                                 segments, warn_msg = translate_segments(segments)
                             if warn_msg:
                                 st.warning(warn_msg)
@@ -1188,6 +1281,8 @@ with subtitle_tab:
                 dub_engine = st.radio("Voice engine", ["Edge TTS (free)", "Google Cloud TTS"], horizontal=True, key="dub_engine")
             with d3:
                 burn_captions = st.checkbox("စာတန်းထိုးပါ (Burn subtitle)", value=True, key="dub_burn")
+            if dub_language_auto == "English":
+                st.caption("English dubbing အတွက်လည်း international ရှင်းလင်းပီသတဲ့ Jenny/Guy standard voice ကို default သုံးထားပါတယ်။")
             if st.button("🎙️ Dubbed video ထုတ်ပါ", type="primary", use_container_width=True):
                 if dub_engine == "Google Cloud TTS" and st.session_state.google_creds is None:
                     st.warning("Google Cloud TTS အတွက် service_account.json ကို sidebar တွင်တင်ပါ။")
