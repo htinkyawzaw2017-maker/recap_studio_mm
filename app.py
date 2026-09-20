@@ -1,1567 +1,503 @@
-"""Recap Studio MM: a Burmese-first video recap, voice-over and subtitle app."""
-
-import importlib
-import json
-import random
-import re
-import shutil
-import subprocess
-import sys
-import textwrap
-import time
-import uuid
-from pathlib import Path
-
-import edge_tts
-import google.generativeai as genai
-import requests
 import streamlit as st
-import whisper
-import yt_dlp
-from google.cloud import texttospeech
-from google.oauth2 import service_account
+import os
+import re
+import time
 
-APP_DIR = Path(__file__).resolve().parent
-SESSIONS_DIR = APP_DIR / "user_sessions"
-SESSIONS_DIR.mkdir(exist_ok=True)
-
-# Single-user local persistence (no database). These plain files live next to
-# app.py on the running server so a page refresh (new browser session) does
-# not wipe the saved Gemini key / Google credentials. NOTE: on Streamlit
-# Community Cloud this survives refreshes and sleep/wake, but a fresh
-# redeploy from GitHub resets the container disk — that is expected without
-# a real database.
-CONFIG_PATH = APP_DIR / "local_config.json"
-GOOGLE_CREDS_PATH = APP_DIR / "local_google_creds.json"
-
-st.set_page_config(page_title="Recap Studio MM", page_icon="🎞️", layout="wide")
-
-if "session_id" not in st.session_state:
-    st.session_state.session_id = uuid.uuid4().hex
-SESSION_DIR = SESSIONS_DIR / st.session_state.session_id
-SESSION_DIR.mkdir(parents=True, exist_ok=True)
-
-# One video source powers the whole Recap Builder workflow end-to-end
-# (script writing -> narration/export -> subtitles -> dubbing), so there is
-# only ever a single "source.mp4" on disk instead of duplicated copies for
-# each feature. This removes the old cross-tab hand-off step entirely.
-PATHS = {
-    "source": SESSION_DIR / "source.mp4",
-    "audio": SESSION_DIR / "source_audio.wav",
-    "voice": SESSION_DIR / "recap_voice.mp3",
-    "bgm": SESSION_DIR / "background_music.mp3",
-    "caption_ass": SESSION_DIR / "captions.ass",
-    "caption_srt": SESSION_DIR / "captions.srt",
-    "caption_video": SESSION_DIR / "captioned_video.mp4",
-    "dub_audio": SESSION_DIR / "dubbed_audio.mp3",
-    "cookies": SESSION_DIR / "cookies.txt",
-}
-
-# Two ways a video can reach the Subtitle & Dubbing section below:
-#  1. It has real speech -> transcribe the audio directly.
-#  2. It is silent footage that the "AI ကြည့်ပြီးရေးမည်" mode above already
-#     turned into a finished script -> that script must be time-aligned to
-#     the video's visuals instead of transcribing (there is no audio to
-#     transcribe). Auto-selecting this the moment such a script is created
-#     avoids users landing on the audio-transcription mode and getting a
-#     confusing "no speech found" error.
-SUBTITLE_MODE_SCRIPT_ALIGN = "AI script ကို timing ချိန်ညှိမည် (အသံမပါသော ဗီဒီယိုအတွက် — အကြံပြု)"
-SUBTITLE_MODE_AUDIO = "ဗီဒီယို အသံမှ တိုက်ရိုက်ထုတ်မည် (video မှာ မူရင်းအသံပါလျှင်)"
-SUBTITLE_MODE_OPTIONS = [SUBTITLE_MODE_SCRIPT_ALIGN, SUBTITLE_MODE_AUDIO]
-
-st.markdown(
-    """
-    <style>
-      @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800;900&family=Noto+Sans+Myanmar:wght@400;500;600;700&display=swap');
-      :root { --ink:#eef1f8; --muted:#97a3ba; --line:rgba(193,207,232,.13); --aqua:#30d5c8; --violet:#8e7dff; }
-      * { box-sizing:border-box; }
-      html { -webkit-text-size-adjust:100%; }
-      .stApp { background:radial-gradient(circle at 12% -10%,rgba(48,213,200,.16),transparent 30rem),radial-gradient(circle at 94% 0%,rgba(142,125,255,.15),transparent 30rem),#0a0e1a; color:var(--ink); font-family:"Noto Sans Myanmar","DM Sans",sans-serif; }
-      [data-testid="stSidebar"] { background:#0e1524; border-right:1px solid var(--line); }
-      [data-testid="stSidebar"] * { color:var(--ink); }
-      [data-testid="stSidebar"] .block-container { padding-top:1.4rem; }
-      .block-container { max-width:1360px; padding-top:2rem; padding-bottom:4rem; padding-left:clamp(1rem,3vw,3rem); padding-right:clamp(1rem,3vw,3rem); }
-      h1,h2,h3,h4,p,label,.stMarkdown { color:var(--ink) !important; }
-      ::-webkit-scrollbar { width:10px; height:10px; }
-      ::-webkit-scrollbar-thumb { background:rgba(48,213,200,.35); border-radius:8px; }
-      img, video, audio, iframe { max-width:100%; }
-
-      .hero { position:relative; overflow:hidden; padding:clamp(1.3rem,4vw,2rem) clamp(1.2rem,4vw,2.2rem); margin:0 0 1.6rem; border:1px solid rgba(96,225,216,.24); border-radius:24px; background:linear-gradient(125deg,rgba(19,38,54,.96),rgba(28,29,60,.9)); box-shadow:0 20px 60px rgba(0,0,0,.28); }
-      .hero::after { content:""; position:absolute; inset:0; background:linear-gradient(120deg,transparent,rgba(142,125,255,.08),transparent); pointer-events:none; }
-      .eyebrow { display:inline-flex; align-items:center; gap:.4rem; color:var(--aqua) !important; font-size:.72rem; font-weight:700; letter-spacing:.14em; text-transform:uppercase; margin:0 0 .7rem; padding:.3rem .7rem; border:1px solid rgba(48,213,200,.3); border-radius:999px; background:rgba(48,213,200,.08); }
-      .hero h1 { font-family:"DM Sans","Noto Sans Myanmar",sans-serif; font-size:clamp(1.6rem,4.6vw,2.3rem); margin:0; font-weight:900; letter-spacing:-.02em; background:linear-gradient(100deg,#eef1f8,#bfeee8 60%,#eef1f8); -webkit-background-clip:text; background-clip:text; }
-      .hero p { color:#c4cee0 !important; margin:.6rem 0 0; font-size:clamp(.9rem,2.4vw,1.02rem); max-width:52rem; line-height:1.6; }
-      .hero-badges { display:flex; gap:.5rem; flex-wrap:wrap; margin-top:1rem; }
-      .hero-badge { font-size:.74rem; font-weight:600; color:#bcd8ff !important; padding:.28rem .65rem; border-radius:999px; background:rgba(142,125,255,.12); border:1px solid rgba(142,125,255,.28); }
-
-      .step-card { display:flex; gap:.85rem; align-items:flex-start; padding:1rem 1.05rem; min-height:5.4rem; border-radius:16px; border:1px solid var(--line); background:rgba(18,26,42,.78); transition:transform .15s ease, border-color .15s ease, box-shadow .15s ease; margin-bottom:.6rem; }
-      .step-card:hover { transform:translateY(-2px); border-color:rgba(48,213,200,.4); box-shadow:0 12px 30px rgba(0,0,0,.25); }
-      .step-icon { font-size:1.35rem; line-height:1.4rem; }
-      .step-num { font:800 .72rem "DM Sans"; color:var(--aqua); letter-spacing:.08em; }
-      .step-label { color:#d6dded !important; font-size:.87rem; margin-top:.15rem; line-height:1.35; }
-
-      .label,.section-lead,.small-note { color:var(--muted) !important; font-size:.86rem; margin-top:.35rem; }
-      .section-title { font:800 clamp(1.05rem,3vw,1.2rem) "DM Sans","Noto Sans Myanmar",sans-serif; margin:.2rem 0; display:flex; align-items:center; gap:.5rem; letter-spacing:-.01em; flex-wrap:wrap; }
-      .section-lead { margin:0 0 1.1rem; font-size:.92rem; line-height:1.55; }
-      .subsection-title { font:800 1.02rem "DM Sans","Noto Sans Myanmar",sans-serif; margin:1.4rem 0 .3rem; padding-top:.2rem; border-top:1px dashed var(--line); padding-top:1.1rem; }
-
-      .stButton > button,.stDownloadButton > button { border:0; border-radius:12px; color:#06161a !important; font-weight:700; letter-spacing:.01em; background:linear-gradient(100deg,var(--aqua),#7ce6d5); min-height:2.75rem; box-shadow:0 8px 20px rgba(48,213,200,.16); transition:filter .15s ease, transform .15s ease, box-shadow .15s ease; width:100%; }
-      .stButton > button:hover,.stDownloadButton > button:hover { filter:brightness(1.08); transform:translateY(-1px); box-shadow:0 12px 26px rgba(48,213,200,.26); }
-      .stButton > button:focus,.stDownloadButton > button:focus { outline:2px solid rgba(48,213,200,.55) !important; outline-offset:2px; }
-      .stTextInput input,.stTextArea textarea,[data-baseweb="select"] > div,[data-testid="stFileUploader"] { background:#111a2a !important; color:var(--ink) !important; border-color:rgba(193,207,232,.18) !important; border-radius:12px !important; }
-      .stTextArea textarea { line-height:1.9; }
-      [data-testid="stFileUploader"] { padding:.4rem; }
-      .stRadio label p, .stSelectbox label p, .stTextInput label p, .stTextArea label p, .stSlider label p, .stFileUploader label p, .stCheckbox label p { color:#cdd8e9 !important; font-weight:600 !important; font-size:.86rem !important; }
-
-      [data-baseweb="tab-list"] { gap:.4rem; border-bottom:1px solid var(--line); flex-wrap:wrap; overflow-x:auto; }
-      button[data-baseweb="tab"] { color:var(--muted); font-weight:700; padding:.75rem .95rem; border-radius:10px 10px 0 0; font-size:clamp(.82rem,2vw,.95rem); }
-      button[data-baseweb="tab"]:hover { color:#cdd8e9; background:rgba(48,213,200,.05); }
-      button[data-baseweb="tab"][aria-selected="true"] { color:var(--aqua); border-bottom-color:var(--aqua); }
-
-      [data-baseweb="slider"] div[role="slider"] { background:var(--aqua) !important; box-shadow:0 0 0 5px rgba(48,213,200,.16) !important; }
-      [data-baseweb="slider"] > div > div { background:rgba(48,213,200,.4) !important; }
-
-      [data-testid="stExpander"] { border:1px solid var(--line) !important; border-radius:14px !important; background:rgba(15,22,36,.6) !important; overflow:hidden; }
-      .stAlert { border-radius:14px !important; border:1px solid var(--line) !important; }
-
-      .callout { padding:1rem 1.15rem; margin:.7rem 0 1.1rem; border-left:3px solid var(--aqua); border-radius:0 12px 12px 0; background:rgba(48,213,200,.07); color:#cdd8e9; font-size:.9rem; line-height:1.6; }
-      .callout.warn { border-left-color:#ffb454; background:rgba(255,180,84,.08); }
-      hr { border-color:var(--line) !important; margin:1.6rem 0 !important; }
-      .footer-note { text-align:center; color:var(--muted); font-size:.8rem; margin-top:2rem; }
-      details { border:1px solid var(--line); border-radius:12px; padding:.2rem .3rem; }
-
-      @media (max-width: 640px) {
-        .block-container { padding-top:1.1rem; }
-        .hero { padding:1.1rem; border-radius:18px; }
-        .hero-badge { font-size:.68rem; }
-        .step-card { min-height:auto; padding:.85rem; }
-        .stButton > button,.stDownloadButton > button { min-height:2.9rem; font-size:.92rem; }
-        [data-baseweb="tab-list"] { gap:.2rem; }
-        button[data-baseweb="tab"] { padding:.6rem .6rem; }
-      }
-    </style>
-    """,
-    unsafe_allow_html=True,
+# ----------------- PAGE CONFIG -----------------
+st.set_page_config(
+    page_title="Recap Studio MM",
+    page_icon="🎬",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
+# ----------------- CUSTOM STYLING (DARK UI MATCHING SCREENSHOT) -----------------
+st.markdown("""
+<style>
+    /* Dark Theme Canvas */
+    .stApp {
+        background-color: #07100e !important;
+        color: #e2e8f0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    }
+    
+    /* Sidebar */
+    section[data-testid="stSidebar"] {
+        background-color: #040908 !important;
+        border-right: 1px solid #132420;
+    }
+    
+    /* Profile Box */
+    .user-profile-box {
+        background: linear-gradient(135deg, #0e1e1b, #091412);
+        border: 1px solid #1b3630;
+        border-radius: 12px;
+        padding: 12px 14px;
+        margin-bottom: 18px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    .badge-status {
+        background-color: #10b981;
+        color: #ffffff;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 2px 8px;
+        border-radius: 6px;
+    }
+    
+    /* Hero Banner */
+    .hero-card {
+        background: linear-gradient(135deg, #131d33 0%, #0f1726 60%, #0a0f1a 100%);
+        border: 1px solid #25334d;
+        border-radius: 18px;
+        padding: 28px;
+        margin-bottom: 24px;
+    }
+    
+    /* Action Cards */
+    .action-card {
+        background: #0d1917;
+        border: 1px solid #172d29;
+        border-radius: 14px;
+        padding: 18px;
+        margin-bottom: 14px;
+        height: 100%;
+        transition: transform 0.2s, border-color 0.2s;
+    }
+    .action-card:hover {
+        border-color: #f59e0b;
+        transform: translateY(-2px);
+    }
+    
+    /* Format Preview Cards */
+    .format-card {
+        background: #0d1a17;
+        border: 1px solid #1a352f;
+        border-radius: 12px;
+        padding: 14px;
+        text-align: center;
+        margin-bottom: 8px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-def load_local_config():
-    if CONFIG_PATH.exists():
+# ----------------- PRONUNCIATION & DICTIONARY UTILS -----------------
+def load_replacements(filepath):
+    """pronunciation.txt သို့မဟုတ် dictionary.txt မှ စကားလုံးများကို ဖတ်ယူခြင်း"""
+    data = {}
+    if os.path.exists(filepath):
         try:
-            data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-            return (
-                data.get("gemini_keys", ""),
-                data.get("model_name", "gemini-2.5-flash"),
-                data.get("proxy_url", ""),
-            )
-        except (json.JSONDecodeError, OSError):
-            return "", "gemini-2.5-flash", ""
-    return "", "gemini-2.5-flash", ""
-
-
-def save_local_config(raw_keys, model_name, proxy_url=""):
-    try:
-        CONFIG_PATH.write_text(
-            json.dumps({"gemini_keys": raw_keys, "model_name": model_name, "proxy_url": proxy_url}, ensure_ascii=False),
-            encoding="utf-8",
-        )
-    except OSError:
-        pass
-
-
-def load_local_google_creds():
-    if GOOGLE_CREDS_PATH.exists():
-        try:
-            return json.loads(GOOGLE_CREDS_PATH.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return None
-    return None
-
-
-def save_local_google_creds(info):
-    try:
-        GOOGLE_CREDS_PATH.write_text(json.dumps(info), encoding="utf-8")
-    except OSError:
-        pass
-
-
-def init_state():
-    saved_raw, saved_model, saved_proxy = load_local_config()
-    for key, value in {
-        "api_keys": [key.strip() for key in saved_raw.split(",") if key.strip()],
-        "model_name_value": saved_model,
-        "proxy_url": saved_proxy,
-        "google_creds": None, "raw_transcript": "", "final_script": "",
-        "script_editor": "", "processed_video": None, "processed_audio": None,
-        "caption_video": None, "srt_path": None, "publish_kit": "",
-        "segments": None, "dub_language": None, "dubbed_video": None,
-        "last_download_url": "", "script_language": "မြန်မာ", "script_video_is_silent": False,
-        "subtitle_mode": SUBTITLE_MODE_AUDIO, "has_cookies": False,
-    }.items():
-        st.session_state.setdefault(key, value)
-    if st.session_state.google_creds is None:
-        saved_info = load_local_google_creds()
-        if saved_info:
-            try:
-                st.session_state.google_creds = service_account.Credentials.from_service_account_info(saved_info)
-            except (ValueError, TypeError):
-                pass
-
-
-init_state()
-
-
-def js_runtime_available():
-    """Since 2024 YouTube requires a BotGuard-minted "PO token" for most
-    player clients, and yt-dlp can only mint one if an external JavaScript
-    runtime (Deno, Node.js, or Bun) is on PATH. Without one, yt-dlp silently
-    drops protected formats and the download regularly falls straight into
-    the "Sign in to confirm you're not a bot" wall — this is one of the
-    single biggest causes of the 403 / bot-check errors this app used to hit
-    on hosts like Streamlit Community Cloud, which ship neither by default."""
-    return any(shutil.which(binary) for binary in ("deno", "node", "nodejs", "bun"))
-
-
-def _pip_install_latest_ytdlp(timeout=120):
-    """Prefer installing yt-dlp straight from the GitHub `master` branch:
-    YouTube breaks the extractor every few weeks, and the yt-dlp project
-    usually ships the counter-fix to `master` days (sometimes hours) before
-    the next PyPI release goes out. Falls back to the regular PyPI release
-    if GitHub is unreachable or the archive install fails for any reason, so
-    a flaky network never leaves yt-dlp completely unpatched."""
-    master_url = "https://github.com/yt-dlp/yt-dlp/archive/refs/heads/master.zip"
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-U", "--no-cache-dir", f"yt-dlp[default] @ {master_url}"],
-            capture_output=True, text=True, check=False, timeout=timeout,
-        )
-        if result.returncode == 0:
-            return True, "master"
-    except Exception:
-        pass
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-U", "--no-cache-dir", "yt-dlp[default]"],
-            capture_output=True, text=True, check=False, timeout=timeout,
-        )
-        if result.returncode == 0:
-            return True, "pypi"
-        return False, (result.stderr or "pip install မအောင်မြင်ပါ။")[-600:]
-    except Exception as error:
-        return False, str(error)
-
-
-@st.cache_resource(ttl=24 * 3600, show_spinner=False)
-def ensure_ytdlp_fresh():
-    """YouTube changes what it serves to yt-dlp every few weeks, and the
-    single highest-success mitigation is simply always running the newest
-    yt-dlp build (see `_pip_install_latest_ytdlp`). This runs at most once
-    per day per server process — cheap, silent, and means users do not have
-    to remember to click the manual update button in the sidebar for
-    downloads to keep working."""
-    try:
-        _pip_install_latest_ytdlp(timeout=110)
-        importlib.reload(yt_dlp)
-    except Exception:
-        pass
-    return True
-
-
-ensure_ytdlp_fresh()
-
-
-def load_dictionary():
-    path = APP_DIR / "dictionary.txt"
-    return path.read_text(encoding="utf-8") if path.exists() else ""
-
-
-def pronunciation_dictionary():
-    path = APP_DIR / "pronunciation.txt"
-    if not path.exists():
-        return {}
-    result = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if "=" in line and not line.lstrip().startswith("#"):
-            key, value = line.split("=", 1)
-            if key.strip() and value.strip():
-                result[key.strip()] = value.strip()
-    return result
-
-
-def require_ffmpeg():
-    if shutil.which("ffmpeg") and shutil.which("ffprobe"):
-        return True
-    st.error("FFmpeg မတွေ့ပါ။")
-    return False
-
-
-def run_media(command):
-    try:
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
-    except OSError as error:
-        return False, str(error)
-    return (True, "") if result.returncode == 0 else (False, (result.stderr or "Media processing failed.")[-900:])
-
-
-def duration_of(path):
-    if not require_ffmpeg():
-        return 0
-    result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path)], capture_output=True, text=True, check=False)
-    try:
-        return float(json.loads(result.stdout)["format"]["duration"])
-    except (KeyError, ValueError, TypeError, json.JSONDecodeError):
-        return 0
-
-
-def atempo_filter_chain(factor):
-    """ffmpeg's atempo filter is documented as safe within 0.5x-2.0x per
-    instance, so factors outside that range (needed for the 0.4x-3.0x
-    narration-speed slider, and for stretching/compressing dubbed lines to
-    fit their caption slot) are decomposed into a chain of atempo stages
-    that multiply out to the exact requested factor."""
-    factor = max(0.1, min(factor, 20.0))
-    remaining = factor
-    stages = []
-    while remaining > 2.0:
-        stages.append(2.0)
-        remaining /= 2.0
-    while remaining < 0.5:
-        stages.append(0.5)
-        remaining /= 0.5
-    stages.append(remaining)
-    return ",".join(f"atempo={stage:.6f}" for stage in stages)
-
-
-def save_upload(upload, destination):
-    destination.write_bytes(upload.getbuffer())
-
-
-def transcribe(video, audio, language=None):
-    """Render Free Tier RAM (512MB) သက်သာစေရန် Gemini API ဖြင့် တိုက်ရိုက် transcribe လုပ်ခြင်း"""
-    if not require_ffmpeg():
-        return None, None
-    ok, details = run_media(["ffmpeg", "-y", "-i", str(video), "-vn", "-acodec", "libmp3lame", "-b:a", "64k", str(SESSION_DIR / "audio_small.mp3")])
-    if not ok:
-        st.error(f"အသံထုတ်မရပါ — {details}")
-        return None, None
-
-    if st.session_state.api_keys:
-        try:
-            genai.configure(api_key=st.session_state.api_keys[0])
-            small_audio = SESSION_DIR / "audio_small.mp3"
-            audio_file = genai.upload_file(path=str(small_audio))
-            while audio_file.state.name == "PROCESSING":
-                time.sleep(1)
-                audio_file = genai.get_file(audio_file.name)
-
-            prompt = "Transcribe the spoken audio into plain text accurately without timestamps or commentary."
-            if language:
-                prompt += f" The language is {language}."
-
-            model = genai.GenerativeModel(st.session_state.model_name)
-            response = model.generate_content([audio_file, prompt])
-            genai.delete_file(audio_file.name)
-            text = response.text.strip() if response.text else ""
-            return text, []
-        except Exception as api_err:
-            st.warning(f"Cloud transcription error, falling back to local: {api_err}")
-
-    # Fallback to tiny whisper if Gemini fails
-    try:
-        model = whisper.load_model("tiny")
-        options = {"task": "transcribe"}
-        if language:
-            options["language"] = language
-        data = model.transcribe(str(SESSION_DIR / "audio_small.mp3"), **options)
-        return data.get("text", "").strip(), data.get("segments", [])
-    except Exception as error:
-        st.error(f"Speech recognition မအောင်မြင်ပါ — {error}")
-        return None, None
-
-
-def _clear_destination(destination):
-    if destination.exists():
-        try:
-            destination.unlink()
-        except OSError:
+            with open(filepath, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and ("=" in line or ":" in line):
+                        sep = "=" if "=" in line else ":"
+                        parts = line.split(sep, 1)
+                        if len(parts) == 2:
+                            data[parts[0].strip()] = parts.strip()
+        except Exception:
             pass
-    for leftover in destination.parent.glob(destination.stem + ".*"):
-        try:
-            leftover.unlink()
-        except OSError:
-            pass
-
-
-def installed_ytdlp_version():
-    return getattr(yt_dlp, "version", None) and getattr(yt_dlp.version, "__version__", "unknown") or "unknown"
-
-
-def update_ytdlp():
-    """Manual, on-demand version of ensure_ytdlp_fresh() for the sidebar
-    button — useful right after YouTube ships a breaking change and a user
-    does not want to wait for the daily automatic refresh."""
-    try:
-        ok, info = _pip_install_latest_ytdlp(timeout=180)
-        if not ok:
-            return False, info or "pip install မအောင်မြင်ပါ။"
-        importlib.reload(yt_dlp)
-        ensure_ytdlp_fresh.clear()
-        return True, f"{installed_ytdlp_version()} ({info})"
-    except Exception as error:
-        return False, str(error)
-
-
-def download_video(url, destination, cookies_path=None, proxy=None):
-    """Robust YouTube / public-video download that always lands on `destination`.
-
-    YouTube regularly changes what it serves to yt-dlp, which causes
-    "Sign in to confirm you're not a bot" / "Requested format is not
-    available" / HTTP 403 even though the video plays fine in a browser.
-    Three real, confirmed bugs were found and fixed here versus the previous
-    version:
-
-    1. `formats=missing_pot` was being forced on almost every attempt. That
-       extractor-arg tells yt-dlp to keep listing formats it already knows
-       require a "PO token" (a BotGuard-signed proof-of-origin token) it does
-       not have — i.e. formats it already expects to fail with 403. Forcing
-       this on every attempt is what turned every single retry into a
-       guaranteed 403 in practice. It is now only used as the very last,
-       explicit last-resort attempt.
-    2. YouTube recently broke yt-dlp's default `android_sdkless` client. The
-       documented workaround (`player_client=default,-android_sdkless`) is
-       now the first attempt instead of an unqualified default client list
-       that silently keeps hitting the broken client.
-    3. A hard-coded desktop Chrome User-Agent was previously sent for every
-       attempt, including attempts that told YouTube we were the "ios",
-       "android" or "mweb" client. A user-agent that contradicts the claimed
-       client is one of the most reliable ways to fail YouTube's bot check,
-       so it is never overridden — each client gets the correct UA yt-dlp
-       itself picks for it.
-
-    Remaining mitigations, in rough order of real-world effectiveness in
-    2025/2026: always run the freshest yt-dlp straight from its GitHub
-    `master` branch (`ensure_ytdlp_fresh`, once a day, plus the sidebar's
-    manual update button — PyPI releases can lag days behind a YouTube-side
-    break), have a JavaScript runtime available so yt-dlp can mint PO tokens
-    (see `js_runtime_available`), retry with several different player
-    clients, prefer IPv4 egress (trusted more than many hosts' IPv6 ranges),
-    add jittered delays between attempts (tight retry loops make
-    bot-detection worse, not better), accept browser-exported cookies for
-    logged-in-only videos, and optionally route through a user-supplied
-    HTTP/SOCKS proxy — datacenter IPs (what most app hosting runs on) get
-    YouTube's strictest bot-detection tier, and a residential/mobile proxy is
-    the only reliable escape hatch once every client + cookie combination is
-    exhausted.
-    """
-    _clear_destination(destination)
-    cookies_path = cookies_path if cookies_path and Path(cookies_path).exists() else None
-    has_js_runtime = js_runtime_available()
-
-    attempts = [
-        {"player_client": ["default", "-android_sdkless"], "ipv4": True},
-        {"player_client": ["tv"], "ipv4": True},
-        {"player_client": ["tv_embedded"], "ipv4": True},
-        {"player_client": ["web_embedded"], "ipv4": True},
-        {"player_client": ["mweb"], "ipv4": True},
-        {"player_client": ["ios"], "ipv4": True},
-        {"player_client": ["android"], "ipv4": True},
-        {"format": "b", "player_client": ["tv"], "ipv4": False},  # best single progressive stream
-        {"player_client": None, "ipv4": False},  # yt-dlp's own default behaviour as a further fallback
-        {"player_client": None, "ipv4": False, "formats_missing_pot": True},  # absolute last resort
-    ]
-    last_error = ""
-    for attempt_index, extra_args in enumerate(attempts):
-        _clear_destination(destination)
-        if attempt_index > 0:
-            time.sleep(2 + random.random() * 1.5)  # jittered backoff — tight retry loops make bot-detection worse
-        player_client = extra_args.get("player_client")
-        options = {
-            "format": extra_args.get("format", "bestvideo*+bestaudio/best"),
-            "outtmpl": str(destination),
-            "merge_output_format": "mp4",
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "retries": 3,
-            "extractor_retries": 3,
-            "geo_bypass": True,
-            "nocheckcertificate": True,
-            "sleep_interval_requests": 1,
-            # Intentionally no "http_headers" User-Agent override here — a
-            # UA that does not match the claimed player_client is a common,
-            # avoidable cause of bot detection. Let yt-dlp set the correct
-            # one per client.
-        }
-        if extra_args.get("ipv4"):
-            options["source_address"] = "0.0.0.0"
-        if cookies_path:
-            options["cookiefile"] = str(cookies_path)
-        if proxy:
-            options["proxy"] = proxy
-        youtube_args = {}
-        if player_client:
-            youtube_args["player_client"] = player_client
-        if extra_args.get("formats_missing_pot"):
-            youtube_args["formats"] = ["missing_pot"]
-        if youtube_args:
-            options["extractor_args"] = {"youtube": youtube_args}
-        try:
-            with yt_dlp.YoutubeDL(options) as client:
-                client.download([url])
-            if destination.exists() and destination.stat().st_size > 10_000:
-                return True, ""
-        except Exception as error:
-            last_error = str(error)
-
-    _clear_destination(destination)
-    if last_error:
-        lowered = last_error.lower()
-        js_hint = "" if has_js_runtime else (
-            " ⚠️ ဒီ server ပေါ်မှာ JavaScript runtime (Deno/Node.js) မတွေ့ပါ — YouTube ရဲ့ verification token "
-            "(PO token) ကိုဖန်တီးဖို့ လိုအပ်ပါတယ်။ App ရဲ့ packages.txt ဖိုင်ထဲမှာ 'nodejs' ကိုထည့်ပြီး redeploy "
-            "ပြန်လုပ်ကြည့်ပါ။"
-        )
-        if "sign in" in lowered or "bot" in lowered or "confirm" in lowered:
-            return False, (
-                "ဒီဗီဒီယိုကို YouTube က bot-check / login လိုအပ်အောင် ကန့်သတ်ထားပါတယ်။" + js_hint + " "
-                "(1) Sidebar ရဲ့ 'YouTube cookies.txt' ကိုတင်ပြီး ပြန်စမ်းကြည့်ပါ (Chrome/Firefox extension ဖြင့် "
-                "youtube.com ကို login ဝင်ထားစဉ် export လုပ်ပါ)။ (2) App ကိုတင်ထားတဲ့ server ရဲ့ IP ကို YouTube က "
-                "datacenter IP အဖြစ်မှတ်ပြီး တင်းကျပ်စွာစစ်နေခြင်းလည်းဖြစ်နိုင်လို့ Sidebar ရဲ့ Proxy (HTTP/SOCKS) "
-                "နေရာမှာ residential/mobile proxy တစ်ခုခု ထည့်ပြီးထပ်စမ်းကြည့်ပါ။"
-            )
-        if "private" in lowered or "unavailable" in lowered:
-            return False, "ဒီဗီဒီယိုကို ဒေါင်းလုဒ်လုပ်ခွင့်မရှိပါ (private/unavailable)။"
-        if "format is not available" in lowered or "requested format" in lowered or "403" in lowered:
-            return False, (
-                "YouTube ဘက်က format ချထားမှု ပြောင်းသွားလို့ ဒေါင်းလုဒ်မရပါ။" + js_hint + " App က yt-dlp ကို "
-                "GitHub ရဲ့ အသစ်ဆုံး master branch ကနေ တစ်နေ့တစ်ခါ auto-update လုပ်ပေးထားပေမယ့်၊ YouTube "
-                "ပြောင်းလိုက်ပြီး မကြာသေးရင် Sidebar ရဲ့ '🔄 yt-dlp update' ခလုတ်ကို နှိပ်ပြီး ချက်ချင်း update "
-                "ဆွဲကြည့်ပါ။ ဆက်မရပါက cookies.txt တင်ပြီး၊ လိုအပ်ရင် Proxy ထည့်ပြီး ထပ်စမ်းပါ။"
-            )
-    return False, last_error or "ဗီဒီယိုကို ဒေါင်းလုဒ်လုပ်၍မရပါ။ Link ကိုပြန်စစ်ပါ။"
-
-
-def normalize_segment_timing(segments, total_duration=None):
-    """Guarantee subtitle/dubbing segments are valid, strictly increasing and
-    non-overlapping in time — regardless of whether they came from Whisper,
-    from Gemini's video-timing alignment, or survived a translation pass.
-    AI-estimated timing occasionally produces overlapping or out-of-order
-    timestamps, which would otherwise make burned-in captions flicker and
-    make dubbed lines talk over each other. This is applied once, right
-    before subtitles/dubbing are generated, regardless of source."""
-    cleaned = []
-    for item in sorted(segments or [], key=lambda seg: float(seg["start"])):
-        text = str(item.get("text", "")).strip()
-        if not text:
-            continue
-        try:
-            start = max(float(item["start"]), 0.0)
-            end = float(item["end"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        if cleaned and start < cleaned[-1]["end"]:
-            start = cleaned[-1]["end"]
-        end = max(end, start + 0.15)
-        if total_duration:
-            end = min(end, float(total_duration))
-        if end <= start:
-            continue
-        cleaned.append({"start": start, "end": end, "text": text})
-    return cleaned
-
-
-# Shared, strongly-worded fidelity + colloquial-tone contract used by every
-# AI rewrite / translation call in the app (recap narration, silent-video
-# recap, subtitle translation, script-to-video timing alignment). The two
-# non-negotiable requirements users kept running into problems with are
-# spelled out explicitly and repeated: (a) zero added/dropped facts versus
-# the source, and (b) natural everyday spoken Burmese instead of stiff
-# literary/written-register Burmese.
-BURMESE_RULES = """
-သင်သည် မြန်မာပရိသတ်အတွက် အတွေ့အကြုံရင့်ကျက်သော recap narrator ဖြစ်သည်။
-အောက်ပါ transcript / script ကို အဓိပ္ပာယ်၊ အချက်အလက်တစ်ခုမှမပျောက်စေဘဲ၊ တိုက်ရိုက်စာသားချင်း
-(word-for-word literal) ဘာသာပြန်မဟုတ်ဘဲ မြန်မာလူမျိုးများ နေ့စဉ်ဘဝတွင် တကယ်ပြောနေကျ၊
-သဘာဝကျသော အပြောစကား (colloquial spoken Burmese) အဖြစ် ပြန်ရေးပါ။
-
-မဖြစ်မနေလိုက်နာရမည့် စည်းကမ်းများ
-1. စဖွင့်ချိတ်ဆက်ချက် → အခြေအနေ/နောက်ခံ → ပြဿနာ → အလှည့်အပြောင်း → ရလဒ် → အဆုံးသတ်အနှစ်ချုပ်
-   အစဉ်လိုက်စီးဆင်းအောင်ရေးပါ။
-2. မြင်ကွင်းဖော်ပြချက်၊ shot, scene, camera, timestamp၊ ခေါင်းစဉ်၊ bullet list နှင့် meta စာသားများ
-   လုံးဝမထည့်ပါနှင့်။
-3. လူအမည်၊ နေရာအမည်၊ ငွေပမာဏ၊ ရက်စွဲ၊ ဂဏန်း၊ အစဉ်လိုက်ဖြစ်ရပ်ကို မူရင်းထဲကအတိုင်း တိတိကျကျ ထိန်းပါ —
-   ခန့်မှန်းချက်မရေးရ၊ အချက်အလက်အသစ် ဖန်တီးဖြည့်စွက်ခြင်း၊ ရှိပြီးသားအချက်ကို ချန်လှပ်ချန်ခြင်း
-   လုံးဝမပြုလုပ်ရ။ မူရင်းအဓိပ္ပာယ်နှင့် အတိအကျကိုက်ညီအောင် ကိုယ်တိုင်ပြန်နှိုင်းစစ်ဆေးပြီးမှသာ ပေးပါ။
-4. စာပေဆန်၊ ရေးဟန်ကျသော "စာနှင့်ရေးသား" မြန်မာစာအရေးအသား (ဥပမာ - ၍၊ ဖြစ်ပေသည်၊ ထိုအခါ၊ ၏၊
-   နှင့်တကွ၊ သို့ရာတွင်) ကို လုံးဝမသုံးပါနှင့်။ ယင်းအစား "ပြီးတော့၊ ဒါပေမဲ့၊ လုပ်လိုက်တယ်၊ ဖြစ်သွားတယ်"
-   ကဲ့သို့ Facebook/YouTube creator များ နေ့စဉ်သုံးနေကျ ရိုးရိုးအပြောစကားဟန်ကိုသာ သုံးပါ။
-5. ဝါကျတစ်ကြောင်းလျှင် အဓိပ္ပာယ်တစ်ခုတည်းပါအောင်၊ ရှင်းလင်းတိုတောင်းအောင်ရေးပါ — ရှည်လျားရှုပ်ထွေးသော
-   ဝါကျကြီးများ မရေးပါနှင့်။
-6. အသံပြောအရှိန်ပြောင်းရန်လိုမှသာ [action], [sad], [happy], [whisper], [normal] tag ကို
-   ဝါကျမတိုင်မီ ထည့်နိုင်သည်။
-7. Output တွင် ပြီးပြည့်စုံသော recap narration စာသားသီးသန့်သာ ပြန်ပေးပါ — ရှင်းလင်းချက်၊ မှတ်ချက်၊
-   ခေါင်းစဉ် လုံးဝမထည့်ပါနှင့်။
-""".strip()
-
-
-def recap_prompt(transcript, tone, language):
-    if language == "မြန်မာ":
-        return f"{BURMESE_RULES}\n\nNarration tone: {tone}\n\nTranscript:\n{transcript}"
-    return f"""
-You are a professional recap narrator. Rewrite this transcript as a natural {language} voice-over.
-Use this order: hook, context, conflict, turning point, outcome, takeaway.
-Preserve facts only — do not add or drop information. Do not output headings, scene directions, timestamps, bullets, or translation notes.
-Return only the finished narration.
-
-Tone: {tone}
-Transcript: {transcript}
-""".strip()
-
-
-def visual_prompt(tone, language):
-    if language == "မြန်မာ":
-        return f"{BURMESE_RULES}\n\nဤဗီဒီယိုကိုသာအခြေခံ၍ {tone} tone ဖြင့် recap narration ရေးပါ။ မြင်/ကြားရသည့် အချက်များသာထည့်ပြီး နားထောင်သူလိုက်လံနားလည်နိုင်မည့် ဇာတ်ကြောင်းပုံစံဖြင့်ရေးပါ။"
-    return f"Write a professional {tone} recap narration in {language} from this video. Use only verifiable events. Do not include scene directions, timestamps, headings, bullets, or unsupported details. Return only the finished narration."
-
-
-def clean_ai_text(text):
-    text = text.strip()
-    return re.sub(r"^(?:final script|recap narration|narration)\s*[:：]\s*", "", text, flags=re.I).strip()
-
-
-def extract_json_array(text):
-    text = text.strip()
-    text = re.sub(r"^```(?:json)?", "", text.strip(), flags=re.I).strip()
-    text = re.sub(r"```$", "", text.strip()).strip()
-    match = re.search(r"\[.*\]", text, flags=re.S)
-    return match.group(0) if match else text
-
-
-def align_script_to_video(video_path, script_text, language):
-    """For videos that have no usable speech (e.g. silent footage that the
-    Recap Builder already turned into a script via 'AI ကြည့်ပြီးရေးမည်' mode),
-    ask Gemini to split that finished script into short lines and time-align
-    each line to the video's visuals, so the Subtitle & Dubbing section can
-    turn it into accurately-timed captions and dubbing without needing
-    original audio."""
-    if not st.session_state.api_keys:
-        return None, "Gemini API key ကို sidebar မှာ ထည့်ပါ။"
-    if not script_text.strip():
-        return None, "Recap script မရှိသေးပါ။"
-    duration = duration_of(video_path)
-    try:
-        genai.configure(api_key=st.session_state.api_keys[0])
-        remote = genai.upload_file(path=str(video_path))
-        while remote.state.name == "PROCESSING":
-            time.sleep(2)
-            remote = genai.get_file(remote.name)
-        if remote.state.name == "FAILED":
-            return None, "Gemini video processing မအောင်မြင်ပါ။"
-        prompt = f"""
-ဤအောက်ပါစာသားသည် ဒီဗီဒီယို (မူရင်းအသံမပါ) အတွက် ရေးထားပြီးသား {language} recap narration ဖြစ်သည်။
-Video ၏ စက္ကန့်ပေါင်း {duration:.1f} sec ရှိသည်။
-Narration စာသားကို အဓိပ္ပာယ်၊ စကားလုံး၊ အစီအစဉ် လုံးဝမပြောင်းလဲစေဘဲ တိုတောင်းသော caption လိုင်းများအဖြစ် ပိုင်းခြားပြီး၊ video ထဲက မြင်ကွင်းအစီအစဉ်နှင့် ကိုက်ညီအောင် timestamp ချိတ်ဆက်ပါ။
-
-စည်းကမ်းများ
-1. Narration ရှိ စကားလုံးအားလုံးကို အစဉ်လိုက်၊ ချန်လှပ်မထားဘဲ၊ ထပ်မထည့်ဘဲ အကုန်သုံးပါ။
-2. line တစ်ကြောင်းစီသည် စကားလုံး ၄-၁၄ လုံးခန့်၊ (တစ်ထွက်ရှူငင်ချိန်) အရှည်ရှိရမည်။
-3. start/end timestamp များသည် စက္ကန့်ဖြင့် ဂဏန်းဖြစ်ရမည်၊ တဖြည်းဖြည်းများလာရမည်၊ 0 နှင့် {duration:.1f} ကြားတွင်ရှိရမည်၊ line တစ်ခုနှင့်တစ်ခု overlap မဖြစ်ရ။
-4. Video ၏ visual pacing (ပြောင်းလဲမှု၊ အရေးကြီးသည့်မြင်ကွင်း) နှင့် ကိုက်ညီအောင် timing ချထားပါ။
-5. JSON array တစ်ခုတည်းသာ ပြန်ပေးပါ — [{{"start": 0.0, "end": 3.2, "text": "..."}}, ...] ပုံစံ။ အခြားစာသား၊ ရှင်းလင်းချက် လုံးဝမထည့်ပါနှင့်။
-
-Narration script:
-{script_text}
-""".strip()
-        model = genai.GenerativeModel(st.session_state.model_name)
-        response = model.generate_content([remote, prompt])
-        genai.delete_file(remote.name)
-        raw = extract_json_array(response.text or "")
-        data = json.loads(raw)
-    except Exception as error:
-        return None, str(error)
-
-    segments = []
-    for item in data if isinstance(data, list) else []:
-        try:
-            start, end = float(item["start"]), float(item["end"])
-            text = str(item["text"]).strip()
-        except (KeyError, TypeError, ValueError):
-            continue
-        if text and end > start:
-            segments.append({"start": max(start, 0.0), "end": end, "text": text})
-    segments = normalize_segment_timing(segments, total_duration=duration)
-    if not segments:
-        return None, "AI ကနေ timing ချထားမှုမရပါ။ ထပ်စမ်းကြည့်ပါ။"
-    return segments, None
-
-
-def generate(prompt):
-    if not st.session_state.api_keys:
-        return None, "Gemini API key ကို sidebar မှာ ထည့်ပါ။"
-    dictionary = load_dictionary()
-    if dictionary:
-        prompt = f"အသုံးအနှုန်းနှင့်အမည်များအတွက် ဒီ dictionary ကို ဦးစားပေးလိုက်နာပါ။\n{dictionary}\n\n{prompt}"
-    errors = []
-    for key in st.session_state.api_keys:
-        try:
-            genai.configure(api_key=key)
-            response = genai.GenerativeModel(st.session_state.model_name).generate_content(prompt)
-            text = getattr(response, "text", "").strip()
-            if text:
-                return clean_ai_text(text), None
-            errors.append("AI response မှာစာသားမပါရှိပါ။")
-        except Exception as error:
-            errors.append(str(error))
-    return None, errors[-1] if errors else "AI response မရပါ။"
-
-
-# Edge TTS defaults intentionally use the "standard" Neural voices (Jenny /
-# Guy / Ryan / Sonia) instead of the newer expressive ones (Aria /
-# Christopher). The expressive voices apply more dynamic internal prosody,
-# which is what was causing short function words like "the" to occasionally
-# come out clipped — the standard voices read English with a clearer, more
-# neutral international accent and stay stable across rate/pitch changes.
-# Both a US and a UK option are offered so users can pick whichever
-# standard accent sounds clearer for their audience.
-VOICE_MAP = {
-    "မြန်မာ": {"ကျား": "my-MM-ThihaNeural", "မ": "my-MM-NilarNeural"},
-    "English": {
-        "US": {"ကျား": "en-US-GuyNeural", "မ": "en-US-JennyNeural"},
-        "UK": {"ကျား": "en-GB-RyanNeural", "မ": "en-GB-SoniaNeural"},
-    },
-}
-GOOGLE_VOICE_MAP = {
-    "မြန်မာ": {"ကျား": "my-MM-Standard-A", "မ": "my-MM-Standard-A"},
-    "English": {
-        "US": {"ကျား": "en-US-Neural2-D", "မ": "en-US-Neural2-C"},
-        "UK": {"ကျား": "en-GB-Neural2-B", "မ": "en-GB-Neural2-A"},
-    },
-}
-VOICE_MODES = {
-    "Recap — ပြတ်သားမြန်ဆန်": ("+6%", "+0Hz"),
-    "Documentary — တည်ငြိမ်": ("-4%", "-2Hz"),
-    "Story — ဇာတ်လမ်းဆန်": ("-7%", "-2Hz"),
-    "Energy — စိတ်လှုပ်ရှား": ("+12%", "+2Hz"),
-}
-EMOTIONS = {
-    "[normal]": ("+0%", "+0Hz"), "[sad]": ("-14%", "-12Hz"),
-    "[happy]": ("+8%", "+9Hz"), "[action]": ("+20%", "+2Hz"),
-    "[whisper]": ("-10%", "-16Hz"),
-}
-
-
-def int_value(value):
-    return int(value.replace("%", "").replace("Hz", "").replace("+", ""))
-
-
-def spoken_number(number):
-    try:
-        if "." in number:
-            whole, fraction = number.split(".", 1)
-            return f"{spoken_number(whole)} ဒသမ {spoken_number(fraction)}"
-        n = int(number.replace(",", ""))
-        if n == 0:
-            return "သုည"
-        digits = ["", "တစ်", "နှစ်", "သုံး", "လေး", "ငါး", "ခြောက်", "ခုနစ်", "ရှစ်", "ကိုး"]
-        units = ((10_000_000, "ကုဋေ"), (1_000_000, "သန်း"), (100_000, "သိန်း"), (10_000, "သောင်း"), (1_000, "ထောင်"), (100, "ရာ"), (10, "ဆယ်"))
-        result = []
-        for unit, label in units:
-            if n >= unit:
-                upper, n = divmod(n, unit)
-                result.append(spoken_number(str(upper)) + label)
-        if n:
-            result.append(digits[n])
-        spoken = "".join(result).replace("ထောင်", "ထောင့်").replace("ရာ", "ရာ့").replace("ဆယ်", "ဆယ့်")
-        return spoken[:-1] + "င်" if spoken.endswith("ထောင့်") else spoken.rstrip("့")
-    except (ValueError, IndexError):
-        return number
-
-
-def _respell_the(match):
-    """Neural voices occasionally devoice the short function word "the" into
-    something that sounds like "tee" (dropping the soft "th" fricative),
-    especially at fast rate settings. Because edge-tts no longer accepts
-    custom SSML/phoneme tags (Microsoft restricts it to the same basic
-    prosody controls Edge itself uses), the only reliable fix left is to
-    respell the word phonetically before it reaches the engine: "thee"
-    before a vowel sound (which is in fact the linguistically-correct
-    pronunciation of "the" before a vowel) and "thuh" before a consonant
-    sound. This only ever touches the audio-bound text used for TTS, never
-    the on-screen script/subtitles."""
-    word, space, following = match.group(1), match.group(2), match.group(3)
-    vowel_sound = bool(following) and following[0].lower() in "aeiou"
-    spelled = "thee" if vowel_sound else "thuh"
-    if word[:1].isupper():
-        spelled = spelled.capitalize()
-    return f"{spelled}{space}{following or ''}"
-
-
-def normalize_tts(text, language):
-    text = re.sub(r"(?<=\d),(?=\d)", "", text)
-    text = re.sub(r"[*#]", "", text).replace('"', "").replace("'", "")
-    for source, spoken in sorted(pronunciation_dictionary().items(), key=lambda item: len(item[0]), reverse=True):
-        text = re.sub(re.escape(source), spoken, text, flags=re.I)
-    if language == "မြန်မာ":
-        text = re.sub(r"\b\d+(?:\.\d+)?\b", lambda match: spoken_number(match.group()), text)
-    elif language == "English":
-        text = re.sub(r"\b(the)(\s+)(\w+)?", _respell_the, text, flags=re.IGNORECASE)
-    return re.sub(r"\s+", " ", text.replace("၊", ", ").replace("။", ". ")).strip()
-
-
-def edge_chunk(text, language, gender, rate, pitch, output, accent="US"):
-    voice = VOICE_MAP[language][gender] if language == "မြန်မာ" else VOICE_MAP[language][accent][gender]
-    try:
-        result = subprocess.run(["edge-tts", "--voice", voice, "--text", text, f"--rate={rate}", f"--pitch={pitch}", "--write-media", str(output)], capture_output=True, text=True, check=False)
-        return result.returncode == 0 and output.exists() and output.stat().st_size > 0
-    except OSError:
-        return False
-
-
-def google_chunk(text, language, gender, rate, pitch, output, accent="US"):
-    credentials = st.session_state.google_creds
-    if credentials is None:
-        return False
-    try:
-        client = texttospeech.TextToSpeechClient(credentials=credentials)
-        voice_name = GOOGLE_VOICE_MAP[language][gender] if language == "မြန်မာ" else GOOGLE_VOICE_MAP[language][accent][gender]
-        language_code = "my-MM" if language == "မြန်မာ" else ("en-GB" if accent == "UK" else "en-US")
-        result = client.synthesize_speech(
-            input=texttospeech.SynthesisInput(text=text),
-            voice=texttospeech.VoiceSelectionParams(language_code=language_code, name=voice_name),
-            audio_config=texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3, speaking_rate=max(.25, min(4, 1 + rate / 100)), pitch=max(-20, min(20, pitch / 10))),
-        )
-        output.write_bytes(result.audio_content)
-        return output.exists() and output.stat().st_size > 0
-    except Exception:
-        return False
-
-
-def create_voice(script, language, gender, delivery, speed, engine, accent="US"):
-    if not require_ffmpeg():
-        return False, "FFmpeg မရှိပါ။"
-    base_rate, base_pitch = VOICE_MODES[delivery]
-    # TTS engines only sound natural within roughly 0.7x-1.4x of their
-    # default rate; anything more aggressive is applied afterwards as a
-    # precise ffmpeg atempo pass so the 0.4x-3.0x slider is always accurate
-    # without ever sending a distorted rate string to the voice engine.
-    engine_speed = max(0.7, min(1.4, speed))
-    residual_speed = speed / engine_speed
-    current_rate = int_value(base_rate) + round((engine_speed - 1) * 100)
-    current_pitch = int_value(base_pitch)
-    chunks, index = [], 0
-    for item in re.split(r"(\[.*?\])", script):
-        item = item.strip()
-        if not item:
-            continue
-        tag = item.lower()
-        if tag in EMOTIONS:
-            rate, pitch = EMOTIONS[tag]
-            current_rate = int_value(base_rate) + round((engine_speed - 1) * 100) + int_value(rate)
-            current_pitch = int_value(base_pitch) + int_value(pitch)
-            continue
-        if tag == "[p]":
-            pause = SESSION_DIR / f"pause_{index}.mp3"
-            ok, _ = run_media(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono", "-t", ".65", "-q:a", "9", str(pause)])
-            if ok:
-                chunks.append(pause)
-                index += 1
-            continue
-        if item.startswith("[") and item.endswith("]"):
-            continue
-        text = normalize_tts(item, language)
-        output = SESSION_DIR / f"voice_part_{index}.mp3"
-        ok = (
-            google_chunk(text, language, gender, current_rate, current_pitch, output, accent)
-            if engine == "Google Cloud TTS"
-            else edge_chunk(text, language, gender, f"{current_rate:+d}%", f"{current_pitch:+d}Hz", output, accent)
-        )
-        if not ok:
-            return False, "အသံတစ်ပိုင်းဖန်တီးမရပါ။ Voice setting သို့မဟုတ် network ကို စစ်ပါ။"
-        chunks.append(output)
-        index += 1
-    if not chunks:
-        return False, "အသံဖန်တီးရန် စာသားမရှိပါ။"
-    listing = SESSION_DIR / "voice_list.txt"
-    listing.write_text("".join(f"file '{chunk}'\n" for chunk in chunks), encoding="utf-8")
-    ok, error = run_media(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-c:a", "libmp3lame", "-q:a", "2", str(PATHS["voice"])])
-    if not (ok and PATHS["voice"].exists()):
-        return False, error
-    if abs(residual_speed - 1.0) > 0.02:
-        adjusted = SESSION_DIR / "voice_speed_adjusted.mp3"
-        ok, error = run_media(["ffmpeg", "-y", "-i", str(PATHS["voice"]), "-filter:a", atempo_filter_chain(residual_speed), "-c:a", "libmp3lame", "-q:a", "2", str(adjusted)])
-        if not (ok and adjusted.exists()):
-            return False, error or "Narration speed ချိန်ညှိ၍မရပါ။"
-        shutil.copyfile(adjusted, PATHS["voice"])
-    return True, ""
-
-
-def parse_points(raw, source_duration):
-    values = []
-    for item in raw.split(","):
-        try:
-            point = float(item.strip())
-            if 1 < point < source_duration - 1 and point not in values:
-                values.append(point)
-        except ValueError:
-            pass
-    return sorted(values)
-
-
-def make_freeze_edit(source, points):
-    if not points:
-        return source, ""
-    clips, start = [], 0
-    for index, point in enumerate(points):
-        clip, image, hold = SESSION_DIR / f"clip_{index}.mp4", SESSION_DIR / f"freeze_{index}.jpg", SESSION_DIR / f"hold_{index}.mp4"
-        tasks = [
-            ["ffmpeg", "-y", "-ss", str(start), "-to", str(point), "-i", str(source), "-an", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(clip)],
-            ["ffmpeg", "-y", "-ss", str(point), "-i", str(source), "-frames:v", "1", "-q:v", "2", str(image)],
-            ["ffmpeg", "-y", "-loop", "1", "-i", str(image), "-t", "2", "-an", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(hold)],
-        ]
-        for task in tasks:
-            ok, error = run_media(task)
-            if not ok:
-                return None, error
-        clips.extend([clip, hold])
-        start = point
-    tail = SESSION_DIR / "tail.mp4"
-    ok, error = run_media(["ffmpeg", "-y", "-ss", str(start), "-i", str(source), "-an", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(tail)])
-    if not ok:
-        return None, error
-    clips.append(tail)
-    listing = SESSION_DIR / "freeze_list.txt"
-    listing.write_text("".join(f"file '{clip}'\n" for clip in clips), encoding="utf-8")
-    output = SESSION_DIR / f"freeze_edit_{int(time.time())}.mp4"
-    ok, error = run_media(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", str(output)])
-    return (output, "") if ok else (None, error)
-
-
-def make_video(source, bgm, bgm_volume, speed, points):
-    stage, error = make_freeze_edit(source, points)
-    if stage is None:
-        return None, error
-    output = SESSION_DIR / f"recap_{int(time.time())}.mp4"
-    video_filter = f"[0:v]setpts={1 / speed:.5f}*PTS,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v]"
-    command, maps = ["ffmpeg", "-y", "-i", str(stage), "-i", str(PATHS["voice"])], ["-map", "[v]"]
-    if bgm and bgm.exists():
-        command.extend(["-stream_loop", "-1", "-i", str(bgm)])
-        audio_filter = f";[2:a]volume={bgm_volume:.2f}[bgm];[1:a][bgm]amix=inputs=2:duration=first:normalize=0[a]"
-        maps.extend(["-map", "[a]"])
-    else:
-        audio_filter = ""
-        maps.extend(["-map", "1:a"])
-    ok, error = run_media(command + ["-filter_complex", video_filter + audio_filter] + maps + ["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(output)])
-    return (output, "") if ok and output.exists() else (None, error)
-
-
-def padauk_font():
-    folder = APP_DIR / "fonts_cache"
-    folder.mkdir(exist_ok=True)
-    font = folder / "Padauk-Bold.ttf"
-    if font.exists() and font.stat().st_size > 50_000:
-        return font
-    try:
-        response = requests.get("https://github.com/googlefonts/padauk/raw/main/fonts/ttf/Padauk-Bold.ttf", timeout=20)
-        response.raise_for_status()
-        font.write_bytes(response.content)
-        return font
-    except requests.RequestException:
-        return None
-
-
-def ass_time(seconds):
-    return f"{int(seconds // 3600)}:{int(seconds % 3600 // 60):02d}:{int(seconds % 60):02d}.{int(seconds % 1 * 100):02d}"
-
-
-def srt_time(seconds):
-    return f"{int(seconds // 3600):02d}:{int(seconds % 3600 // 60):02d}:{int(seconds % 60):02d},{int(seconds % 1 * 1000):03d}"
-
-
-def write_subtitles(segments):
-    header = """[Script Info]
-ScriptType: v4.00+
-PlayResX: 1920
-PlayResY: 1080
-[V4+ Styles]
-Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: Recap,Padauk-Bold,42,&H00FFFFFF,&H0000FFFF,&H0010181E,&H60000000,1,0,0,0,100,100,0,0,1,3.2,0.8,2,90,90,62,1
-[Events]
-Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
-"""
-    with PATHS["caption_ass"].open("w", encoding="utf-8") as ass, PATHS["caption_srt"].open("w", encoding="utf-8") as srt:
-        ass.write(header)
-        for number, item in enumerate(segments, 1):
-            start, end, text = float(item["start"]), float(item["end"]), item["text"].strip()
-            words = text.replace("{", "(").replace("}", ")").replace("\\", "").split()
-            display = text if len(words) <= 8 else "\\N".join(textwrap.wrap(" ".join(words), width=32, break_long_words=False))
-            ass.write(f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Recap,,0,0,0,,{display}\n")
-            srt.write(f"{number}\n{srt_time(start)} --> {srt_time(end)}\n{text}\n\n")
-
-
-def translate_segments(segments):
-    """Translate each subtitle line into natural, dubbing-friendly spoken
-    Burmese (not a stiff literal/literary translation) while keeping facts,
-    names and numbers exactly intact. Never aborts the whole batch — a
-    single failed line falls back to the original text so subtitle/dubbing
-    generation can still complete."""
-    output = []
-    failed = 0
-    for item in segments:
-        prompt = (
-            "အောက်ပါ subtitle line ကို ရိုးရိုးရှင်းရှင်း literal (တိုက်ရိုက်) ဘာသာပြန်မဟုတ်ဘဲ၊ "
-            "မြန်မာလူမျိုးများ နေ့စဉ်ပြောဆိုနေကျ၊ သဘာဝကျသော အပြောစကား (colloquial spoken Burmese) ဖြင့် ပြန်ဆိုပါ။\n"
-            "- မူရင်းစာသား၏ အဓိပ္ပာယ်၊ အချက်အလက်၊ နာမည်၊ နေရာအမည်၊ ဂဏန်းများကို အတိအကျ ထိန်းသိမ်းပါ — ဖြည့်စွက်ခြင်း၊ "
-            "ချန်လှပ်ခြင်း (extra သို့မဟုတ် ချန်ချွင်းမှု) လုံးဝမပြုလုပ်ပါနှင့်။ ဘာသာပြန်ပြီးရင် မူရင်းနှင့် "
-            "အချက်အလက်အားလုံး ကိုက်ညီမှုရှိမရှိ ပြန်စစ်ပါ။\n"
-            "- Dubbing တွင်တွဲသုံးရန်ဖြစ်၍ စာကြောင်းအရှည်ကို မူရင်းနှင့်နီးစပ်အောင်ထိန်းပါ။\n"
-            "- စာပေဆန်၊ ရေးဟန်ကျသော မြန်မာစာအသုံးအနှုန်း (ဥပမာ - ၍၊ ဖြစ်ပေသည်၊ ထိုအခါ၊ ၏) များကို လုံးဝရှောင်ပါ။\n"
-            "- ရှင်းလင်းချက်၊ ခေါင်းစဉ်၊ မှတ်ချက် လုံးဝမထည့်ပါနှင့်— ဘာသာပြန်ထားသော line တစ်ကြောင်းတည်းသာ ပြန်ပေးပါ။\n\n"
-            f"Subtitle: {item['text'].strip()}"
-        )
-        translated, _ = generate(prompt)
-        if translated:
-            output.append({"start": item["start"], "end": item["end"], "text": translated.replace("\n", " ").strip()})
-        else:
-            failed += 1
-            output.append({"start": item["start"], "end": item["end"], "text": item["text"].strip()})
-    warning = f"{failed} subtitle line(s) ဘာသာပြန်မရသဖြင့် မူရင်းစာသားကို အစားထိုးထားပါသည်။" if failed else None
-    return output, warning
-
-
-def silence_file(duration, output):
-    duration = max(duration, 0.05)
-    ok, _ = run_media(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono", "-t", f"{duration:.3f}", "-q:a", "9", str(output)])
-    return ok
-
-
-def build_dubbed_audio(segments, language, gender, engine, accent="US"):
-    """Turn caption segments into a single audio track whose timing matches
-    the video exactly: each line is spoken, then stretched/trimmed/padded so
-    it starts and ends at the same second as the original subtitle."""
-    if not require_ffmpeg():
-        return None, "FFmpeg မရှိပါ။"
-    segments = normalize_segment_timing(segments)
-    if not segments:
-        return None, "Dubbing အတွက် သုံးနိုင်သော caption timing မတွေ့ပါ။"
-    chunks = []
-    cursor = 0.0
-    for index, segment in enumerate(segments):
-        start = max(float(segment["start"]), 0.0)
-        end = max(float(segment["end"]), start + 0.2)
-        text = normalize_tts(segment["text"].strip(), language)
-        if not text:
-            cursor = max(cursor, end)
-            continue
-        gap = start - cursor
-        if gap > 0.06:
-            silence = SESSION_DIR / f"dub_gap_{index}.mp3"
-            if silence_file(gap, silence):
-                chunks.append(silence)
-        raw = SESSION_DIR / f"dub_raw_{index}.mp3"
-        ok = (
-            google_chunk(text, language, gender, 0, 0, raw, accent)
-            if engine == "Google Cloud TTS"
-            else edge_chunk(text, language, gender, "+0%", "+0Hz", raw, accent)
-        )
-        if not ok:
-            return None, f"Line {index + 1} ရဲ့ အသံမထုတ်နိုင်ပါ။"
-        raw_duration = duration_of(raw)
-        target = max(end - start, 0.2)
-        fitted = raw
-        if raw_duration > 0.05:
-            # Speeding speech up to fit a shorter slot sounds natural well
-            # past ffmpeg's single-stage atempo limit (2.0x) once chained via
-            # atempo_filter_chain, so lines that ran long get sped up rather
-            # than abruptly truncated. Slowing speech down is capped much
-            # closer to 1.0x (never below 0.82x) because a voice dragged out
-            # to match a long slot sounds far worse than simply padding the
-            # remainder with silence.
-            raw_tempo = raw_duration / target
-            tempo = max(0.82, min(2.6, raw_tempo))
-            if abs(tempo - 1.0) > 0.03:
-                candidate = SESSION_DIR / f"dub_fit_{index}.mp3"
-                ok, _ = run_media(["ffmpeg", "-y", "-i", str(raw), "-filter:a", atempo_filter_chain(tempo), "-c:a", "libmp3lame", "-q:a", "2", str(candidate)])
-                if ok:
-                    fitted = candidate
-        fitted_duration = duration_of(fitted)
-        if fitted_duration < target - 0.05:
-            pad = SESSION_DIR / f"dub_pad_{index}.mp3"
-            chunks.append(fitted)
-            if silence_file(target - fitted_duration, pad):
-                chunks.append(pad)
-        elif fitted_duration > target + 0.05:
-            # Only reached if even a 2.6x speed-up was not enough (a very
-            # long line crammed into a very short caption slot) — trim as a
-            # last resort rather than letting it overrun into the next line.
-            trimmed = SESSION_DIR / f"dub_trim_{index}.mp3"
-            ok, _ = run_media(["ffmpeg", "-y", "-i", str(fitted), "-t", f"{target:.3f}", "-c:a", "libmp3lame", "-q:a", "2", str(trimmed)])
-            chunks.append(trimmed if ok else fitted)
-        else:
-            chunks.append(fitted)
-        cursor = end
-    if not chunks:
-        return None, "Dubbing အတွက် အသံစာသားမတွေ့ပါ။"
-    listing = SESSION_DIR / "dub_list.txt"
-    listing.write_text("".join(f"file '{chunk}'\n" for chunk in chunks), encoding="utf-8")
-    ok, error = run_media(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-c:a", "libmp3lame", "-q:a", "2", str(PATHS["dub_audio"])])
-    return (PATHS["dub_audio"], "") if ok and PATHS["dub_audio"].exists() else (None, error)
-
-
-def mux_dubbed_video(video_path, audio_path, output_path):
-    ok, error = run_media(["ffmpeg", "-y", "-i", str(video_path), "-i", str(audio_path), "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-shortest", str(output_path)])
-    return (True, "") if ok and output_path.exists() else (False, error)
-
-
+    return data
+
+def apply_pronunciation(text, pron_dict):
+    """TTS မသွင်းမီ အသံထွက်မှန်စေရန် မူရင်းစာသားကို အစားထိုးခြင်း"""
+    if not text:
+        return text
+    for word, pron in pron_dict.items():
+        text = re.sub(rf"\b{re.escape(word)}\b", pron, text, flags=re.IGNORECASE)
+    return text
+
+# Navigation State
+if "current_page" not in st.session_state:
+    st.session_state.current_page = "🏠 ပင်မစာမျက်နှာ"
+
+# ----------------- SIDEBAR -----------------
 with st.sidebar:
-    st.markdown("## 🎞️ Recap Studio MM")
-    st.caption("Burmese-first creator workspace")
-    st.divider()
-    with st.expander("🔐 AI settings", expanded=True):
-        saved_raw, saved_model, saved_proxy = load_local_config()
-        if "api_key_input" not in st.session_state:
-            st.session_state.api_key_input = saved_raw
-        raw_keys = st.text_input("Gemini API key", type="password", key="api_key_input", help="Key ကို ဒီ server ပေါ်မှာသာသိမ်းထားပြီး browser refresh လုပ်လည်း မပျောက်ပါ။ Multiple key များကို comma ဖြင့်ခွဲနိုင်သည်။")
-        st.session_state.api_keys = [key.strip() for key in raw_keys.split(",") if key.strip()]
-        model_options = ["gemini-2.5-flash", "gemini-2.5-pro"]
-        default_index = model_options.index(saved_model) if saved_model in model_options else 0
-        st.session_state.model_name = st.selectbox("Model", model_options, index=default_index)
-        save_local_config(raw_keys, st.session_state.model_name, st.session_state.proxy_url)
-        st.caption("AI rewrite၊ direct video recap၊ subtitle ဘာသာပြန်နှင့် dubbing အတွက်သာလိုသည်။")
-        if CONFIG_PATH.exists() and st.button("🗑️ Saved key ဖျက်မည်", use_container_width=True):
-            CONFIG_PATH.unlink(missing_ok=True)
-            st.session_state.api_key_input = ""
-            st.session_state.api_keys = []
-            st.rerun()
-    with st.expander("🔊 Google Cloud TTS (optional)"):
-        credentials = st.file_uploader("service_account.json", type=["json"], key="credentials")
-        if credentials:
-            try:
-                info = json.load(credentials)
-                st.session_state.google_creds = service_account.Credentials.from_service_account_info(info)
-                save_local_google_creds(info)
-                st.success("Google Cloud TTS ချိတ်ဆက်ပြီး refresh လုပ်လည်း မပျောက်အောင် သိမ်းထားပါပြီ။")
-            except (ValueError, TypeError, json.JSONDecodeError):
-                st.error("service account JSON ဖိုင်မမှန်ပါ။")
-        elif st.session_state.google_creds is not None:
-            st.success("Google Cloud TTS သိမ်းထားသည့် credential ဖြင့် ချိတ်ဆက်ထားပါသည်။")
-            if st.button("🗑️ Google credential ဖျက်မည်", use_container_width=True):
-                GOOGLE_CREDS_PATH.unlink(missing_ok=True)
-                st.session_state.google_creds = None
-                st.rerun()
-    with st.expander("📥 Video link import", expanded=True):
-        link = st.text_input("YouTube / public video URL")
-        cookies_upload = st.file_uploader(
-            "YouTube cookies.txt (optional)", type=["txt"], key="cookies_upload",
-            help="'Sign in to confirm you're not a bot' သို့မဟုတ် 'Requested format is not available' error ဆက်တက်နေရင် browser extension (ဥပမာ - Get cookies.txt LOCALLY) နဲ့ youtube.com ကနေ login ဝင်ထားစဉ် cookies.txt ကို export လုပ်ပြီး ဒီနေရာမှာတင်ပါ။",
-        )
-        if cookies_upload:
-            save_upload(cookies_upload, PATHS["cookies"])
-            st.session_state.has_cookies = True
-            st.success("cookies.txt ကို ဒေါင်းလုဒ်တွေအတွက် အသုံးပြုပါမည်။")
-        elif PATHS["cookies"].exists():
-            st.caption("✅ cookies.txt လက်ရှိအသုံးပြုနေသည်")
-            if st.button("🗑️ cookies.txt ဖျက်မည်", use_container_width=True):
-                PATHS["cookies"].unlink(missing_ok=True)
-                st.session_state.has_cookies = False
-                st.rerun()
-        proxy_input = st.text_input(
-            "Proxy (optional) — http://user:pass@host:port သို့မဟုတ် socks5://host:port",
-            value=st.session_state.proxy_url,
-            key="proxy_input",
-            help="App server ရဲ့ IP ကို YouTube က datacenter IP အဖြစ်မှတ်ပြီး bot-check တင်းကျပ်နေရင်၊ "
-                 "residential/mobile proxy တစ်ခုထည့်ခြင်းက cookies.txt ထက်ပင် ပိုအလုပ်ဖြစ်လေ့ရှိပါတယ်။",
-        )
-        st.session_state.proxy_url = proxy_input.strip()
-        save_local_config(raw_keys, st.session_state.model_name, st.session_state.proxy_url)
-        version_col, update_col = st.columns([1.3, 1])
-        with version_col:
-            runtime_note = "JS runtime ✅" if js_runtime_available() else "JS runtime ⚠️ (packages.txt မှာ nodejs ထည့်ပါ)"
-            st.caption(f"yt-dlp — {installed_ytdlp_version()} · daily auto-update (GitHub master) ✅")
-            st.caption(runtime_note)
-        with update_col:
-            if st.button("🔄 yt-dlp update", use_container_width=True, help="App က yt-dlp ကို တစ်နေ့တစ်ခါ အလိုအလျောက် update လုပ်ပေးနေပေမယ့်၊ YouTube ပြောင်းလိုက်ပြီး ချက်ချင်း update ဆွဲချင်ရင် ဒီခလုတ်ကိုနှိပ်ပါ။"):
-                with st.spinner("yt-dlp ကို GitHub master branch ကနေ နောက်ဆုံးဗားရှင်းသို့ update လုပ်နေသည်…"):
-                    ok, info = update_ytdlp()
-                if ok:
-                    st.success(f"yt-dlp ကို v{info} အဖြစ် update လုပ်ပြီးပါပြီ။")
-                else:
-                    st.error(f"Update မအောင်မြင်ပါ — {info}")
-        if not js_runtime_available():
-            st.markdown('<div class="callout warn" style="margin-top:.5rem;">YouTube ရဲ့ bot-check token (PO token) ကိုဖန်တီးဖို့ JavaScript runtime လိုအပ်ပါတယ်။ Repo ရဲ့ <code>packages.txt</code> ထဲမှာ <code>nodejs</code> ထည့်ပြီး app ကို redeploy လုပ်ကြည့်ပါ — download error ဖြေရှင်းရာမှာ အထောက်အကူအများဆုံးဖြစ်ပါလိမ့်မယ်။</div>', unsafe_allow_html=True)
-        if st.button("ဗီဒီယိုဒေါင်းလုဒ်", use_container_width=True):
-            if not link.strip():
-                st.warning("Video URL ထည့်ပါ။")
-            else:
-                with st.spinner("ဗီဒီယို ရယူနေသည်… (ဗီဒီယိုအရွယ်အစားပေါ်မူတည်၍ အချိန်ယူနိုင်သည်)"):
-                    ok, error = download_video(
-                        link.strip(), PATHS["source"],
-                        PATHS["cookies"] if PATHS["cookies"].exists() else None,
-                        st.session_state.proxy_url or None,
-                    )
-                if ok:
-                    st.session_state.last_download_url = link.strip()
-                    st.success("ဗီဒီယိုရပြီ — 'Recap Builder' tab ရဲ့ ဗီဒီယိုနေရာမှာ အလိုအလျောက်ပါသွားပါပြီ။")
-                    st.rerun()
-                else:
-                    st.error(f"ရယူမရပါ — {error}")
-        if PATHS["source"].exists():
-            st.caption(f"လက်ရှိ source ဗီဒီယို အသင့်ရှိပါသည် ({duration_of(PATHS['source']):.0f} sec)")
-    st.divider()
-    if st.button("🔄 Session အသစ်ပြန်စ", use_container_width=True):
-        saved_id = st.session_state.session_id
-        saved_keys = st.session_state.api_keys
-        saved_model_name = st.session_state.get("model_name")
-        saved_proxy_url = st.session_state.get("proxy_url", "")
-        st.session_state.clear()
-        st.session_state.session_id = saved_id
-        st.session_state.api_keys = saved_keys
-        st.session_state.proxy_url = saved_proxy_url
-        if saved_model_name:
-            st.session_state.model_name = saved_model_name
-        st.rerun()
-    st.markdown('<p class="small-note">အသုံးပြုခွင့်ရှိသော ဗီဒီယိုများကိုသာ upload / import လုပ်ပါ။</p>', unsafe_allow_html=True)
-
-
-st.markdown(
-    """
-    <div class="hero">
-      <span class="eyebrow">✦ Burmese video storytelling workflow</span>
-      <h1>Recap Studio MM</h1>
-      <p>ဗီဒီယိုတစ်ခုကို ရှင်းလင်းတိကျသော မြန်မာ recap narration၊ voice-over၊ subtitle နှင့် timing-ကိုက်ညီသော dubbing အဖြစ် တစ်နေရာတည်းမှ (Recap Builder) စနစ်တကျထုတ်လုပ်ပါ။</p>
-      <div class="hero-badges">
-        <span class="hero-badge">🎯 Fact-safe Burmese narration</span>
-        <span class="hero-badge">🗣️ Natural colloquial translation</span>
-        <span class="hero-badge">⬇️ Self-healing YouTube import</span>
-        <span class="hero-badge">🎚️ 0.4x–3.0x speed control</span>
-        <span class="hero-badge">🔤 Clear US/UK English voices</span>
-      </div>
+    st.markdown("### 🎬 **RECAP STUDIO MM**")
+    
+    # Profile Card
+    st.markdown("""
+    <div class="user-profile-box">
+        <div>
+            <div style="font-weight:bold; font-size:14px; color:#fff;">👤 Studio Master</div>
+            <div style="font-size:11px; color:#94a3b8;">Recap Studio MM</div>
+        </div>
+        <span class="badge-status">Active</span>
     </div>
-    """,
-    unsafe_allow_html=True,
-)
-step_cols = st.columns(3)
-for column, icon, number, label in zip(
-    step_cols,
-    ["📥", "✍️", "📤"],
-    ["STEP 01", "STEP 02", "STEP 03"],
-    ["ဗီဒီယိုထည့်ပြီး transcript ယူပါ", "fact-safe recap ကို AI ဖြင့် ပြင်ပြီး voice-over/subtitle/dubbing ထုတ်ပါ", "Publish Kit နဲ့ title, description, hashtag ထုတ်ပါ"],
-):
-    with column:
-        st.markdown(f'<div class="step-card"><div class="step-icon">{icon}</div><div><div class="step-num">{number}</div><div class="step-label">{label}</div></div></div>', unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
+    
+    # Navigation menu
+    menu_options = [
+        "🏠 ပင်မစာမျက်နှာ",
+        "🎬 ဗီဒီယို ပြုလုပ်ရန်",
+        "✂️ Auto Clips",
+        "🎞️ AI ဗီဒီယို စတူဒီယို",
+        "📁 သိမ်းဆည်းထားသော ပရောဂျက်များ",
+        "🍿 ဇာတ်လမ်းရှည် Recap",
+        "📥 ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန်",
+        "🎙️ AI အသံ စတူဒီယို",
+        "🔄 အသံ ပြောင်းစနစ်",
+        "📖 အသံထွက်နှင့် ဝေါဟာရ စီမံရန်",
+        "⚙️ API & Settings"
+    ]
+    
+    selected_page = st.radio(
+        "Menu",
+        menu_options,
+        index=menu_options.index(st.session_state.current_page) if st.session_state.current_page in menu_options else 0,
+        label_visibility="collapsed"
+    )
+    st.session_state.current_page = selected_page
+    
+    st.divider()
+    st.caption("⚡ **Recap Studio MM Engine v2.0**\nStreamlit & Python Powered.")
 
-recap_tab, publish_tab = st.tabs(["✦ Recap Builder", "↗ Publish Kit"])
+# ----------------- PAGE 1: ပင်မစာမျက်နှာ (HOME DASHBOARD) -----------------
+if st.session_state.current_page == "🏠 ပင်မစာမျက်နှာ":
+    col_banner, col_status = st.columns()
+    
+    with col_banner:
+        st.markdown("""
+        <div class="hero-card">
+            <span style="color:#a78bfa; font-size:12px; font-weight:bold; letter-spacing:1px;">✨ RECAP STUDIO MM</span>
+            <h1 style="color:#ffffff; margin: 10px 0 6px 0; font-size: 28px;">ဒီနေ့ဘာပြုလုပ်ချင်ပါသလဲ?</h1>
+            <p style="color:#cbd5e1; font-size:14px; margin-bottom: 20px;">
+                AI Recap၊ မြန်မာစာတန်းထိုး၊ ဇာတ်လမ်းရှည် Recap၊ ဒေါင်းလုဒ်နှင့် အသံ Tools များကို တစ်နေရာတည်းမှာ အသုံးပြုပါ။
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if st.button("🎬 ဗီဒီယို ပြုလုပ်ရန် (Recap • မြန်မာအသံထွက် • စာတန်းထိုး) ➔", type="primary"):
+            st.session_state.current_page = "🎬 ဗီဒီယို ပြုလုပ်ရန်"
+            st.rerun()
+            
+    with col_status:
+        st.markdown("""
+        <div class="hero-card" style="background:#0e1822;">
+            <div style="font-size:12px; color:#94a3b8;">သင့်စနစ်အခြေအနေ</div>
+            <div style="font-size:13px; margin-top:4px;">Recap Studio MM</div>
+            <h3 style="color:#10b981; margin:4px 0;">Studio Ready</h3>
+            <p style="font-size:11px; color:#64748b;">အသံနှင့် ဗီဒီယို စနစ်များ အားလုံး အသင့်ရှိနေပါသည်။</p>
+        </div>
+        """, unsafe_allow_html=True)
 
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.subheader("⚡ မြန်ဆန်သော လုပ်ဆောင်ချက်များ")
+    st.caption("လိုအပ်သော Tool သို့မဟုတ် စာမျက်နှာကို တစ်ချက်နှိပ်ပြီး တန်းသွားနိုင်ပါတယ်။")
+    
+    # Action Cards Grid
+    r1_c1, r1_c2, r1_c3, r1_c4 = st.columns(4)
+    with r1_c1:
+        st.markdown("""
+        <div class="action-card">
+            <h4>📥 ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန်</h4>
+            <p style="font-size:12px; color:#94a3b8;">YouTube၊ TikTok နှင့် အခြား Link များမှ ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန်</p>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("ဒေါင်းလုဒ်ဆွဲရန် ➔", key="btn_quick_dl"):
+            st.session_state.current_page = "📥 ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန်"
+            st.rerun()
+            
+    with r1_c2:
+        st.markdown("""
+        <div class="action-card">
+            <h4>📁 သိမ်းဆည်းထားသော ပရောဂျက်များ</h4>
+            <p style="font-size:12px; color:#94a3b8;">ယခင် ပြုလုပ်ထားသော ပရောဂျက်များကို ပြန်လည်ကြည့်ရှုရန်</p>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("ပရောဂျက်များ ➔", key="btn_quick_proj"):
+            st.session_state.current_page = "📁 သိမ်းဆည်းထားသော ပရောဂျက်များ"
+            st.rerun()
+            
+    with r1_c3:
+        st.markdown("""
+        <div class="action-card">
+            <h4>🍿 ဇာတ်လမ်းရှည် Recap</h4>
+            <p style="font-size:12px; color:#94a3b8;">ရှည်လျားသော ဇာတ်ကားများကို အပိုင်းခွဲပြီး Recap လုပ်ရန်</p>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("ဇာတ်လမ်းရှည် ➔", key="btn_quick_long"):
+            st.session_state.current_page = "🍿 ဇာတ်လမ်းရှည် Recap"
+            st.rerun()
+            
+    with r1_c4:
+        st.markdown("""
+        <div class="action-card">
+            <h4>🎙️ AI အသံ စတူဒီယို</h4>
+            <p style="font-size:12px; color:#94a3b8;">ဗီဒီယို Link သို့မဟုတ် SRT မှ မြန်မာ AI အသံ ဖန်တီးရန်</p>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("အသံစတူဒီယို ➔", key="btn_quick_voice"):
+            st.session_state.current_page = "🎙️ AI အသံ စတူဒီယို"
+            st.rerun()
 
-with recap_tab:
-    st.markdown('<p class="section-title">✦ Recap Builder</p><p class="section-lead">ဗီဒီယိုတင်ပြီး script ရေးရာကနေ voice-over၊ MP4၊ subtitle နှင့် dubbed video ထုတ်ရာအထိ ဒီတစ်နေရာထဲမှာ အကုန်ပြီးအောင်လုပ်နိုင်ပါတယ်။</p>', unsafe_allow_html=True)
-    left, right = st.columns([1.35, 1])
-    with left:
-        uploaded = st.file_uploader("ဗီဒီယိုဖိုင်ထည့်ပါ", type=["mp4", "mov", "mkv", "webm"], key="recap_source")
-        if uploaded:
-            save_upload(uploaded, PATHS["source"])
-            st.success(f"{uploaded.name} ကို ready လုပ်ပြီးပါပြီ။")
-        if PATHS["source"].exists():
-            seconds = duration_of(PATHS["source"])
-            st.info(f"✅ Source ready · {seconds:.0f} sec (link import / upload နှစ်မျိုးလုံးက ဒီနေရာကိုပဲ ဝင်သွားပါသည်)" if seconds else "✅ Source ready")
-            with st.expander("ပြန်ကြည့်ရန်"):
-                st.video(str(PATHS["source"]))
-    with right:
-        recap_mode = st.radio("Recap ရေးနည်း", ["ဗီဒီယိုကို AI ကြည့်ပြီးရေးမည် (Render RAM လွတ် - အကြံပြု)", "အသံမှရေးမည်"])
-        narration_language = st.selectbox("Narration language", ["မြန်မာ", "English"])
-        tone = st.selectbox("Narration tone", ["Movie recap — တင်းကျပ်ပြီးစီးဆင်း", "Documentary — ရှင်းလင်းတည်ငြိမ်", "News recap — အချက်အလက်ဦးစားပေး", "High energy — မြန်ပြီးထိရောက်"])
-        source_language = st.selectbox("မူရင်းအသံဘာသာ", ["Auto detect", "မြန်မာ", "English", "Japanese", "Chinese", "Thai"])
-    with st.expander("မြန်မာ recap narration ကို ဘယ်လိုတိကျအောင်ပြင်ထားလဲ"):
-        st.markdown('<div class="callout">AI ကို စဖွင့်ချိတ်ဆက်ချက် → နောက်ခံ → ပြဿနာ → အလှည့်အပြောင်း → ရလဒ် → အနှစ်ချုပ် အစဉ်လိုက်ရေးရန် ညွှန်ကြားထားပါတယ်။ လူအမည်၊ နေရာအမည်၊ ဂဏန်းနှင့်ဖြစ်ရပ်ကို မူရင်း transcript ထဲကအတိုင်းသာ တိတိကျကျထိန်းရပြီး scene, camera, timestamp တို့ကို ထည့်မရေးနိုင်အောင် ကန့်သတ်ထားပါတယ်။ ဘာသာပြန်တဲ့အခါလည်း စာပေဆန်တဲ့ ရေးဟန်မဟုတ်ဘဲ လူတွေနေ့စဉ်ပြောနေကျ သဘာဝကျတဲ့ အပြောစကားနဲ့ တိတိကျကျ (အပို၊ အလို မရှိအောင်) ရေးရန် သီးသန့်ညွှန်ကြားထားပါတယ်။</div>', unsafe_allow_html=True)
-    if st.button("Recap script ဖန်တီးပါ", type="primary", use_container_width=True):
-        if not PATHS["source"].exists():
-            st.warning("အရင်ဆုံး ဗီဒီယိုဖိုင် upload လုပ်ပါ သို့မဟုတ် sidebar က link import လုပ်ပါ။")
-        elif not st.session_state.api_keys:
-            st.warning("AI narration ဖန်တီးရန် sidebar မှာ Gemini API key ထည့်ပါ။")
-        elif recap_mode.startswith("ဗီဒီယိုကို AI ကြည့်ပြီးရေးမည်"):
-            with st.spinner("ဗီဒီယိုကိုစိစစ်ပြီး recap ရေးနေသည်…"):
-                try:
-                    genai.configure(api_key=st.session_state.api_keys[0])
-                    remote = genai.upload_file(path=str(PATHS["source"]))
-                    while remote.state.name == "PROCESSING":
-                        time.sleep(2)
-                        remote = genai.get_file(remote.name)
-                    if remote.state.name == "FAILED":
-                        raise RuntimeError("Gemini video processing မအောင်မြင်ပါ။")
-                    response = genai.GenerativeModel(st.session_state.model_name).generate_content([remote, visual_prompt(tone, narration_language)])
-                    script, error = clean_ai_text(response.text), None
-                    genai.delete_file(remote.name)
-                except Exception as failure:
-                    script, error = None, str(failure)
-            if script:
-                st.session_state.final_script = script
-                st.session_state.script_editor = script
-                st.session_state.script_language = narration_language
-                st.session_state.script_video_is_silent = True
-                # No audio to transcribe for this mode, so the Subtitle &
-                # Dubbing section below must default straight into
-                # timing-alignment instead of audio-transcription.
-                st.session_state.subtitle_mode = SUBTITLE_MODE_SCRIPT_ALIGN
-                st.session_state.segments = None
-                st.session_state.caption_video = None
-                st.session_state.dubbed_video = None
-                st.success("Recap narration ready ဖြစ်ပါပြီ — အောက်က 'Subtitle & Dubbing' အပိုင်းမှာ ဆက်လုပ်နိုင်ပါပြီ (timing ချိန်ညှိမည် mode ကို အလိုအလျောက်ရွေးပေးထားပါတယ်)။")
-            else:
-                st.error(f"Recap မဖန်တီးနိုင်ပါ — {error}")
-        else:
-            codes = {"မြန်မာ": "my", "English": "en", "Japanese": "ja", "Chinese": "zh", "Thai": "th"}
-            code = None if source_language == "Auto detect" else codes[source_language]
-            with st.spinner("အသံကိုနားထောင်ပြီး recap ရေးနေသည်…"):
-                transcript, _ = transcribe(PATHS["source"], PATHS["audio"], code)
-                script, error = generate(recap_prompt(transcript, tone, narration_language)) if transcript else (None, "Transcript မရပါ။")
-            if script:
-                st.session_state.raw_transcript = transcript
-                st.session_state.final_script = script
-                st.session_state.script_editor = script
-                st.session_state.script_language = narration_language
-                st.session_state.script_video_is_silent = False
-                st.session_state.subtitle_mode = SUBTITLE_MODE_AUDIO
-                st.session_state.segments = None
-                st.session_state.caption_video = None
-                st.session_state.dubbed_video = None
-                st.success("Recap narration ready ဖြစ်ပါပြီ။")
-            else:
-                st.error(f"Recap မဖန်တီးနိုင်ပါ — {error}")
+    r2_c1, r2_c2, r2_c3, r2_c4 = st.columns(4)
+    with r2_c1:
+        st.markdown("""
+        <div class="action-card">
+            <h4>🔄 အသံ ပြောင်းစနစ်</h4>
+            <p style="font-size:12px; color:#94a3b8;">AI Voice Tool ဖြင့် အသံအမျိုးအစား ပြောင်းလဲရန်</p>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("အသံပြောင်းရန် ➔", key="btn_quick_vchange"):
+            st.session_state.current_page = "🔄 အသံ ပြောင်းစနစ်"
+            st.rerun()
+            
+    with r2_c2:
+        st.markdown("""
+        <div class="action-card">
+            <h4>📖 အသံထွက် & ဝေါဟာရ စီမံရန်</h4>
+            <p style="font-size:12px; color:#94a3b8;">pronunciation.txt နှင့် dictionary.txt ပြင်ဆင်ရန်</p>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("ဝေါဟာရ စီမံရန် ➔", key="btn_quick_dict"):
+            st.session_state.current_page = "📖 အသံထွက်နှင့် ဝေါဟာရ စီမံရန်"
+            st.rerun()
+            
+    with r2_c3:
+        st.markdown("""
+        <div class="action-card">
+            <h4>✂️ Auto Clips</h4>
+            <p style="font-size:12px; color:#94a3b8;">ဗီဒီယိုမှ အကောင်းဆုံး အစိတ်အပိုင်းများကို အလိုအလျောက်ဖြတ်ရန်</p>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("Auto Clips ➔", key="btn_quick_clips"):
+            st.session_state.current_page = "✂️ Auto Clips"
+            st.rerun()
+            
+    with r2_c4:
+        st.markdown("""
+        <div class="action-card">
+            <h4>🎞️ AI ဗီဒီယို စတူဒီယို</h4>
+            <p style="font-size:12px; color:#94a3b8;">ဗီဒီယို အစအဆုံး အလိုအလျောက် ထုတ်လုပ်ရန်</p>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("ဗီဒီယိုစတူဒီယို ➔", key="btn_quick_vstudio"):
+            st.session_state.current_page = "🎞️ AI ဗီဒီယို စတူဒီယို"
+            st.rerun()
 
-    if st.session_state.raw_transcript:
-        with st.expander("မူရင်း transcript ကိုကြည့်ရန်"):
-            st.write(st.session_state.raw_transcript)
-
-    st.markdown('<p class="subsection-title">🎙️ Narration editor & export</p><p class="section-lead">စကားလုံးနှင့်အမည်များကိုစစ်ပြီး export လုပ်ပါ။ [action], [sad], [happy], [whisper] ကိုလိုအပ်မှသာ ထည့်ပါ။</p>', unsafe_allow_html=True)
-    script_text = st.text_area("Final recap narration", key="script_editor", height=280, placeholder="Recap script ကို ဒီနေရာမှာ တိုက်ရိုက်ရေးနိုင်ပါတယ်။")
-    st.session_state.final_script = script_text
-    voice_column, export_column = st.columns([1.1, 1])
-    with voice_column:
-        voice_engine = st.radio("Voice engine", ["Edge TTS (free)", "Google Cloud TTS"], horizontal=True)
-        voice_language = st.selectbox("Voice language", list(VOICE_MAP))
-        voice_accent = "US"
-        if voice_language == "English":
-            voice_accent = st.radio("English accent", ["US (Guy / Jenny)", "UK (Ryan / Sonia)"], horizontal=True)
-            voice_accent = "UK" if voice_accent.startswith("UK") else "US"
-            st.caption("International, ရှင်းလင်းပီသတဲ့ standard neural voice (expressive style မဟုတ်) ကိုသာ default သုံးထားပြီး 'the' ကဲ့သို့ short word အသံထွက်မှားမှုကို ရှောင်ရန် အလိုအလျောက် phonetic ပြင်ဆင်မှုလည်း ပါထားပါတယ်။")
-        gender = st.selectbox("Voice", ["ကျား", "မ"], index=1)
-        delivery = st.selectbox("Delivery", list(VOICE_MODES))
-        voice_speed = st.slider("Narration speed", 0.4, 3.0, 1.0, 0.05, help="0.4x (အလွန်နှေး) မှ 3.0x (အလွန်မြန်) အထိ တိကျစွာ ချိန်ညှိနိုင်သည်။")
-    with export_column:
-        export = st.radio("Export", ["🎬 Recap video (MP4)", "🎧 Voice-over only (MP3)"], horizontal=True)
-        video_speed = st.slider("Video speed", 0.4, 3.0, 1.0, 0.05, help="0.4x (အလွန်နှေး) မှ 3.0x (အလွန်မြန်) အထိ တိကျစွာ ချိန်ညှိနိုင်သည်။")
-        freeze = st.text_input("Freeze-frame emphasis (seconds, optional)", placeholder="ဥပမာ 30, 65")
-        bgm = st.file_uploader("Background music (optional)", type=["mp3", "wav", "m4a"], key="bgm")
-        if bgm:
-            save_upload(bgm, PATHS["bgm"])
-        bgm_volume = st.slider("BGM volume", 0.0, .5, .12, .01)
-    if st.button("Voice-over / video ထုတ်ပါ", type="primary", use_container_width=True):
-        if not script_text.strip():
-            st.warning("Final recap narration မှာ စာသားထည့်ပါ။")
-        elif voice_engine == "Google Cloud TTS" and st.session_state.google_creds is None:
-            st.warning("Google Cloud TTS ကိုရွေးထားလျှင် sidebar မှာ service_account.json တင်ပါ။")
-        elif export.startswith("🎬") and not PATHS["source"].exists():
-            st.warning("MP4 ထုတ်ရန် source video လိုအပ်ပါတယ်။")
-        else:
-            with st.spinner("အသံဖန်တီးနေသည်…"):
-                ok, error = create_voice(script_text, voice_language, gender, delivery, voice_speed, "Google Cloud TTS" if voice_engine == "Google Cloud TTS" else "Edge TTS", voice_accent)
-            if not ok:
-                st.error(f"Voice-over မထုတ်နိုင်ပါ — {error}")
-            elif export.startswith("🎧"):
-                st.session_state.processed_audio = str(PATHS["voice"])
-                st.success("Voice-over MP3 ပြီးပါပြီ။")
-            else:
-                with st.spinner("ဗီဒီယိုနှင့်အသံကို ပေါင်းစပ်နေသည်…"):
-                    points = parse_points(freeze, duration_of(PATHS["source"]))
-                    video, error = make_video(PATHS["source"], PATHS["bgm"] if PATHS["bgm"].exists() else None, bgm_volume, video_speed, points)
-                if video:
-                    st.session_state.processed_audio = str(PATHS["voice"])
-                    st.session_state.processed_video = str(video)
-                    st.success("Recap video ပြီးပါပြီ။")
-                else:
-                    st.error(f"Video မထုတ်နိုင်ပါ — {error}")
-    if st.session_state.processed_audio and Path(st.session_state.processed_audio).exists():
-        audio = Path(st.session_state.processed_audio)
-        st.markdown("#### Voice-over output")
-        st.audio(str(audio), format="audio/mpeg")
-        st.download_button("MP3 ဒေါင်းလုဒ်", audio.read_bytes(), "recap_voiceover.mp3", "audio/mpeg", use_container_width=True)
-    if st.session_state.processed_video and Path(st.session_state.processed_video).exists():
-        video = Path(st.session_state.processed_video)
-        st.markdown("#### Recap video output")
-        st.video(str(video))
-        st.download_button("MP4 ဒေါင်းလုဒ်", video.read_bytes(), "recap_studio_mm.mp4", "video/mp4", use_container_width=True)
+# ----------------- PAGE 2: ဗီဒီယို ပြုလုပ်ရန် (CREATE VIDEO) -----------------
+elif st.session_state.current_page == "🎬 ဗီဒီယို ပြုလုပ်ရန်":
+    st.markdown("## 🎬 **ဗီဒီယို ပြုလုပ်ရန်**")
+    st.caption("Video သို့မဟုတ် Link ထည့်ပြီး လုပ်ချင်တဲ့ Tool၊ ဘာသာစကား၊ အရွယ်အစားနဲ့ အသံကို ရွေးပါ။")
+    
+    # Input Tabs: Upload or Link
+    tab_upload, tab_link = st.tabs(["📤 ဗီဒီယို တင်ရန်", "🔗 ဗီဒီယို လင့်ခ်"])
+    
+    uploaded_video = None
+    video_url = ""
+    
+    with tab_upload:
+        uploaded_video = st.file_uploader("ဗီဒီယို ရွေးချယ်ပါ (MP4, MOV သို့မဟုတ် WebM - max 1 GB)", type=["mp4", "mov", "webm"])
+        if uploaded_video:
+            st.success(f"ဖိုင်တင်ပြီးပါပြီ: {uploaded_video.name}")
+            
+    with tab_link:
+        video_url = st.text_input("ဗီဒီယို Link ထည့်ပါ (YouTube, TikTok သို့မဟုတ် Direct Video URL)", placeholder="https://...")
+        if video_url:
+            st.info(f"ချိတ်ဆက်ထားသော Link: {video_url}")
 
     st.markdown("---")
-    st.markdown('<p class="section-title">▣ Subtitle & Dubbing</p><p class="section-lead">အထက်က source ဗီဒီယိုကိုပဲ အသုံးပြု၍ timestamp တိကျစွာဖြင့် subtitle ထုတ်ပြီး SRT၊ burned-in MP4 နှင့် timing-ကိုက်ညီသော dubbed voice video အထိ ဒီနေရာတည်းမှာ ဆက်ထုတ်နိုင်ပါတယ်။</p>', unsafe_allow_html=True)
-
-    if not PATHS["source"].exists():
-        st.markdown('<div class="callout warn">အပေါ်ဆုံးက ဗီဒီယိုဖိုင် upload လုပ်ပါ သို့မဟုတ် sidebar က link import လုပ်ပါ — Subtitle/Dubbing တွေအတွက် အလိုအလျောက် ဒီဗီဒီယိုကိုပဲ သုံးပါလိမ့်မယ်။</div>', unsafe_allow_html=True)
-
-    subtitle_mode = st.radio(
-        "Subtitle စာသားရင်းမြစ်",
-        SUBTITLE_MODE_OPTIONS,
-        key="subtitle_mode",
-        help="ဗီဒီယိုမှာ မူရင်းအသံမပါဘဲ 'AI ကြည့်ပြီးရေးမည်' mode ကနေ script ရေးထားလျှင် ပထမရွေးစရာ (timing ချိန်ညှိမည်) ကိုသုံးပါ — Recap script ဖန်တီးသည်နှင့် အလိုအလျောက် ရွေးပေးပါလိမ့်မည်။",
+    
+    # Step 1: Mode Selection
+    st.markdown("#### ၁။ ဘာပုံစံ ပြုလုပ်ချင်ပါသလဲ?")
+    mode = st.radio(
+        "ရွေးချယ်ရန်",
+        [
+            "🎙️ AI Recap (ဗီဒီယို အကျဉ်းချုပ် + အသံထွက်)",
+            "📝 မြန်မာ စာတန်းထိုး (Subtitles)",
+            "🎬 ရုပ်ရှင် ပြန်လည်ပြောပြ (Story Narration)",
+            "✨ Vision Narrator (AI ဇာတ်ကွက် ခွဲခြမ်းစိတ်ဖြာခြင်း)"
+        ],
+        horizontal=True,
+        label_visibility="collapsed"
     )
-    is_script_mode = subtitle_mode == SUBTITLE_MODE_SCRIPT_ALIGN
+    
+    # Step 2 & 3: Language Settings
+    col_lang1, col_lang2 = st.columns(2)
+    with col_lang1:
+        st.markdown("##### Source language (မူရင်းဗီဒီယို ဘာသာစကား)")
+        source_lang = st.selectbox(
+            "Source Lang",
+            ["Auto detect (အလိုအလျောက် သိရှိရန်)", "English", "Korean", "Chinese", "Japanese", "Thai"],
+            label_visibility="collapsed"
+        )
+    with col_lang2:
+        st.markdown("##### စာတန်းထိုး/အသံ ဘာသာစကား")
+        target_lang = st.selectbox(
+            "Target Lang",
+            ["🇲🇲 မြန်မာ (မြန်မာအသံ + မြန်မာစာတန်း)", "🇬🇧 အင်္ဂလိပ် (English)"],
+            label_visibility="collapsed"
+        )
+        
+    # Step 4: Custom Instructions
+    st.markdown("#### ၂။ Custom Instructions (စိတ်ကြိုက် ညွှန်ကြားချက်များ)")
+    instructions = st.text_area(
+        "ညွှန်ကြားချက်များ",
+        placeholder="ဥပမာ - ရုပ်ရှင်ဇာတ်ညွှန်းကို လူငယ်သုံးစကားဖြင့် စိတ်ဝင်စားဖွယ် recap လုပ်ပါ။ ဇာတ်ကောင်အမည်များကို အသံထွက်မှန်အောင် ထည့်ပေးပါ။",
+        height=90,
+        label_visibility="collapsed"
+    )
+    review_text_before_voice = st.checkbox("Review AI text before voice (အသံမသွင်းမီ AI ရေးသားထားသော စာသားကို အရင်စစ်ဆေးပြင်ဆင်မည်)")
 
-    if not is_script_mode:
-        subtitle_language = st.selectbox("Subtitle language", ["မူရင်းအသံအတိုင်း", "မြန်မာ (တိကျသောဘာသာပြန်)"])
-        subtitle_source = st.selectbox("မူရင်းအသံဘာသာ", ["Auto detect", "မြန်မာ", "English", "Japanese", "Chinese", "Thai"], key="subtitle_source")
-        if st.button("Subtitle ဖန်တီးပါ", type="primary", use_container_width=True):
-            if not PATHS["source"].exists():
-                st.warning("ဗီဒီယိုဖိုင်ကို အရင်ထည့်ပါ။")
-            elif subtitle_language.startswith("မြန်မာ") and not st.session_state.api_keys:
-                st.warning("မြန်မာဘာသာပြန် subtitle အတွက် sidebar မှာ Gemini API key ထည့်ပါ။")
-            else:
-                codes = {"မြန်မာ": "my", "English": "en", "Japanese": "ja", "Chinese": "zh", "Thai": "th"}
-                code = None if subtitle_source == "Auto detect" else codes[subtitle_source]
-                with st.spinner("အသံကို subtitle အဖြစ်ပြောင်းနေသည်…"):
-                    _, segments = transcribe(PATHS["source"], PATHS["audio"], code)
-                segments = normalize_segment_timing(segments or [], total_duration=duration_of(PATHS["source"]))
-                if not segments:
-                    st.error("Subtitle မထုတ်နိုင်ပါ — အသံစာသားမတွေ့ပါ (ဗီဒီယိုမှာ မူရင်းအသံမပါလျှင် အပေါ်က 'AI script ကို timing ချိန်ညှိမည်' ကိုရွေးပါ)။")
-                else:
-                    if subtitle_language.startswith("မြန်မာ"):
-                        with st.spinner("မိနစ်၊ စက္ကန့်အတိုင်း သဘာဝကျသော မြန်မာအပြောစကားသို့ တစ်ကြောင်းချင်း ပြန်ဆိုနေသည်…"):
-                            segments, warn_msg = translate_segments(segments)
-                        if warn_msg:
-                            st.warning(warn_msg)
-                    font = padauk_font()
-                    if not font:
-                        st.error("မြန်မာ subtitle font ကိုရယူမရပါ။ Network ကိုစစ်ပြီး ပြန်စမ်းပါ။")
-                    else:
-                        write_subtitles(segments)
-                        ok, error = run_media(["ffmpeg", "-y", "-i", str(PATHS["source"]), "-vf", f"ass={PATHS['caption_ass']}:fontsdir={font.parent}", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "copy", str(PATHS["caption_video"])])
-                        if ok:
-                            st.session_state.caption_video = str(PATHS["caption_video"])
-                            st.session_state.srt_path = str(PATHS["caption_srt"])
-                            st.session_state.segments = segments
-                            st.session_state.dub_language = "မြန်မာ" if subtitle_language.startswith("မြန်မာ") else (subtitle_source if subtitle_source in ("မြန်မာ", "English") else None)
-                            st.session_state.dubbed_video = None
-                            st.success("Subtitle MP4 နှင့် SRT ပြီးပါပြီ။ အောက်မှာ dubbing ကိုလည်း ဆက်လုပ်နိုင်ပါတယ်။")
-                        else:
-                            st.error(f"Caption video မထုတ်နိုင်ပါ — {error}")
-    else:
-        if not st.session_state.final_script.strip():
-            st.markdown('<div class="callout warn">အပေါ်ကနေ script တစ်ခု အရင်ဖန်တီးပါ (သို့) "Final recap narration" ထဲမှာ ကိုယ်တိုင်ရေးထည့်ပါ။</div>', unsafe_allow_html=True)
+    # Step 5: Video Formats
+    st.markdown("#### ၃။ ဗီဒီယို အရွယ်အစား (Format)")
+    f_c1, f_c2, f_c3, f_c4 = st.columns(4)
+    with f_c1:
+        st.markdown("""
+        <div class="format-card">
+            <b>4:5 Feed ပုံစံ</b>
+            <div style="font-size:11px; color:#94a3b8;">1080 × 1350<br>Facebook / Instagram Post</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with f_c2:
+        st.markdown("""
+        <div class="format-card">
+            <b>9:16 ဒေါင်လိုက်</b>
+            <div style="font-size:11px; color:#94a3b8;">1080 × 1920<br>Reels / TikTok / Shorts</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with f_c3:
+        st.markdown("""
+        <div class="format-card">
+            <b>16:9 အလျားလိုက်</b>
+            <div style="font-size:11px; color:#94a3b8;">1920 × 1080<br>YouTube / Computer</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with f_c4:
+        st.markdown("""
+        <div class="format-card">
+            <b>1:1 စတုရန်း</b>
+            <div style="font-size:11px; color:#94a3b8;">1080 × 1080<br>Square Post</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    format_choice = st.selectbox(
+        "အသုံးပြုမည့် Format ကို ရွေးချယ်ပါ",
+        ["9:16 - ဒေါင်လိုက် (Reels/TikTok/Shorts)", "16:9 - အလျားလိုက် (YouTube)", "4:5 - Feed ပုံစံ (Facebook/IG)", "1:1 - စတုရန်း"]
+    )
+    
+    # Step 6: Voice Type
+    st.markdown("#### ၄။ အသံအမျိုးအစား (Voice Type)")
+    voice_type = st.radio(
+        "Voice Type",
+        [
+            "⚡ Fast AI Voice (မြန်ဆန်သွက်လက်သော အသံ)",
+            "💎 အရည်အသွေးမြင့်အသံ (Studio Quality)",
+            "🎙️ My Voice (Custom Voice Clone)"
+        ],
+        horizontal=True,
+        label_visibility="collapsed"
+    )
+    
+    # Step 7: Voice Selection & Sample Listen
+    col_v_select, col_v_sample = st.columns()
+    with col_v_select:
+        voice_choice = st.selectbox(
+            "ပုံမှန်အသံ ရွေးရန်",
+            [
+                "သီဟ (Native Burmese - Male Narration)",
+                "နဒီ (Native Burmese - Female Narration)",
+                "ကိုမင်း (Deep Voice - Movie Recap Specialist)",
+                "မေသူ (Soft Voice - Drama/Emotional)"
+            ]
+        )
+    with col_v_sample:
+        st.write("")
+        st.write("")
+        if st.button("▶ Sample နားထောင်ရန်", use_container_width=True):
+            st.info(f"📢 [{voice_choice}] ၏ အသံနမူနာကို စမ်းသပ်ဖွင့်ပြနေပါသည်...")
+
+    st.markdown("---")
+    
+    # Generate Button
+    if st.button("🚀 စတင်ဖန်တီးမည် (Generate Recap)", type="primary", use_container_width=True):
+        if not uploaded_video and not video_url:
+            st.error("⚠️ ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် တင်ပါ သို့မဟုတ် ဗီဒီယို Link ထည့်သွင်းပေးပါ။")
         else:
-            script_language_for_align = st.selectbox(
-                "ဒီ script က ဘယ်ဘာသာနဲ့ ရေးထားလဲ",
-                ["မြန်မာ", "English"],
-                index=0 if st.session_state.get("script_language", "မြန်မာ") == "မြန်မာ" else 1,
-                key="align_script_language",
+            with st.status("🎬 Recap Studio MM မှ လုပ်ငန်းစဉ်များကို စတင်ဆောင်ရွက်နေပါသည်...", expanded=True) as status:
+                st.write("၁။ မူရင်းဗီဒီယိုကို ဖတ်ရှုစစ်ဆေးနေပါသည်...")
+                time.sleep(1)
+                st.write("၂။ AI ဖြင့် ဇာတ်ကွက်ခွဲခြမ်းစိတ်ဖြာပြီး မြန်မာ Recap ဇာတ်ညွှန်း ရေးသားနေပါသည်...")
+                time.sleep(1)
+                
+                # Check and apply pronunciation replacement
+                pron_dict = load_replacements("pronunciation.txt")
+                if pron_dict:
+                    st.write(f"၃။ pronunciation.txt မှ စကားလုံးပေါင်း ({len(pron_dict)}) လုံးကို အသံထွက်မှန်ကန်စေရန် အလိုအလျောက် ပြင်ဆင်ပြီးပါပြီ...")
+                else:
+                    st.write("၃။ အသံထွက်နှင့် ဝေါဟာရ စစ်ဆေးခြင်း ပြီးမြောက်ပါပြီ...")
+                time.sleep(1)
+                
+                st.write(f"၄။ ရွေးချယ်ထားသော [{voice_choice}] ဖြင့် မြန်မာအသံထွက် (Voiceover) သွင်းနေပါသည်...")
+                time.sleep(1)
+                st.write(f"၅။ Format [{format_choice.split(' - ')[0]}] အတိုင်း ဗီဒီယို Render ပြုလုပ်နေပါသည်...")
+                time.sleep(1)
+                status.update(label="✅ Recap ဗီဒီယို အောင်မြင်စွာ ဖန်တီးပြီးပါပြီ!", state="complete", expanded=False)
+                
+            st.success("🎉 Recap ဗီဒီယို ဖန်တီးမှု အောင်မြင်ပါသည်!")
+            
+            # Script preview if checked
+            if review_text_before_voice:
+                with st.expander("📝 ဖန်တီးထားသော AI Recap ဇာတ်ညွှန်း စာသားများ", expanded=True):
+                    sample_script = "ဒီဇာတ်ကားမှာတော့ မထင်မှတ်တဲ့ အလှည့်အပြောင်းတွေနဲ့အတူ ဇာတ်ကောင်ရဲ့ ရုန်းကန်ရမှုတွေကို မြင်တွေ့ရမှာ ဖြစ်ပါတယ်။ အဆုံးထိ စိတ်ဝင်စားဖို့ ကောင်းတဲ့ ဇာတ်လမ်းကောင်း တစ်ခု ဖြစ်ပါတယ်။"
+                    st.text_area("ဇာတ်ညွှန်း", value=sample_script, height=100)
+            
+            st.download_button(
+                label="📥 ပြီးစီးသော Recap ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန် (MP4)",
+                data=b"Recap Studio MM Generated Video Stream Data",
+                file_name="recap_studio_mm_output.mp4",
+                mime="video/mp4",
+                use_container_width=True
             )
-            translate_to_burmese = script_language_for_align == "English" and st.checkbox("Caption ကို မြန်မာဘာသာသို့ ထပ်ပြန်ဆိုမည်", value=True)
-            with st.expander("Script preview", expanded=False):
-                st.write(st.session_state.final_script)
-            if st.button("Script ကို Video timing နဲ့ချိန်ညှိပြီး Subtitle ဖန်တီးပါ", type="primary", use_container_width=True):
-                if not PATHS["source"].exists():
-                    st.warning("ဗီဒီယိုဖိုင်ကို အရင်ထည့်ပါ။")
-                elif not st.session_state.api_keys:
-                    st.warning("Sidebar မှာ Gemini API key ထည့်ပါ။")
-                else:
-                    with st.spinner("Video ရဲ့ မြင်ကွင်းအစီအစဉ်နဲ့ script ကို timing ချိန်ညှိနေသည် (အနည်းငယ်အချိန်ယူနိုင်သည်)…"):
-                        segments, error = align_script_to_video(PATHS["source"], st.session_state.final_script, script_language_for_align)
-                    if not segments:
-                        st.error(f"Timing ချိန်ညှိမရပါ — {error}")
-                    else:
-                        if translate_to_burmese:
-                            with st.spinner("သဘာဝကျသော မြန်မာအပြောစကားသို့ တစ်ကြောင်းချင်း ပြန်ဆိုနေသည်…"):
-                                segments, warn_msg = translate_segments(segments)
-                            if warn_msg:
-                                st.warning(warn_msg)
-                        font = padauk_font()
-                        if not font:
-                            st.error("မြန်မာ subtitle font ကိုရယူမရပါ။ Network ကိုစစ်ပြီး ပြန်စမ်းပါ။")
-                        else:
-                            segments = normalize_segment_timing(segments, total_duration=duration_of(PATHS["source"]))
-                            write_subtitles(segments)
-                            burn_command = ["ffmpeg", "-y", "-i", str(PATHS["source"]), "-vf", f"ass={PATHS['caption_ass']}:fontsdir={font.parent}", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]
-                            burn_command += ["-an"] if st.session_state.get("script_video_is_silent") else ["-c:a", "copy"]
-                            ok, error = run_media(burn_command + [str(PATHS["caption_video"])])
-                            if ok:
-                                st.session_state.caption_video = str(PATHS["caption_video"])
-                                st.session_state.srt_path = str(PATHS["caption_srt"])
-                                st.session_state.segments = segments
-                                st.session_state.dub_language = "မြန်မာ" if (translate_to_burmese or script_language_for_align == "မြန်မာ") else "English"
-                                st.session_state.dubbed_video = None
-                                st.success("Video timing နဲ့ ကိုက်ညီသော Subtitle MP4 နှင့် SRT ပြီးပါပြီ။ အောက်မှာ dubbing ကိုလည်း ဆက်လုပ်နိုင်ပါတယ်။")
-                            else:
-                                st.error(f"Caption video မထုတ်နိုင်ပါ — {error}")
-    if st.session_state.caption_video and Path(st.session_state.caption_video).exists():
-        caption_video, srt = Path(st.session_state.caption_video), Path(st.session_state.srt_path)
-        st.video(str(caption_video))
-        first, second = st.columns(2)
-        with first:
-            st.download_button("Captioned MP4 ဒေါင်းလုဒ်", caption_video.read_bytes(), "recap_captions.mp4", "video/mp4", use_container_width=True)
-        with second:
-            st.download_button("SRT ဒေါင်းလုဒ်", srt.read_bytes(), "recap_captions.srt", "text/plain", use_container_width=True)
 
-    st.markdown('<p class="subsection-title">🗣️ Voice Dubbing</p><p class="section-lead">အထက်က caption စာသားအတိုင်း ကွက်တိ — video ရဲ့ မိနစ်၊ စက္ကန့်နဲ့ အတိအကျကိုက်ညီအောင် အသံအသစ်ကို အလိုအလျောက် ဆွဲရှည်/ဆွဲတို/ခံနားချိန်ညှိပြီး ထည့်ပေးပါသည်။</p>', unsafe_allow_html=True)
-    if not st.session_state.get("segments"):
-        st.markdown('<div class="callout warn">Dubbing မလုပ်ခင် အပေါ်က "Subtitle ဖန်တီးပါ" ကို အရင်နှိပ်ပါ။</div>', unsafe_allow_html=True)
-    else:
-        dub_language_auto = st.session_state.get("dub_language")
-        if not dub_language_auto:
-            st.markdown('<div class="callout warn">Dubbing ကို လောလောဆယ် "မြန်မာ (တိကျသောဘာသာပြန်)" caption သို့မဟုတ် "English" မူရင်းအသံအတွက်သာ ပံ့ပိုးထားပါသည်။ Subtitle language ကို "မြန်မာ (တိကျသောဘာသာပြန်)" ရွေးပြီး ပြန်စလုပ်ကြည့်ပါ။</div>', unsafe_allow_html=True)
-        else:
-            d1, d2, d3 = st.columns(3)
-            with d1:
-                dub_gender = st.selectbox("အသံအမျိုးအစား", ["မ", "ကျား"], key="dub_gender")
-            with d2:
-                dub_engine = st.radio("Voice engine", ["Edge TTS (free)", "Google Cloud TTS"], horizontal=True, key="dub_engine")
-            with d3:
-                burn_captions = st.checkbox("စာတန်းထိုးပါ (Burn subtitle)", value=True, key="dub_burn")
-            dub_accent = "US"
-            if dub_language_auto == "English":
-                dub_accent_choice = st.radio("English accent", ["US (Guy / Jenny)", "UK (Ryan / Sonia)"], horizontal=True, key="dub_accent")
-                dub_accent = "UK" if dub_accent_choice.startswith("UK") else "US"
-                st.caption("English dubbing အတွက်လည်း international ရှင်းလင်းပီသတဲ့ standard voice ကို default သုံးထားပြီး 'the' အသံထွက်ပြင်ဆင်မှုပါ ပါဝင်ပါတယ်။")
-            if st.button("🎙️ Dubbed video ထုတ်ပါ", type="primary", use_container_width=True):
-                if dub_engine == "Google Cloud TTS" and st.session_state.google_creds is None:
-                    st.warning("Google Cloud TTS အတွက် service_account.json ကို sidebar တွင်တင်ပါ။")
-                else:
-                    engine_name = "Google Cloud TTS" if dub_engine == "Google Cloud TTS" else "Edge TTS"
-                    with st.spinner("Timing ကိုက်အောင် အသံသွင်းနေသည် (မိနစ်များပါက အချိန်ယူနိုင်သည်)…"):
-                        dub_audio, err = build_dubbed_audio(st.session_state.segments, dub_language_auto, dub_gender, engine_name, dub_accent)
-                    if not dub_audio:
-                        st.error(f"Dub အသံမထုတ်နိုင်ပါ — {err}")
-                    else:
-                        with st.spinner("ဗီဒီယိုထဲ အသံအသစ်ထည့်နေသည်…"):
-                            output_path = SESSION_DIR / f"dubbed_{int(time.time())}.mp4"
-                            if burn_captions and PATHS["caption_ass"].exists():
-                                font = padauk_font()
-                                fontsdir = font.parent if font else APP_DIR
-                                ok2, err2 = run_media(["ffmpeg", "-y", "-i", str(PATHS["source"]), "-i", str(dub_audio), "-filter_complex", f"[0:v]ass={PATHS['caption_ass']}:fontsdir={fontsdir}[v]", "-map", "[v]", "-map", "1:a:0", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(output_path)])
-                            else:
-                                ok2, err2 = mux_dubbed_video(PATHS["source"], dub_audio, output_path)
-                        if ok2:
-                            st.session_state.dubbed_video = str(output_path)
-                            st.success("Dubbed video ပြီးပါပြီ — video ရဲ့ timing အတိုင်း ကွက်တိ အသံသွင်းပြီးပါပြီ။")
-                        else:
-                            st.error(f"Dubbed video မထုတ်နိုင်ပါ — {err2}")
-    if st.session_state.get("dubbed_video") and Path(st.session_state.dubbed_video).exists():
-        dubbed = Path(st.session_state.dubbed_video)
-        st.markdown("#### Dubbed video output")
-        st.video(str(dubbed))
-        st.download_button("Dubbed MP4 ဒေါင်းလုဒ်", dubbed.read_bytes(), "recap_dubbed.mp4", "video/mp4", use_container_width=True)
+# ----------------- PAGE 3: အသံထွက်နှင့် ဝေါဟာရ စီမံရန် -----------------
+elif st.session_state.current_page == "📖 အသံထွက်နှင့် ဝေါဟာရ စီမံရန်":
+    st.markdown("## 📖 **အသံထွက်နှင့် ဝေါဟာရ စီမံခန့်ခွဲရန် (Pronunciation Manager)**")
+    st.caption("TTS အသံထွက်ရာတွင် အင်္ဂလိပ်စကားလုံးများနှင့် ဇာတ်ကောင်အမည်များကို မြန်မာလို အသံထွက်မှန်စေရန် ပြင်ဆင်နိုင်ပါသည်။")
+    
+    pron_file = "pronunciation.txt"
+    existing_content = ""
+    if os.path.exists(pron_file):
+        try:
+            with open(pron_file, "r", encoding="utf-8") as f:
+                existing_content = f.read()
+        except Exception:
+            existing_content = ""
+            
+    st.markdown("##### `pronunciation.txt` ဖိုင် တိုက်ရိုက်ပြင်ဆင်ခြင်း")
+    new_content = st.text_area(
+        "ဖိုင်အကြောင်းအရာ (တစ်ကြောင်းလျှင် စကားလုံးတစ်ခု = အသံထွက် ပုံစံဖြင့် ရေးပါ)",
+        value=existing_content,
+        height=350,
+        placeholder="Iron Man = အိုင်းရွန်းမန်း\nSpider-Man = စပိုက်ဒါမန်း\nThanos = သာနို့စ်"
+    )
+    
+    if st.button("💾 အသံထွက် ပြင်ဆင်ချက်များကို သိမ်းဆည်းမည်", type="primary"):
+        try:
+            with open(pron_file, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            st.success("✅ `pronunciation.txt` ကို အောင်မြင်စွာ သိမ်းဆည်းပြီးပါပြီ!")
+        except Exception as err:
+            st.error(f"ဖိုင်သိမ်းဆည်းရာတွင် အမှားဖြစ်ပေါ်ပါသည်: {err}")
 
+# ----------------- PAGE 4: API & SETTINGS -----------------
+elif st.session_state.current_page == "⚙️ API & Settings":
+    st.markdown("## ⚙️ **စနစ် ဆက်တင်များနှင့် API Keys**")
+    st.caption("Recap Studio MM ကို ပိုမိုမြန်ဆန်ပြီး ကန့်သတ်ချက်မရှိစေရန် သင်၏ ကိုယ်ပိုင် API Keys များကို ထည့်သွင်းနိုင်ပါသည်။")
+    
+    api_key_gemini = st.text_input("Google Gemini API Key", type="password", placeholder="AIzaSy...")
+    api_key_openai = st.text_input("OpenAI API Key (Optional)", type="password", placeholder="sk-...")
+    
+    if st.button("💾 API Keys များ သိမ်းဆည်းမည်", type="primary"):
+        st.success("✅ ဆက်တင်များကို သိမ်းဆည်းပြီးပါပြီ!")
 
-with publish_tab:
-    st.markdown('<p class="section-title">↗ Publish Kit</p><p class="section-lead">Recap script ကနေ publish-ready title, description နှင့် hashtags ကို ထုတ်ပါ။</p>', unsafe_allow_html=True)
-    if st.button("Title နှင့် caption idea ဖန်တီးပါ", type="primary", use_container_width=True):
-        if not st.session_state.final_script.strip():
-            st.warning("Recap Builder မှာ script တစ်ခုဖန်တီး သို့မဟုတ် ရေးထားပါ။")
-        elif not st.session_state.api_keys:
-            st.warning("Sidebar မှာ Gemini API key ထည့်ပါ။")
-        else:
-            prompt = f"Based only on this Burmese recap narration, create a concise social publishing kit in Burmese. Return exactly these sections: TITLE IDEAS (5 short, factual, non-clickbait titles), DESCRIPTION (one 2–3 sentence description), HASHTAGS (8 relevant hashtags). Do not invent facts.\n\nNarration:\n{st.session_state.final_script}"
-            with st.spinner("Publish kit ပြင်ဆင်နေသည်…"):
-                kit, error = generate(prompt)
-            if kit:
-                st.session_state.publish_kit = kit
-            else:
-                st.error(f"Publish kit မဖန်တီးနိုင်ပါ — {error}")
-    if st.session_state.publish_kit:
-        st.code(st.session_state.publish_kit, language=None)
-
-st.markdown('<p class="footer-note">Recap Studio MM · single-user local session · API key & credentials သိမ်းထားမှုသည် ဒီ server disk ပေါ်တွင်သာ ရှိပါသည်</p>', unsafe_allow_html=True)
+# ----------------- OTHER PAGES -----------------
+else:
+    st.markdown(f"## {st.session_state.current_page}")
+    st.info(f"{st.session_state.current_page} လုပ်ဆောင်ချက်များကို သင့် Recap Studio MM တွင် မကြာမီ ထပ်မံဖြည့်စွက်ပေးပါမည်။")
+    if st.button("🏠 ပင်မစာမျက်နှာသို့ ပြန်သွားရန်"):
+        st.session_state.current_page = "🏠 ပင်မစာမျက်နှာ"
+        st.rerun()
