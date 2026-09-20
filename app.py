@@ -17,7 +17,7 @@ st.set_page_config(
 )
 
 # ----------------- MYANMAR UNICODE FONT CONFIG -----------------
-# 1. fonts.conf ထုတ်ပေးခြင်းဖြင့် fontconfig ကို လက်ရှိ directory အား ဖတ်ရှုစေခြင်း
+# 1. fonts.conf တည်ဆောက်၍ fontconfig အား Padauk / Pyidaungsu ဖောင့်များကို အဓိက သတ်မှတ်စေခြင်း
 FONTS_CONF = "fonts.conf"
 if not os.path.exists(FONTS_CONF):
     try:
@@ -28,6 +28,10 @@ if not os.path.exists(FONTS_CONF):
   <dir>.</dir>
   <dir>/usr/share/fonts</dir>
   <dir>/usr/local/share/fonts</dir>
+  <match target="pattern">
+    <test qual="any" name="family"><string>myanmar</string></test>
+    <edit name="family" mode="assign" binding="same"><string>Padauk</string></edit>
+  </match>
 </fontconfig>""")
     except Exception:
         pass
@@ -35,23 +39,21 @@ if not os.path.exists(FONTS_CONF):
 os.environ["FONTCONFIG_PATH"] = "."
 
 # 2. တရားဝင် Padauk / Pyidaungsu Unicode Font ကို အလိုအလျောက် ရယူခြင်း
-FONT_FILE = "Padauk-Regular.ttf"
-def ensure_myanmar_font():
-    if not os.path.exists(FONT_FILE) or os.path.getsize(FONT_FILE) < 50000:
-        urls = [
-            "https://raw.githubusercontent.com/googlefonts/padauk/main/fonts/ttf/Padauk-Regular.ttf",
-            "https://github.com/googlefonts/pyidaungsu/raw/main/fonts/ttf/Pyidaungsu-Regular.ttf"
-        ]
-        for u in urls:
+def ensure_myanmar_fonts():
+    targets = {
+        "Padauk-Regular.ttf": "https://raw.githubusercontent.com/googlefonts/padauk/main/fonts/ttf/Padauk-Regular.ttf",
+        "Pyidaungsu.ttf": "https://github.com/googlefonts/pyidaungsu/raw/main/fonts/ttf/Pyidaungsu-Regular.ttf"
+    }
+    for fname, url in targets.items():
+        if not os.path.exists(fname) or os.path.getsize(fname) < 50000:
             try:
-                req = urllib.request.Request(u, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req) as resp, open(FONT_FILE, "wb") as out_f:
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=10) as resp, open(fname, "wb") as out_f:
                     out_f.write(resp.read())
-                if os.path.exists(FONT_FILE) and os.path.getsize(FONT_FILE) > 50000:
-                    break
             except Exception:
                 pass
-ensure_myanmar_font()
+
+ensure_myanmar_fonts()
 
 # ----------------- PERSISTENT CONFIG & STORAGE -----------------
 CONFIG_FILE = ".recap_config.json"
@@ -182,6 +184,31 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ----------------- SCRIPT CLEANER (TIMESTAMPS & NUMBERS REMOVER) -----------------
+def clean_script_for_narration(text):
+    """
+    AI မှ ထုတ်ပေးသော အချိန်မှတ်များ (၀:၀၀-၀:၀၃ စသည်)၊ နံပါတ်စဉ်များ (၁၊ ၂၊ ၃)၊
+    ခေါင်းစဉ်များနှင့် Markdown သင်္ကေတများကို အပြီးအပိုင် ရှင်းလင်းပေးပြီး
+    ချောမွေ့သော မြန်မာစကားပြော ဇာတ်လမ်းစာပိုဒ်အဖြစ် ပြောင်းလဲပေးသည်။
+    """
+    if not text:
+        return ""
+    # ၁။ မြန်မာ/အင်္ဂလိပ် ဂဏန်းဖြင့် ရေးထားသော အချိန်မှတ်များ ဖြတ်ထုတ်ခြင်း (e.g. ၀:၀၀-၀:၀၃:, 0:00-0:03:)
+    text = re.sub(r"[၀-၉0-9]+:[၀-၉0-9]+(\s*-\s*[၀-၉0-9]+:[၀-၉0-9]+)?\s*[:\s-]*", "", text)
+    # ၂။ စာကြောင်းအစရှိ စာရင်းနံပါတ်များ ဖြတ်ထုတ်ခြင်း (e.g. ၁။, ၂။, 1., 2), 1-)
+    text = re.sub(r"(?m)^\s*[၀-၉0-9]+[\.\)။\-]\s*", "", text)
+    # ၃။ ကွင်းစကွင်းပိတ်အတွင်းရှိ မြင်ကွင်းမှတ်စုများ ဖြတ်ထုတ်ခြင်း e.g. [ရယ်သံ]၊ (Scene 1)
+    text = re.sub(r"[\(\[（【].*?[\)\]）】]", "", text)
+    # ၄။ Markdown သင်္ကေတများ (*, #, _, ~, >) ရှင်းထုတ်ခြင်း
+    text = re.sub(r"[*#_~>`]", "", text)
+    # ၅။ Scene ခေါင်းစဉ်များ ရှင်းထုတ်ခြင်း
+    text = re.sub(r"(?i)\b(scene|visual|audio|narrator|intro|outro|video)\s*\d*[:\-]*", "", text)
+    # ၆။ စာကြောင်းများကို ပုံမှန်စကားပြော စာပိုဒ်အဖြစ် ချိတ်ဆက်ခြင်း
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    cleaned_text = " ".join(lines)
+    cleaned_text = re.sub(r"\s+", " ", cleaned_text).strip()
+    return cleaned_text
+
 # ----------------- PRONUNCIATION UTILS -----------------
 def load_replacements(filepath):
     data = {}
@@ -194,7 +221,7 @@ def load_replacements(filepath):
                         sep = "=" if "=" in line else ":"
                         parts = line.split(sep, 1)
                         if len(parts) == 2:
-                            data[parts[0].strip()] = parts.strip()
+                            data[parts[0].strip()] = parts[1].strip()
         except Exception:
             pass
     return data
@@ -228,14 +255,21 @@ def generate_visual_recap_script(api_key, model_name, video_path, custom_instruc
         model = genai.GenerativeModel("gemini-1.5-flash")
         
     prompt = f"""
-သင်သည် ထူးချွန်သော မြန်မာ Movie Recap Storyteller ဖြစ်သည်။
-ပေးထားသော ဗီဒီယို၏ မြင်ကွင်းများ (Visual scenes, actions, characters movements) ကို အစအဆုံး အတိအကျ သေချာကြည့်ရှုလေ့လာပါ။
-အဓိက စည်းမျဉ်းများ:
-၁။ ဗီဒီယိုထဲတွင် တကယ်ဖြစ်ပျက်နေသော ရုပ်ထွက်မြင်ကွင်းများနှင့် အချိန်ကိုက် တစ်ထပ်တည်း လိုက်ပြောပြမည့် မြန်မာဇာတ်ညွှန်းကို ရေးပေးပါ။ (မြင်ကွင်းနှင့် မဆိုင်သော စိတ်ကူးယဉ် အပိုစကားများ မထည့်ပါနှင့်)။
-၂။ ပထမ ၃ စက္ကန့်တွင် ပရိတ်သတ်ကို ဆွဲဆောင်မည့် Hook တစ်ခုဖြင့် စတင်ပါ။
-၃။ အသံဖတ်ပြမည့် မြန်မာစာသား သက်သက်ကိုသာ ထုတ်ပေးပါ။
-၄။ ဝါကျများကို ပုဒ်မ (။) သို့မဟုတ် ပုဒ်ကလေး (၊) သေချာခွဲပေးပါ။
-ညွှန်ကြားချက်: {custom_instructions if custom_instructions else 'ရုပ်ရှင်မြင်ကွင်းများနှင့် အသံဖတ်ပြချက် ကွက်တိကိုက်ညီအောင် ရေးပေးပါ။'}
+သင်သည် အလွန်တော်သော မြန်မာ Movie / Video Recap အသံသွင်း ဇာတ်လမ်းပြောပြသူ (Professional Storyteller Narrator) တစ်ဦး ဖြစ်သည်။
+ပေးထားသော ဗီဒီယိုကို အစအဆုံး သေချာကြည့်ရှုပြီး ပရိတ်သတ် စိတ်ဝင်စားဖွယ် နားထောင်နိုင်မည့် မြန်မာ Recap ဇာတ်ညွှန်း (Voiceover Narration) အပြည့်အစုံကို ရေးသားပေးပါ။
+
+🛑 အလွန်အရေးကြီးသော တားမြစ်ချက်များ (မဖြစ်မနေ လိုက်နာရမည်):
+၁။ အချိန်မှတ်များ (ဥပမာ ၀:၀၀-၀:၀၃ သို့မဟုတ် 0:00-0:03)၊ နံပါတ်စဉ်များ (၁၊ ၂၊ ၃)၊ Scene ခေါင်းစဉ်များ၊ စာရင်းဇယား (Log / Table) ပုံစံများကို လုံးဝ (လုံးဝ) မထည့်ရ။
+၂။ မြင်ကွင်းမှတ်စု (ဥပမာ - [ရယ်သံ]၊ (မြင်ကွင်း-မိုးရွာခြင်း)၊ မျှစ်ခွံခွာနေသည် စသော စာသားခြောက်ကပ်ကပ်များ) မထည့်ရ။
+၃။ အသံဖတ်သူ (TTS AI) က တိုက်ရိုက် အသံထွက် ဖတ်ပြရမည်ဖြစ်သောကြောင့် နံပါတ်များ (1, 2, 3) ပါပါက အသံဖတ်သူက နံပါတ်လိုက်ဖတ်သွားပါလိမ့်မည်။ ထို့ကြောင့် နံပါတ်များ၊ သင်္ကေတများ လုံးဝမပါရ။
+
+✨ ဇာတ်ညွှန်း ရေးသားရမည့် စတိုင် (Natural Storytelling Style):
+၁။ သဘာဝကျသော လူကိုယ်တိုင် စကားပြောဟန် (Conversational Voiceover) ဖြင့် စာပိုဒ်ဆက်တိုက် တောက်လျှောက် ရေးပေးပါ။
+၂။ ဇာတ်ကွက် စတင်ရာတွင် စိတ်ဝင်စားဖွယ် Hook ဖြင့် စတင်ပါ (ဥပမာ - "သဘာဝတောင်တန်းတွေကြားမှာ ရိုးရာအစားအစာတွေကို ဖန်တီးပြသသွားမယ့် ဒီဗီဒီယိုလေးမှာတော့...")။
+၃။ ဇာတ်လမ်း မြင်ကွင်းတစ်ခုနှင့်တစ်ခုကို ချိတ်ဆက်စကားလုံးများဖြစ်သော "ပထမဆုံးအနေနဲ့"၊ "ပြီးတဲ့နောက်မှာတော့"၊ "ဆက်လက်ပြီးတော့"၊ "အဲဒီနောက်မှာတော့"၊ "နောက်ဆုံးမှာတော့" စသည့် သဘာဝကျသော စကားပြောစကားလုံးများဖြင့် သီကုံးရေးသားပါ။
+၄။ မြန်မာစာဖတ်ရ ချောမွေ့စေရန် ပုဒ်မ (။) နှင့် ပုဒ်ကလေး (၊) ကို သေချာတိကျစွာ ခွဲပေးပါ။
+
+ညွှန်ကြားချက် ထပ်ဆောင်း: {custom_instructions if custom_instructions else 'သဘာဝကျသော ဇာတ်လမ်းပြောဟန်ဖြင့် အသံဖတ်ပြရန် သီးသန့် မြန်မာစကားပြော စာသားသက်သက်သာ ရေးပေးပါ။'}
 """
     if video_path and os.path.exists(video_path):
         video_file = genai.upload_file(path=video_path)
@@ -245,7 +279,11 @@ def generate_visual_recap_script(api_key, model_name, video_path, custom_instruc
         response = model.generate_content([video_file, prompt])
     else:
         response = model.generate_content(prompt)
-    return response.text
+    
+    raw_text = response.text
+    # ချက်ချင်း စာသားသန့်စင်ပေးပြီး အချိန်မှတ်နှင့် နံပါတ်များကို ဖယ်ရှားခြင်း
+    clean_text = clean_script_for_narration(raw_text)
+    return clean_text
 
 async def run_edge_tts(text, voice_name, output_path, speed_rate="+0%"):
     import edge_tts
@@ -264,8 +302,13 @@ def generate_voice_file(text, voice_choice, output_audio_path, speed_multiplier=
     rate_str = f"{percent_offset:+d}%"
     asyncio.run(run_edge_tts(text, voice_code, output_audio_path, speed_rate=rate_str))
 
-def create_srt_subtitles(script_text, total_duration, srt_path, max_chars=30):
-    raw_segments = [s.strip() for s in re.split(r"[၊။\n]+", script_text) if s.strip()]
+# ----------------- ADVANCED SUBSTATION ALPHA (ASS) SUBTITLES -----------------
+def create_ass_subtitles(script_text, total_duration, ass_path, font_name="Padauk", sub_color="Yellow (ရွှေဝါရောင်)", sub_bg="Box (အမည်းနောက်ခံ ဘား)", max_chars=32):
+    """
+    မြန်မာ Unicode စာလုံးပေါင်း အတိအကျမှန်ကန်စေရန် ASS (Advanced SubStation Alpha) ဖော်မတ်ဖြင့် ထုတ်လုပ်ပေးသည်။
+    """
+    clean_text = clean_script_for_narration(script_text)
+    raw_segments = [s.strip() for s in re.split(r"[၊။\n]+", clean_text) if s.strip()]
     chunks = []
     for seg in raw_segments:
         if len(seg) <= max_chars:
@@ -284,24 +327,57 @@ def create_srt_subtitles(script_text, total_duration, srt_path, max_chars=30):
                 chunks.append(current)
                 
     if not chunks:
-        chunks = [script_text]
+        chunks = [clean_text]
         
     chunk_time = total_duration / len(chunks)
     
-    def format_time(seconds):
+    def format_ass_time(seconds):
         hrs = int(seconds // 3600)
         mins = int((seconds % 3600) // 60)
         secs = int(seconds % 60)
-        millis = int((seconds - int(seconds)) * 1000)
-        return f"{hrs:02d}:{mins:02d}:{secs:02d},{millis:03d}"
-        
-    with open(srt_path, "w", encoding="utf-8") as f:
+        centis = int((seconds - int(seconds)) * 100)
+        return f"{hrs:d}:{mins:02d}:{secs:02d}.{centis:02d}"
+
+    color_map = {
+        "Yellow (ရွှေဝါရောင်)": "&H0000FFFF",
+        "White (အဖြူရောင်)": "&H00FFFFFF",
+        "Green (စိမ်းဖန့်ရောင်)": "&H0000FF00",
+        "Cyan (မိုးပြာရောင်)": "&H00FFFF00"
+    }
+    primary_col = color_map.get(sub_color, "&H0000FFFF")
+    
+    # BorderStyle: 3 = Opaque Box, 1 = Outline + Drop Shadow
+    if "Box" in sub_bg:
+        border_style = "3"
+        outline = "1"
+        shadow = "0"
+        back_colour = "&H80000000"
+    else:
+        border_style = "1"
+        outline = "2"
+        shadow = "2"
+        back_colour = "&H00000000"
+
+    ass_content = f"""[Script Info]
+ScriptType: v4.00+
+Collisions: Normal
+PlayResX: 720
+PlayResY: 1280
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,{font_name},32,{primary_col},&H000000FF,&H00000000,{back_colour},-1,0,0,0,100,100,0,0,{border_style},{outline},{shadow},2,30,30,85,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    with open(ass_path, "w", encoding="utf-8") as f:
+        f.write(ass_content)
         for idx, chunk in enumerate(chunks):
             start = idx * chunk_time
             end = min((idx + 1) * chunk_time, total_duration)
-            f.write(f"{idx + 1}\n")
-            f.write(f"{format_time(start)} --> {format_time(end)}\n")
-            f.write(f"{chunk}\n\n")
+            f.write(f"Dialogue: 0,{format_ass_time(start)},{format_ass_time(end)},Default,,0,0,0,,{chunk}\n")
 
 def generate_simple_bgm(output_path, duration):
     cmd = [
@@ -316,13 +392,11 @@ def generate_simple_bgm(output_path, duration):
 def render_pro_video(
     input_video_path,
     audio_path,
-    srt_path,
+    ass_path,
     output_video_path,
     aspect_format,
     video_speed=1.0,
     enable_subtitles=True,
-    sub_color="Yellow (ရွှေဝါရောင်)",
-    sub_bg="Box (အမည်းနောက်ခံ ဘား)",
     enable_anti_copyright=True,
     enable_bgm=True,
     bgm_volume=0.12,
@@ -334,20 +408,6 @@ def render_pro_video(
     audio_duration = get_media_duration(audio_path)
     video_duration = get_media_duration(input_video_path)
     
-    color_map = {
-        "Yellow (ရွှေဝါရောင်)": "&H00FFFF",
-        "White (အဖြူရောင်)": "&HFFFFFF",
-        "Green (စိမ်းဖန့်ရောင်)": "&H00FF00",
-        "Cyan (မိုးပြာရောင်)": "&HFFFF00"
-    }
-    primary_col = color_map.get(sub_color, "&H00FFFF")
-    
-    # မြန်မာ Unicode Font အဖြစ် Padauk သတ်မှတ်ခြင်း
-    if "Box" in sub_bg:
-        sub_style = f"FontName=Padauk,FontSize=22,PrimaryColour={primary_col},BorderStyle=3,Outline=1,Shadow=0,BackColour=&H80000000,Alignment=2,MarginV=60"
-    else:
-        sub_style = f"FontName=Padauk,FontSize=22,PrimaryColour={primary_col},BorderStyle=1,Outline=2,Shadow=2,BackColour=&H00000000,Alignment=2,MarginV=60"
-        
     scale_dict = {
         "9:16": "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280",
         "16:9": "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720",
@@ -356,8 +416,8 @@ def render_pro_video(
     }
     scale_filter = scale_dict.get(aspect_format, "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280")
     
-    # ရုပ်နှင့် အသံ Duration ကွက်တိညှိခြင်း (အစက Clip ပြန်မထည့်ဘဲ ကွက်တိညှိခြင်း)
     vf_filters = []
+    # အသံနှင့် ရုပ် အချိန်ကွက်တိကျစေရန် ချိန်ညှိခြင်း (အစကနေ Clip ပြန်မပတ်ပါ)
     if video_duration < audio_duration:
         sync_factor = audio_duration / max(video_duration, 0.1)
         vf_filters.append(f"setpts={sync_factor}*PTS")
@@ -371,8 +431,8 @@ def render_pro_video(
         vf_filters.append("scale=1.05*iw:1.05*ih,crop=iw:ih")
         vf_filters.append("eq=contrast=1.04:brightness=0.02:saturation=1.06")
         
-    if enable_subtitles and srt_path and os.path.exists(srt_path):
-        vf_filters.append(f"subtitles={srt_path}:fontsdir=.:force_style='{sub_style}'")
+    if enable_subtitles and ass_path and os.path.exists(ass_path):
+        vf_filters.append(f"subtitles={ass_path}:fontsdir=.")
         
     base_vf = ",".join(vf_filters)
     
@@ -394,9 +454,8 @@ def render_pro_video(
         subprocess.run(cmd_duck, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         final_audio_to_use = temp_duck
         
-    # FFmpeg Command Construction
+    # FFmpeg Command Construction with Logo Overlay at Top-Right
     if logo_path and os.path.exists(logo_path):
-        # Logo အပေါ်ထောင့် ညာဘက်ခြမ်း ထည့်သွင်းခြင်း
         filter_complex = f"[0:v]{base_vf}[vid];[2:v]scale={logo_size}:-1,format=rgba,colorchannelmixer=aa={logo_opacity:.2f}[logo];[vid][logo]overlay=main_w-overlay_w-{logo_margin}:{logo_margin}"
         cmd = [
             "ffmpeg", "-y",
@@ -468,7 +527,7 @@ with st.sidebar:
         st.success("🔑 Gemini API: မှတ်သားပြီး")
     else:
         st.warning("⚠️ Gemini API Key မထည့်ရသေးပါ")
-    st.caption("⚡ **Recap Studio MM v2.6 Pro**")
+    st.caption("⚡ **Recap Studio MM v2.7 Pro**")
 
 # ----------------- PAGE 1: ပင်မစာမျက်နှာ -----------------
 if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
@@ -520,7 +579,7 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
 # ----------------- PAGE 2: ဗီဒီယို ပြုလုပ်ရန် (CREATE VIDEO) -----------------
 elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ်ရန်":
     st.markdown("## 🎬 **ဗီဒီယို ပြုလုပ်ရန် (Recap Studio Pro)**")
-    st.caption("ရုပ်သံအလိုက် အချိန်ကိုက်ဖတ်ပြခြင်း၊ Logo ထည့်သွင်းခြင်း၊ BGM အတိုးအကျယ်နှင့် Subtitle Yes/No ရွေးချယ်မှုများ ပါဝင်ပါသည်။")
+    st.caption("သဘာဝကျသော မြန်မာစကားပြော ဇာတ်ညွှန်း၊ နံပါတ်/အချိန်မှတ် လုံးဝမပါသော အသံဖတ်စနစ်နှင့် တိကျသော Unicode စာတန်းထိုး။")
     
     # Persistent Gemini API Key Input
     if not st.session_state.gemini_api_key:
@@ -581,7 +640,6 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
         )
         st.session_state.saved_voice = voice_choice
         
-        # အသံနမူနာ နားထောင်ရန် ခလုတ်
         if st.button("▶ Sample အသံနမူနာ နားထောင်ရန်", use_container_width=True):
             with st.spinner("အသံနမူနာ ဖန်တီးနေပါသည်..."):
                 sample_file = "sample_preview.mp3"
@@ -590,13 +648,13 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
         
     instructions = st.text_area(
         "ညွှန်ကြားချက်များ (Instructions)",
-        value="ဗီဒီယိုထဲက မြင်ကွင်းတွေနဲ့ ကွက်တိကိုက်ညီအောင် ဇာတ်လမ်းကို စိတ်ဝင်စားဖွယ် ဖတ်ပြပေးပါ။",
+        value="ဗီဒီယိုထဲက မြင်ကွင်းတွေနဲ့ ကိုက်ညီအောင် သဘာဝကျကျ စကားပြောဟန်ဖြင့် ဇာတ်လမ်းကို စိတ်ဝင်စားဖွယ် ဖတ်ပြပေးပါ။ အချိန်မှတ်နှင့် နံပါတ်များ လုံးဝမထည့်ပါနှင့်။",
         height=65
     )
 
-    # Subtitles Enable/Disable Toggle (YES / NO)
+    # Subtitles Enable/Disable Toggle (YES / NO) & Font Selection
     st.markdown("#### ၃။ မြန်မာစာတန်းထိုး (Subtitles) ရွေးချယ်မှု")
-    col_sub_btn, col_sub_style1, col_sub_style2 = st.columns(3)
+    col_sub_btn, col_sub_style1, col_sub_style2, col_sub_font = st.columns(4)
     with col_sub_btn:
         sub_option = st.radio(
             "စာတန်းထိုး ထည့်သွင်းမည်လား?",
@@ -609,6 +667,8 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
         sub_color = st.selectbox("စာလုံး အရောင်", ["Yellow (ရွှေဝါရောင်)", "White (အဖြူရောင်)", "Green (စိမ်းဖန့်ရောင်)", "Cyan (မိုးပြာရောင်)"], disabled=not enable_subtitles)
     with col_sub_style2:
         sub_bg = st.selectbox("စာတန်းထိုး နောက်ခံ", ["Box (အမည်းနောက်ခံ ဘား)", "Outline & Shadow (အနားကွပ်နှင့် အရိပ်)"], disabled=not enable_subtitles)
+    with col_sub_font:
+        sub_font = st.selectbox("အသုံးပြုမည့် ဖောင့်", ["Padauk", "Pyidaungsu", "Noto Sans Myanmar"], disabled=not enable_subtitles)
 
     # Speed Controls (0.7x to 2.0x) & BGM Volume Control
     st.markdown("#### ၄။ Speed နှင့် နောက်ခံတေးဂီတ (BGM) အတိုးအကျယ်")
@@ -679,7 +739,7 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
             elif not st.session_state.gemini_api_key:
                 st.error("Gemini API Key ထည့်သွင်းပေးပါ။")
             else:
-                with st.spinner("ရုပ်သံမြင်ကွင်းနှင့် ကိုက်ညီအောင် AI ဇာတ်ညွှန်း ရေးသားနေပါသည်..."):
+                with st.spinner("သဘာဝကျသော မြန်မာ Recap ဇာတ်ညွှန်း ရေးသားနေပါသည်..."):
                     temp_in = "temp_input.mp4"
                     if uploaded_video:
                         with open(temp_in, "wb") as f:
@@ -704,10 +764,10 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                         custom_instructions=instructions
                     )
                     st.session_state.recap_script_text = script_res
-                    st.success("AI ဇာတ်ညွှန်း ထွက်ရှိပါပြီ! အောက်တွင် လွတ်လပ်စွာ ဖတ်ရှုပြင်ဆင်နိုင်ပါသည်။")
+                    st.success("✅ သဘာဝကျသော AI ဇာတ်ညွှန်း ထွက်ရှိပါပြီ! အောက်တွင် စိတ်ကြိုက် ပြင်ဆင်နိုင်ပါသည်။")
 
     # Editable Script Area
-    st.markdown("##### 📝 မြန်မာ Recap ဇာတ်ညွှန်း (မိမိစိတ်ကြိုက် စာလုံးများ ဖြည့်စွက်/ပြင်ဆင်နိုင်ပါသည်):")
+    st.markdown("##### 📝 မြန်မာ Recap ဇာတ်ညွှန်း (အချိန်မှတ်နှင့် နံပါတ်စဉ်များ လုံးဝဖယ်ရှားထားပြီး ဖြစ်ပါသည်):")
     edited_script = st.text_area(
         "ဇာတ်ညွှန်းတည်းဖြတ်ရန်",
         value=st.session_state.recap_script_text,
@@ -733,9 +793,11 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                         f.write(uploaded_video.getbuffer())
 
                 with st.status("🎬 Recap Studio MM မှ ဗီဒီယို ထုတ်လုပ်နေပါသည်...", expanded=True) as status:
+                    # အသံထွက်ဖတ်မည့် စာသားအား အချိန်မှတ်နှင့် နံပါတ်များ ထပ်မံသန့်စင်ခြင်း
+                    clean_for_tts = clean_script_for_narration(st.session_state.recap_script_text)
                     pron_dict = load_replacements("pronunciation.txt")
-                    final_script_for_tts = apply_pronunciation(st.session_state.recap_script_text, pron_dict)
-                    st.write("၁။ pronunciation.txt ဖြင့် အသံထွက် စကားလုံးများ ပြင်ဆင်ပြီးပါပြီ...")
+                    final_script_for_tts = apply_pronunciation(clean_for_tts, pron_dict)
+                    st.write("၁။ နံပါတ်များနှင့် အချိန်မှတ်များကို ရှင်းထုတ်ပြီး pronunciation.txt ဖြင့် အသံထွက် စကားလုံးများ ပြင်ဆင်ပြီးပါပြီ...")
                     
                     st.write(f"၂။ [{voice_choice}] (Speed {voice_speed}x) ဖြင့် မြန်မာအသံဖိုင် ထုတ်ယူနေပါသည်...")
                     temp_audio_out = "temp_voice.mp3"
@@ -743,23 +805,29 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                     audio_dur = get_media_duration(temp_audio_out)
                     st.write(f"အသံကြာချိန်: {audio_dur:.1f} စက္ကန့်")
                     
-                    temp_srt_path = "temp_sub.srt"
+                    temp_ass_path = "temp_sub.ass"
                     if enable_subtitles:
-                        st.write("၃။ စာလုံးရေ ၃၀ နှုန်းဖြင့် မြန်မာစာတန်းထိုး (SRT) ဖန်တီးနေပါသည်...")
-                        create_srt_subtitles(final_script_for_tts, audio_dur, temp_srt_path, max_chars=30)
+                        st.write(f"၃။ [{sub_font}] Font ဖြင့် မြန်မာစာတန်းထိုး (ASS Subtitles) အတိအကျ ဖန်တီးနေပါသည်...")
+                        create_ass_subtitles(
+                            script_text=final_script_for_tts,
+                            total_duration=audio_dur,
+                            ass_path=temp_ass_path,
+                            font_name=sub_font,
+                            sub_color=sub_color,
+                            sub_bg=sub_bg,
+                            max_chars=32
+                        )
                     
                     st.write("၄။ အသံ/ရုပ်/BGM Ducking/Logo/Anti-Copyright တို့ဖြင့် Render ပြုလုပ်နေပါသည်...")
                     final_video_output = "recap_output.mp4"
                     render_pro_video(
                         input_video_path=temp_in,
                         audio_path=temp_audio_out,
-                        srt_path=temp_srt_path if enable_subtitles else None,
+                        ass_path=temp_ass_path if enable_subtitles else None,
                         output_video_path=final_video_output,
                         aspect_format=format_ratio,
                         video_speed=video_speed,
                         enable_subtitles=enable_subtitles,
-                        sub_color=sub_color,
-                        sub_bg=sub_bg,
                         enable_anti_copyright=anti_copyright,
                         enable_bgm=(bgm_vol > 0.01),
                         bgm_volume=bgm_vol,
@@ -779,9 +847,9 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                 with col_a1:
                     st.audio(temp_audio_out)
                 with col_a2:
-                    if enable_subtitles and os.path.exists(temp_srt_path):
-                        with open(temp_srt_path, "r", encoding="utf-8") as srt_f:
-                            st.download_button("📥 SRT စာတန်းထိုးဖိုင် ဒေါင်းလုဒ်ဆွဲရန်", data=srt_f.read(), file_name="recap_subtitles.srt")
+                    if enable_subtitles and os.path.exists(temp_ass_path):
+                        with open(temp_ass_path, "r", encoding="utf-8") as ass_f:
+                            st.download_button("📥 ASS စာတန်းထိုးဖိုင် ဒေါင်းလုဒ်ဆွဲရန်", data=ass_f.read(), file_name="recap_subtitles.ass")
 
                 # Video Preview in Compact Centered Size
                 st.markdown("#### 🎬 Recap ဗီဒီယို Preview")
