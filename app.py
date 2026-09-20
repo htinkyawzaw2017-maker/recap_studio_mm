@@ -118,7 +118,7 @@ def apply_pronunciation(text, pron_dict):
 def generate_recap_script(api_key, video_path, custom_instructions):
     import google.generativeai as genai
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = genai.GenerativeModel("gemini-2.5-flash")
     
     prompt = f"""
 သင်သည် အလွန်တော်သော မြန်မာ Movie Recap Storyteller တစ်ယောက် ဖြစ်သည်။
