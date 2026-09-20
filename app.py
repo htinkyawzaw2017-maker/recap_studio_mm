@@ -153,8 +153,8 @@ with st.sidebar:
 
 # ----------------- PAGE 1: ပင်မစာမျက်နှာ (HOME DASHBOARD) -----------------
 if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
-    # ပြင်ဆင်ပြီး: parameter ထည့်သွင်းထားပါသည်
-    col_banner, col_status = st.columns()
+    # ဤနေရာတွင် 2 ဟု တိကျစွာ ထည့်သွင်းထားပါသည်
+    col_banner, col_status = st.columns(2)
     
     with col_banner:
         st.markdown("""
@@ -389,8 +389,8 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
         label_visibility="collapsed"
     )
     
-    # Step 7: Voice Selection (ပြင်ဆင်ပြီး: ထည့်သွင်းထားပါသည်)
-    col_v_select, col_v_sample = st.columns()
+    # Step 7: Voice Selection (ဤနေရာတွင်လည်း 2 ဟု ထည့်သွင်းထားပါသည်)
+    col_v_select, col_v_sample = st.columns(2)
     with col_v_select:
         voice_choice = st.selectbox(
             "ပုံမှန်အသံ ရွေးရန်",
