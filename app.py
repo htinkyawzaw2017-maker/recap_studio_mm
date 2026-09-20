@@ -11,6 +11,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# ----------------- NAVIGATION CALLBACK (ERROR FIX) -----------------
+# Streamlit စည်းမျဉ်းအရ Widget Key ကို on_click callback ဖြင့်သာ ပြောင်းလဲရပါမည်
+def navigate_to(page_name):
+    st.session_state.nav_menu = page_name
+
+if "nav_menu" not in st.session_state:
+    st.session_state.nav_menu = "🏠 ပင်မစာမျက်နှာ"
+
 # ----------------- CUSTOM STYLING (DARK UI) -----------------
 st.markdown("""
 <style>
@@ -107,10 +115,6 @@ def apply_pronunciation(text, pron_dict):
         text = re.sub(rf"\b{re.escape(word)}\b", pron, text, flags=re.IGNORECASE)
     return text
 
-# Navigation State
-if "nav_menu" not in st.session_state:
-    st.session_state.nav_menu = "🏠 ပင်မစာမျက်နှာ"
-
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
     st.markdown("### 🎬 **RECAP STUDIO MM**")
@@ -141,7 +145,7 @@ with st.sidebar:
         "⚙️ API & Settings"
     ]
     
-    selected_page = st.radio(
+    st.radio(
         "Menu",
         menu_options,
         key="nav_menu",
@@ -153,7 +157,6 @@ with st.sidebar:
 
 # ----------------- PAGE 1: ပင်မစာမျက်နှာ (HOME DASHBOARD) -----------------
 if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
-    # ဤနေရာတွင် 2 ဟု တိကျစွာ ထည့်သွင်းထားပါသည်
     col_banner, col_status = st.columns(2)
     
     with col_banner:
@@ -167,9 +170,13 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
         </div>
         """, unsafe_allow_html=True)
         
-        if st.button("🎬 ဗီဒီယို ပြုလုပ်ရန် (Recap • မြန်မာအသံထွက် • စာတန်းထိုး) ➔", type="primary"):
-            st.session_state.nav_menu = "🎬 ဗီဒီယို ပြုလုပ်ရန်"
-            st.rerun()
+        st.button(
+            "🎬 ဗီဒီယို ပြုလုပ်ရန် (Recap • မြန်မာအသံထွက် • စာတန်းထိုး) ➔",
+            type="primary",
+            on_click=navigate_to,
+            args=("🎬 ဗီဒီယို ပြုလုပ်ရန်",),
+            key="btn_hero_create"
+        )
             
     with col_status:
         st.markdown("""
@@ -185,7 +192,7 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
     st.subheader("⚡ မြန်ဆန်သော လုပ်ဆောင်ချက်များ")
     st.caption("လိုအပ်သော Tool သို့မဟုတ် စာမျက်နှာကို တစ်ချက်နှိပ်ပြီး တန်းသွားနိုင်ပါတယ်။")
     
-    # Action Cards Grid
+    # Action Cards Grid (on_click callback သုံးထားပါသည်)
     r1_c1, r1_c2, r1_c3, r1_c4 = st.columns(4)
     with r1_c1:
         st.markdown("""
@@ -194,9 +201,7 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
             <p style="font-size:12px; color:#94a3b8;">YouTube၊ TikTok နှင့် အခြား Link များမှ ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန်</p>
         </div>
         """, unsafe_allow_html=True)
-        if st.button("ဒေါင်းလုဒ်ဆွဲရန် ➔", key="btn_quick_dl"):
-            st.session_state.nav_menu = "📥 ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန်"
-            st.rerun()
+        st.button("ဒေါင်းလုဒ်ဆွဲရန် ➔", on_click=navigate_to, args=("📥 ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန်",), key="btn_quick_dl")
             
     with r1_c2:
         st.markdown("""
@@ -205,9 +210,7 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
             <p style="font-size:12px; color:#94a3b8;">ယခင် ပြုလုပ်ထားသော ပရောဂျက်များကို ပြန်လည်ကြည့်ရှုရန်</p>
         </div>
         """, unsafe_allow_html=True)
-        if st.button("ပရောဂျက်များ ➔", key="btn_quick_proj"):
-            st.session_state.nav_menu = "📁 သိမ်းဆည်းထားသော ပရောဂျက်များ"
-            st.rerun()
+        st.button("ပရောဂျက်များ ➔", on_click=navigate_to, args=("📁 သိမ်းဆည်းထားသော ပရောဂျက်များ",), key="btn_quick_proj")
             
     with r1_c3:
         st.markdown("""
@@ -216,9 +219,7 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
             <p style="font-size:12px; color:#94a3b8;">ရှည်လျားသော ဇာတ်ကားများကို အပိုင်းခွဲပြီး Recap လုပ်ရန်</p>
         </div>
         """, unsafe_allow_html=True)
-        if st.button("ဇာတ်လမ်းရှည် ➔", key="btn_quick_long"):
-            st.session_state.nav_menu = "🍿 ဇာတ်လမ်းရှည် Recap"
-            st.rerun()
+        st.button("ဇာတ်လမ်းရှည် ➔", on_click=navigate_to, args=("🍿 ဇာတ်လမ်းရှည် Recap",), key="btn_quick_long")
             
     with r1_c4:
         st.markdown("""
@@ -227,9 +228,7 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
             <p style="font-size:12px; color:#94a3b8;">ဗီဒီယို Link သို့မဟုတ် SRT မှ မြန်မာ AI အသံ ဖန်တီးရန်</p>
         </div>
         """, unsafe_allow_html=True)
-        if st.button("အသံစတူဒီယို ➔", key="btn_quick_voice"):
-            st.session_state.nav_menu = "🎙️ AI အသံ စတူဒီယို"
-            st.rerun()
+        st.button("အသံစတူဒီယို ➔", on_click=navigate_to, args=("🎙️ AI အသံ စတူဒီယို",), key="btn_quick_voice")
 
     r2_c1, r2_c2, r2_c3, r2_c4 = st.columns(4)
     with r2_c1:
@@ -239,9 +238,7 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
             <p style="font-size:12px; color:#94a3b8;">AI Voice Tool ဖြင့် အသံအမျိုးအစား ပြောင်းလဲရန်</p>
         </div>
         """, unsafe_allow_html=True)
-        if st.button("အသံပြောင်းရန် ➔", key="btn_quick_vchange"):
-            st.session_state.nav_menu = "🔄 အသံ ပြောင်းစနစ်"
-            st.rerun()
+        st.button("အသံပြောင်းရန် ➔", on_click=navigate_to, args=("🔄 အသံ ပြောင်းစနစ်",), key="btn_quick_vchange")
             
     with r2_c2:
         st.markdown("""
@@ -250,9 +247,7 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
             <p style="font-size:12px; color:#94a3b8;">pronunciation.txt နှင့် dictionary.txt ပြင်ဆင်ရန်</p>
         </div>
         """, unsafe_allow_html=True)
-        if st.button("ဝေါဟာရ စီမံရန် ➔", key="btn_quick_dict"):
-            st.session_state.nav_menu = "📖 အသံထွက်နှင့် ဝေါဟာရ စီမံရန်"
-            st.rerun()
+        st.button("ဝေါဟာရ စီမံရန် ➔", on_click=navigate_to, args=("📖 အသံထွက်နှင့် ဝေါဟာရ စီမံရန်",), key="btn_quick_dict")
             
     with r2_c3:
         st.markdown("""
@@ -261,9 +256,7 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
             <p style="font-size:12px; color:#94a3b8;">ဗီဒီယိုမှ အကောင်းဆုံး အစိတ်အပိုင်းများကို အလိုအလျောက်ဖြတ်ရန်</p>
         </div>
         """, unsafe_allow_html=True)
-        if st.button("Auto Clips ➔", key="btn_quick_clips"):
-            st.session_state.nav_menu = "✂️ Auto Clips"
-            st.rerun()
+        st.button("Auto Clips ➔", on_click=navigate_to, args=("✂️ Auto Clips",), key="btn_quick_clips")
             
     with r2_c4:
         st.markdown("""
@@ -272,9 +265,7 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
             <p style="font-size:12px; color:#94a3b8;">ဗီဒီယို အစအဆုံး အလိုအလျောက် ထုတ်လုပ်ရန်</p>
         </div>
         """, unsafe_allow_html=True)
-        if st.button("ဗီဒီယိုစတူဒီယို ➔", key="btn_quick_vstudio"):
-            st.session_state.nav_menu = "🎞️ AI ဗီဒီယို စတူဒီယို"
-            st.rerun()
+        st.button("ဗီဒီယိုစတူဒီယို ➔", on_click=navigate_to, args=("🎞️ AI ဗီဒီယို စတူဒီယို",), key="btn_quick_vstudio")
 
 # ----------------- PAGE 2: ဗီဒီယို ပြုလုပ်ရန် (CREATE VIDEO) -----------------
 elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ်ရန်":
@@ -389,7 +380,7 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
         label_visibility="collapsed"
     )
     
-    # Step 7: Voice Selection (ဤနေရာတွင်လည်း 2 ဟု ထည့်သွင်းထားပါသည်)
+    # Step 7: Voice Selection
     col_v_select, col_v_sample = st.columns(2)
     with col_v_select:
         voice_choice = st.selectbox(
@@ -493,6 +484,4 @@ elif st.session_state.nav_menu == "⚙️ API & Settings":
 else:
     st.markdown(f"## {st.session_state.nav_menu}")
     st.info(f"{st.session_state.nav_menu} လုပ်ဆောင်ချက်များကို သင့် Recap Studio MM တွင် မကြာမီ ထပ်မံဖြည့်စွက်ပေးပါမည်။")
-    if st.button("🏠 ပင်မစာမျက်နှာသို့ ပြန်သွားရန်"):
-        st.session_state.nav_menu = "🏠 ပင်မစာမျက်နှာ"
-        st.rerun()
+    st.button("🏠 ပင်မစာမျက်နှာသို့ ပြန်သွားရန်", on_click=navigate_to, args=("🏠 ပင်မစာမျက်နှာ",), key="btn_back_home")
