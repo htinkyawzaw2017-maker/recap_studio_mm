@@ -5,6 +5,24 @@ import time
 import json
 import asyncio
 import subprocess
+import urllib.request
+
+
+def ensure_myanmar_font():
+  """မြန်မာဖောင့်မရှိပါက Google Fonts မှ Padauk Unicode ဖောင့်ကို အလိုအလျောက် ရယူခြင်း"""
+  font_file = "Pyidaungsu.ttf"
+  if not os.path.exists(font_file):
+    try:
+      # Google Fonts မှ တရားဝင် Padauk Unicode ဖောင့်ကို ဒေါင်းလုဒ်ဆွဲယူခြင်း
+      url = "https://github.com/googlefonts/padauk/raw/main/fonts/ttf/Padauk-Regular.ttf"
+      urllib.request.urlretrieve(url, font_file)
+    except Exception:
+      pass
+  return font_file
+
+
+# App စတင်ချိန်တွင် ခေါ်ယူထားရန်
+ensure_myanmar_font()
 
 # ----------------- PAGE CONFIG -----------------
 st.set_page_config(
@@ -313,9 +331,9 @@ def render_final_video(
     primary_col = color_map.get(sub_color, "&H00FFFF")
     
     if "Box" in sub_bg:
-      sub_style = f"FontName=Pyidaungsu,FontSize=22,PrimaryColour={primary_col},BorderStyle=3,Outline=1,Shadow=0,BackColour=&H80000000,Alignment=2,MarginV=60"
+      sub_style = f"FontName=Padauk,FontSize=22,PrimaryColour={primary_col},BorderStyle=3,Outline=1,Shadow=0,BackColour=&H80000000,Alignment=2,MarginV=60"
     else:
-      sub_style = f"FontName=Pyidaungsu,FontSize=22,PrimaryColour={primary_col},BorderStyle=1,Outline=2,Shadow=2,BackColour=&H00000000,Alignment=2,MarginV=60"
+      sub_style = f"FontName=Padauk,FontSize=22,PrimaryColour={primary_col},BorderStyle=3,Outline=1,Shadow=0,BackColour=&H80000000,Alignment=2,MarginV=60"
         
     # ၃။ 720p Optimized Aspect Filters
     scale_dict = {
