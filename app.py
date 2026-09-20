@@ -85,7 +85,6 @@ st.markdown("""
 
 # ----------------- PRONUNCIATION & DICTIONARY UTILS -----------------
 def load_replacements(filepath):
-    """pronunciation.txt သို့မဟုတ် dictionary.txt မှ စကားလုံးများကို ဖတ်ယူခြင်း"""
     data = {}
     if os.path.exists(filepath):
         try:
@@ -102,7 +101,6 @@ def load_replacements(filepath):
     return data
 
 def apply_pronunciation(text, pron_dict):
-    """TTS မသွင်းမီ အသံထွက်မှန်စေရန် မူရင်းစာသားကို အစားထိုးခြင်း"""
     if not text:
         return text
     for word, pron in pron_dict.items():
@@ -110,8 +108,8 @@ def apply_pronunciation(text, pron_dict):
     return text
 
 # Navigation State
-if "current_page" not in st.session_state:
-    st.session_state.current_page = "🏠 ပင်မစာမျက်နှာ"
+if "nav_menu" not in st.session_state:
+    st.session_state.nav_menu = "🏠 ပင်မစာမျက်နှာ"
 
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
@@ -146,16 +144,15 @@ with st.sidebar:
     selected_page = st.radio(
         "Menu",
         menu_options,
-        index=menu_options.index(st.session_state.current_page) if st.session_state.current_page in menu_options else 0,
+        key="nav_menu",
         label_visibility="collapsed"
     )
-    st.session_state.current_page = selected_page
     
     st.divider()
     st.caption("⚡ **Recap Studio MM Engine v2.0**\nStreamlit & Python Powered.")
 
 # ----------------- PAGE 1: ပင်မစာမျက်နှာ (HOME DASHBOARD) -----------------
-if st.session_state.current_page == "🏠 ပင်မစာမျက်နှာ":
+if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
     col_banner, col_status = st.columns()
     
     with col_banner:
@@ -170,7 +167,7 @@ if st.session_state.current_page == "🏠 ပင်မစာမျက်နှ�
         """, unsafe_allow_html=True)
         
         if st.button("🎬 ဗီဒီယို ပြုလုပ်ရန် (Recap • မြန်မာအသံထွက် • စာတန်းထိုး) ➔", type="primary"):
-            st.session_state.current_page = "🎬 ဗီဒီယို ပြုလုပ်ရန်"
+            st.session_state.nav_menu = "🎬 ဗီဒီယို ပြုလုပ်ရန်"
             st.rerun()
             
     with col_status:
@@ -197,7 +194,7 @@ if st.session_state.current_page == "🏠 ပင်မစာမျက်နှ�
         </div>
         """, unsafe_allow_html=True)
         if st.button("ဒေါင်းလုဒ်ဆွဲရန် ➔", key="btn_quick_dl"):
-            st.session_state.current_page = "📥 ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန်"
+            st.session_state.nav_menu = "📥 ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန်"
             st.rerun()
             
     with r1_c2:
@@ -208,7 +205,7 @@ if st.session_state.current_page == "🏠 ပင်မစာမျက်နှ�
         </div>
         """, unsafe_allow_html=True)
         if st.button("ပရောဂျက်များ ➔", key="btn_quick_proj"):
-            st.session_state.current_page = "📁 သိမ်းဆည်းထားသော ပရောဂျက်များ"
+            st.session_state.nav_menu = "📁 သိမ်းဆည်းထားသော ပရောဂျက်များ"
             st.rerun()
             
     with r1_c3:
@@ -219,7 +216,7 @@ if st.session_state.current_page == "🏠 ပင်မစာမျက်နှ�
         </div>
         """, unsafe_allow_html=True)
         if st.button("ဇာတ်လမ်းရှည် ➔", key="btn_quick_long"):
-            st.session_state.current_page = "🍿 ဇာတ်လမ်းရှည် Recap"
+            st.session_state.nav_menu = "🍿 ဇာတ်လမ်းရှည် Recap"
             st.rerun()
             
     with r1_c4:
@@ -230,7 +227,7 @@ if st.session_state.current_page == "🏠 ပင်မစာမျက်နှ�
         </div>
         """, unsafe_allow_html=True)
         if st.button("အသံစတူဒီယို ➔", key="btn_quick_voice"):
-            st.session_state.current_page = "🎙️ AI အသံ စတူဒီယို"
+            st.session_state.nav_menu = "🎙️ AI အသံ စတူဒီယို"
             st.rerun()
 
     r2_c1, r2_c2, r2_c3, r2_c4 = st.columns(4)
@@ -242,7 +239,7 @@ if st.session_state.current_page == "🏠 ပင်မစာမျက်နှ�
         </div>
         """, unsafe_allow_html=True)
         if st.button("အသံပြောင်းရန် ➔", key="btn_quick_vchange"):
-            st.session_state.current_page = "🔄 အသံ ပြောင်းစနစ်"
+            st.session_state.nav_menu = "🔄 အသံ ပြောင်းစနစ်"
             st.rerun()
             
     with r2_c2:
@@ -253,7 +250,7 @@ if st.session_state.current_page == "🏠 ပင်မစာမျက်နှ�
         </div>
         """, unsafe_allow_html=True)
         if st.button("ဝေါဟာရ စီမံရန် ➔", key="btn_quick_dict"):
-            st.session_state.current_page = "📖 အသံထွက်နှင့် ဝေါဟာရ စီမံရန်"
+            st.session_state.nav_menu = "📖 အသံထွက်နှင့် ဝေါဟာရ စီမံရန်"
             st.rerun()
             
     with r2_c3:
@@ -264,7 +261,7 @@ if st.session_state.current_page == "🏠 ပင်မစာမျက်နှ�
         </div>
         """, unsafe_allow_html=True)
         if st.button("Auto Clips ➔", key="btn_quick_clips"):
-            st.session_state.current_page = "✂️ Auto Clips"
+            st.session_state.nav_menu = "✂️ Auto Clips"
             st.rerun()
             
     with r2_c4:
@@ -275,15 +272,14 @@ if st.session_state.current_page == "🏠 ပင်မစာမျက်နှ�
         </div>
         """, unsafe_allow_html=True)
         if st.button("ဗီဒီယိုစတူဒီယို ➔", key="btn_quick_vstudio"):
-            st.session_state.current_page = "🎞️ AI ဗီဒီယို စတူဒီယို"
+            st.session_state.nav_menu = "🎞️ AI ဗီဒီယို စတူဒီယို"
             st.rerun()
 
 # ----------------- PAGE 2: ဗီဒီယို ပြုလုပ်ရန် (CREATE VIDEO) -----------------
-elif st.session_state.current_page == "🎬 ဗီဒီယို ပြုလုပ်ရန်":
+elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ်ရန်":
     st.markdown("## 🎬 **ဗီဒီယို ပြုလုပ်ရန်**")
     st.caption("Video သို့မဟုတ် Link ထည့်ပြီး လုပ်ချင်တဲ့ Tool၊ ဘာသာစကား၊ အရွယ်အစားနဲ့ အသံကို ရွေးပါ။")
     
-    # Input Tabs: Upload or Link
     tab_upload, tab_link = st.tabs(["📤 ဗီဒီယို တင်ရန်", "🔗 ဗီဒီယို လင့်ခ်"])
     
     uploaded_video = None
@@ -392,7 +388,7 @@ elif st.session_state.current_page == "🎬 ဗီဒီယို ပြုလ�
         label_visibility="collapsed"
     )
     
-    # Step 7: Voice Selection & Sample Listen
+    # Step 7: Voice Selection & Sample Listen (Fix: Columns spec passed)
     col_v_select, col_v_sample = st.columns()
     with col_v_select:
         voice_choice = st.selectbox(
@@ -423,7 +419,6 @@ elif st.session_state.current_page == "🎬 ဗီဒီယို ပြုလ�
                 st.write("၂။ AI ဖြင့် ဇာတ်ကွက်ခွဲခြမ်းစိတ်ဖြာပြီး မြန်မာ Recap ဇာတ်ညွှန်း ရေးသားနေပါသည်...")
                 time.sleep(1)
                 
-                # Check and apply pronunciation replacement
                 pron_dict = load_replacements("pronunciation.txt")
                 if pron_dict:
                     st.write(f"၃။ pronunciation.txt မှ စကားလုံးပေါင်း ({len(pron_dict)}) လုံးကို အသံထွက်မှန်ကန်စေရန် အလိုအလျောက် ပြင်ဆင်ပြီးပါပြီ...")
@@ -439,7 +434,6 @@ elif st.session_state.current_page == "🎬 ဗီဒီယို ပြုလ�
                 
             st.success("🎉 Recap ဗီဒီယို ဖန်တီးမှု အောင်မြင်ပါသည်!")
             
-            # Script preview if checked
             if review_text_before_voice:
                 with st.expander("📝 ဖန်တီးထားသော AI Recap ဇာတ်ညွှန်း စာသားများ", expanded=True):
                     sample_script = "ဒီဇာတ်ကားမှာတော့ မထင်မှတ်တဲ့ အလှည့်အပြောင်းတွေနဲ့အတူ ဇာတ်ကောင်ရဲ့ ရုန်းကန်ရမှုတွေကို မြင်တွေ့ရမှာ ဖြစ်ပါတယ်။ အဆုံးထိ စိတ်ဝင်စားဖို့ ကောင်းတဲ့ ဇာတ်လမ်းကောင်း တစ်ခု ဖြစ်ပါတယ်။"
@@ -454,7 +448,7 @@ elif st.session_state.current_page == "🎬 ဗီဒီယို ပြုလ�
             )
 
 # ----------------- PAGE 3: အသံထွက်နှင့် ဝေါဟာရ စီမံရန် -----------------
-elif st.session_state.current_page == "📖 အသံထွက်နှင့် ဝေါဟာရ စီမံရန်":
+elif st.session_state.nav_menu == "📖 အသံထွက်နှင့် ဝေါဟာရ စီမံရန်":
     st.markdown("## 📖 **အသံထွက်နှင့် ဝေါဟာရ စီမံခန့်ခွဲရန် (Pronunciation Manager)**")
     st.caption("TTS အသံထွက်ရာတွင် အင်္ဂလိပ်စကားလုံးများနှင့် ဇာတ်ကောင်အမည်များကို မြန်မာလို အသံထွက်မှန်စေရန် ပြင်ဆင်နိုင်ပါသည်။")
     
@@ -484,7 +478,7 @@ elif st.session_state.current_page == "📖 အသံထွက်နှင့်
             st.error(f"ဖိုင်သိမ်းဆည်းရာတွင် အမှားဖြစ်ပေါ်ပါသည်: {err}")
 
 # ----------------- PAGE 4: API & SETTINGS -----------------
-elif st.session_state.current_page == "⚙️ API & Settings":
+elif st.session_state.nav_menu == "⚙️ API & Settings":
     st.markdown("## ⚙️ **စနစ် ဆက်တင်များနှင့် API Keys**")
     st.caption("Recap Studio MM ကို ပိုမိုမြန်ဆန်ပြီး ကန့်သတ်ချက်မရှိစေရန် သင်၏ ကိုယ်ပိုင် API Keys များကို ထည့်သွင်းနိုင်ပါသည်။")
     
@@ -496,8 +490,8 @@ elif st.session_state.current_page == "⚙️ API & Settings":
 
 # ----------------- OTHER PAGES -----------------
 else:
-    st.markdown(f"## {st.session_state.current_page}")
-    st.info(f"{st.session_state.current_page} လုပ်ဆောင်ချက်များကို သင့် Recap Studio MM တွင် မကြာမီ ထပ်မံဖြည့်စွက်ပေးပါမည်။")
+    st.markdown(f"## {st.session_state.nav_menu}")
+    st.info(f"{st.session_state.nav_menu} လုပ်ဆောင်ချက်များကို သင့် Recap Studio MM တွင် မကြာမီ ထပ်မံဖြည့်စွက်ပေးပါမည်။")
     if st.button("🏠 ပင်မစာမျက်နှာသို့ ပြန်သွားရန်"):
-        st.session_state.current_page = "🏠 ပင်မစာမျက်နှာ"
+        st.session_state.nav_menu = "🏠 ပင်မစာမျက်နှာ"
         st.rerun()
