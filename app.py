@@ -4,6 +4,7 @@ import re
 import time
 import json
 import asyncio
+import datetime
 import subprocess
 import urllib.request
 
@@ -15,16 +16,41 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ----------------- AUTO-DOWNLOAD MYANMAR FONT -----------------
-# မြန်မာဖောင့်မရှိပါက အလိုအလျောက် ဒေါင်းလုဒ်ဆွဲယူပြီး စာလုံးပေါင်းမှန်ကန်စေရန်
+# ----------------- MYANMAR UNICODE FONT CONFIG -----------------
+# 1. fonts.conf ထုတ်ပေးခြင်းဖြင့် fontconfig ကို လက်ရှိ directory အား ဖတ်ရှုစေခြင်း
+FONTS_CONF = "fonts.conf"
+if not os.path.exists(FONTS_CONF):
+    try:
+        with open(FONTS_CONF, "w", encoding="utf-8") as f:
+            f.write("""<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <dir>.</dir>
+  <dir>/usr/share/fonts</dir>
+  <dir>/usr/local/share/fonts</dir>
+</fontconfig>""")
+    except Exception:
+        pass
+
+os.environ["FONTCONFIG_PATH"] = "."
+
+# 2. တရားဝင် Padauk / Pyidaungsu Unicode Font ကို အလိုအလျောက် ရယူခြင်း
 FONT_FILE = "Padauk-Regular.ttf"
 def ensure_myanmar_font():
-    if not os.path.exists(FONT_FILE):
-        try:
-            url = "https://github.com/googlefonts/padauk/raw/main/fonts/ttf/Padauk-Regular.ttf"
-            urllib.request.urlretrieve(url, FONT_FILE)
-        except Exception:
-            pass
+    if not os.path.exists(FONT_FILE) or os.path.getsize(FONT_FILE) < 50000:
+        urls = [
+            "https://raw.githubusercontent.com/googlefonts/padauk/main/fonts/ttf/Padauk-Regular.ttf",
+            "https://github.com/googlefonts/pyidaungsu/raw/main/fonts/ttf/Pyidaungsu-Regular.ttf"
+        ]
+        for u in urls:
+            try:
+                req = urllib.request.Request(u, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req) as resp, open(FONT_FILE, "wb") as out_f:
+                    out_f.write(resp.read())
+                if os.path.exists(FONT_FILE) and os.path.getsize(FONT_FILE) > 50000:
+                    break
+            except Exception:
+                pass
 ensure_myanmar_font()
 
 # ----------------- PERSISTENT CONFIG & STORAGE -----------------
@@ -55,7 +81,7 @@ def save_config(key, value):
     except Exception:
         pass
 
-# ----------------- SESSION STATE INITIALIZATION -----------------
+# ----------------- SESSION STATE -----------------
 if "nav_menu" not in st.session_state:
     st.session_state.nav_menu = "🏠 ပင်မစာမျက်နှာ"
 
@@ -80,37 +106,22 @@ if "saved_voice_speed" not in st.session_state:
 if "saved_video_speed" not in st.session_state:
     st.session_state.saved_video_speed = 1.0
 
-if "saved_mode" not in st.session_state:
-    st.session_state.saved_mode = "🎙️ AI Recap (ဗီဒီယို အကျဉ်းချုပ် + အသံထွက်)"
-
-if "saved_instructions" not in st.session_state:
-    st.session_state.saved_instructions = ""
-
-if "saved_sub_color" not in st.session_state:
-    st.session_state.saved_sub_color = "Yellow (ရွှေဝါရောင်)"
-
-if "saved_sub_bg" not in st.session_state:
-    st.session_state.saved_sub_bg = "Box (အမည်းနောက်ခံ ဘား)"
-
-if "saved_format" not in st.session_state:
-    st.session_state.saved_format = "9:16 - ဒေါင်လိုက် (Reels/TikTok/Shorts)"
-
 if "saved_voice" not in st.session_state:
     st.session_state.saved_voice = "သီဟ (Native Burmese - Male Narration)"
 
 if "saved_model" not in st.session_state:
     st.session_state.saved_model = "gemini-1.5-flash"
 
-if "saved_anti_copyright" not in st.session_state:
-    st.session_state.saved_anti_copyright = True
+if "saved_bgm_vol" not in st.session_state:
+    st.session_state.saved_bgm_vol = 0.12
 
-if "saved_bgm" not in st.session_state:
-    st.session_state.saved_bgm = True
+if "last_generated_video" not in st.session_state:
+    st.session_state.last_generated_video = "recap_output.mp4" if os.path.exists("recap_output.mp4") else ""
 
 def navigate_to(page_name):
     st.session_state.nav_menu = page_name
 
-# ----------------- CUSTOM STYLING (DARK UI) -----------------
+# ----------------- CUSTOM STYLING -----------------
 st.markdown("""
 <style>
     .stApp {
@@ -168,17 +179,10 @@ st.markdown("""
         text-align: center;
         margin-bottom: 8px;
     }
-    .social-box {
-        background: #0d1816;
-        border: 1px solid #1f3d37;
-        border-radius: 14px;
-        padding: 20px;
-        margin-top: 20px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------- PRONUNCIATION & DICTIONARY UTILS -----------------
+# ----------------- PRONUNCIATION UTILS -----------------
 def load_replacements(filepath):
     data = {}
     if os.path.exists(filepath):
@@ -202,7 +206,7 @@ def apply_pronunciation(text, pron_dict):
         text = re.sub(rf"\b{re.escape(word)}\b", pron, text, flags=re.IGNORECASE)
     return text
 
-# ----------------- AUDIO & VIDEO PIPELINE -----------------
+# ----------------- MEDIA UTILS -----------------
 def get_media_duration(file_path):
     cmd = [
         "ffprobe", "-v", "error",
@@ -214,7 +218,7 @@ def get_media_duration(file_path):
     data = json.loads(res.stdout)
     return float(data["format"]["duration"])
 
-def generate_recap_script(api_key, model_name, video_path, custom_instructions):
+def generate_visual_recap_script(api_key, model_name, video_path, custom_instructions):
     import google.generativeai as genai
     genai.configure(api_key=api_key)
     
@@ -222,16 +226,16 @@ def generate_recap_script(api_key, model_name, video_path, custom_instructions):
         model = genai.GenerativeModel(model_name)
     except Exception:
         model = genai.GenerativeModel("gemini-1.5-flash")
-    
+        
     prompt = f"""
-သင်သည် အလွန်တော်သော မြန်မာ Movie Recap Storyteller တစ်ယောက် ဖြစ်သည်။
-အောက်ပါ ဗီဒီယိုကို ကြည့်ရှုပြီး ပရိတ်သတ် စိတ်ဝင်စားဖွယ် နားထောင်စေမည့် မြန်မာဘာသာ Movie Recap အသံဖတ်ပြရန် ဇာတ်ညွှန်း (Voiceover Script) တစ်ခုကို ရေးပေးပါ။
+သင်သည် ထူးချွန်သော မြန်မာ Movie Recap Storyteller ဖြစ်သည်။
+ပေးထားသော ဗီဒီယို၏ မြင်ကွင်းများ (Visual scenes, actions, characters movements) ကို အစအဆုံး အတိအကျ သေချာကြည့်ရှုလေ့လာပါ။
 အဓိက စည်းမျဉ်းများ:
-၁။ ပထမ ၃ စက္ကန့်တွင် ပရိတ်သတ်ကို ဆွဲဆောင်နိုင်မည့် Hook တစ်ခုဖြင့် စတင်ပါ။
-၂။ စကားလုံးများသည် နားထောင်ရလွယ်ပြီး ဇာတ်လမ်းဆွဲဆောင်မှု ရှိရပါမည်။
-၃။ မြန်မာလို အသံထွက်ဖတ်ပြမည့် စာသားသက်သက်ကိုသာ ထုတ်ပေးပါ (ဥပမာ [Scene 1], [Music] စသည့် အပိုစာသားများ မထည့်ပါနှင့်)။
+၁။ ဗီဒီယိုထဲတွင် တကယ်ဖြစ်ပျက်နေသော ရုပ်ထွက်မြင်ကွင်းများနှင့် အချိန်ကိုက် တစ်ထပ်တည်း လိုက်ပြောပြမည့် မြန်မာဇာတ်ညွှန်းကို ရေးပေးပါ။ (မြင်ကွင်းနှင့် မဆိုင်သော စိတ်ကူးယဉ် အပိုစကားများ မထည့်ပါနှင့်)။
+၂။ ပထမ ၃ စက္ကန့်တွင် ပရိတ်သတ်ကို ဆွဲဆောင်မည့် Hook တစ်ခုဖြင့် စတင်ပါ။
+၃။ အသံဖတ်ပြမည့် မြန်မာစာသား သက်သက်ကိုသာ ထုတ်ပေးပါ။
 ၄။ ဝါကျများကို ပုဒ်မ (။) သို့မဟုတ် ပုဒ်ကလေး (၊) သေချာခွဲပေးပါ။
-ညွှန်ကြားချက်: {custom_instructions if custom_instructions else 'ဇာတ်လမ်းကို စိတ်ဝင်စားဖွယ် ဆွဲဆောင်မှုရှိစွာ ပြောပြပါ။'}
+ညွှန်ကြားချက်: {custom_instructions if custom_instructions else 'ရုပ်ရှင်မြင်ကွင်းများနှင့် အသံဖတ်ပြချက် ကွက်တိကိုက်ညီအောင် ရေးပေးပါ။'}
 """
     if video_path and os.path.exists(video_path):
         video_file = genai.upload_file(path=video_path)
@@ -260,17 +264,17 @@ def generate_voice_file(text, voice_choice, output_audio_path, speed_multiplier=
     rate_str = f"{percent_offset:+d}%"
     asyncio.run(run_edge_tts(text, voice_code, output_audio_path, speed_rate=rate_str))
 
-def create_srt_subtitles(script_text, total_duration, srt_path, max_chars_per_line=30):
+def create_srt_subtitles(script_text, total_duration, srt_path, max_chars=30):
     raw_segments = [s.strip() for s in re.split(r"[၊။\n]+", script_text) if s.strip()]
     chunks = []
     for seg in raw_segments:
-        if len(seg) <= max_chars_per_line:
+        if len(seg) <= max_chars:
             chunks.append(seg)
         else:
             words = seg.split(" ")
             current = ""
             for w in words:
-                if len(current) + len(w) + 1 <= max_chars_per_line:
+                if len(current) + len(w) + 1 <= max_chars:
                     current = (current + " " + w).strip()
                 else:
                     if current:
@@ -309,17 +313,23 @@ def generate_simple_bgm(output_path, duration):
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-def render_final_video(
+def render_pro_video(
     input_video_path,
     audio_path,
     srt_path,
     output_video_path,
     aspect_format,
     video_speed=1.0,
+    enable_subtitles=True,
     sub_color="Yellow (ရွှေဝါရောင်)",
     sub_bg="Box (အမည်းနောက်ခံ ဘား)",
     enable_anti_copyright=True,
-    enable_bgm=True
+    enable_bgm=True,
+    bgm_volume=0.12,
+    logo_path=None,
+    logo_size=110,
+    logo_opacity=0.85,
+    logo_margin=20
 ):
     audio_duration = get_media_duration(audio_path)
     video_duration = get_media_duration(input_video_path)
@@ -332,7 +342,7 @@ def render_final_video(
     }
     primary_col = color_map.get(sub_color, "&H00FFFF")
     
-    # မြန်မာ Unicode ဖောင့်အတွက် FontName=Padauk သတ်မှတ်ခြင်း
+    # မြန်မာ Unicode Font အဖြစ် Padauk သတ်မှတ်ခြင်း
     if "Box" in sub_bg:
         sub_style = f"FontName=Padauk,FontSize=22,PrimaryColour={primary_col},BorderStyle=3,Outline=1,Shadow=0,BackColour=&H80000000,Alignment=2,MarginV=60"
     else:
@@ -346,6 +356,7 @@ def render_final_video(
     }
     scale_filter = scale_dict.get(aspect_format, "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280")
     
+    # ရုပ်နှင့် အသံ Duration ကွက်တိညှိခြင်း (အစက Clip ပြန်မထည့်ဘဲ ကွက်တိညှိခြင်း)
     vf_filters = []
     if video_duration < audio_duration:
         sync_factor = audio_duration / max(video_duration, 0.1)
@@ -360,46 +371,65 @@ def render_final_video(
         vf_filters.append("scale=1.05*iw:1.05*ih,crop=iw:ih")
         vf_filters.append("eq=contrast=1.04:brightness=0.02:saturation=1.06")
         
-    # fontsdir=. ဖြင့် Padauk-Regular.ttf ဖောင့်ကို တိုက်ရိုက်ဖတ်ယူစေခြင်း
-    if srt_path and os.path.exists(srt_path):
+    if enable_subtitles and srt_path and os.path.exists(srt_path):
         vf_filters.append(f"subtitles={srt_path}:fontsdir=.:force_style='{sub_style}'")
         
-    full_vf = ",".join(vf_filters)
+    base_vf = ",".join(vf_filters)
     
+    # BGM Audio Ducking
     final_audio_to_use = audio_path
-    temp_bgm_file = "temp_bgm.mp3"
-    temp_ducked_audio = "temp_ducked.mp3"
-    
-    if enable_bgm:
-        generate_simple_bgm(temp_bgm_file, audio_duration + 2)
+    temp_bgm = "temp_bgm.mp3"
+    temp_duck = "temp_duck.mp3"
+    if enable_bgm and bgm_volume > 0.01:
+        generate_simple_bgm(temp_bgm, audio_duration + 2)
         cmd_duck = [
             "ffmpeg", "-y",
             "-i", audio_path,
-            "-i", temp_bgm_file,
-            "-filter_complex", "[0:a]volume=1.0[v];[1:a]volume=0.12[b];[v][b]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+            "-i", temp_bgm,
+            "-filter_complex", f"[0:a]volume=1.0[v];[1:a]volume={bgm_volume:.2f}[b];[v][b]amix=inputs=2:duration=first:dropout_transition=2[aout]",
             "-map", "[aout]",
             "-c:a", "libmp3lame",
-            temp_ducked_audio
+            temp_duck
         ]
         subprocess.run(cmd_duck, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        final_audio_to_use = temp_ducked_audio
+        final_audio_to_use = temp_duck
         
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", input_video_path,
-        "-i", final_audio_to_use,
-        "-t", str(audio_duration),
-        "-vf", full_vf,
-        "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-crf", "26",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-map", "0:v:0",
-        "-map", "1:a:0",
-        "-threads", "0",
-        output_video_path
-    ]
+    # FFmpeg Command Construction
+    if logo_path and os.path.exists(logo_path):
+        # Logo အပေါ်ထောင့် ညာဘက်ခြမ်း ထည့်သွင်းခြင်း
+        filter_complex = f"[0:v]{base_vf}[vid];[2:v]scale={logo_size}:-1,format=rgba,colorchannelmixer=aa={logo_opacity:.2f}[logo];[vid][logo]overlay=main_w-overlay_w-{logo_margin}:{logo_margin}"
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", input_video_path,
+            "-i", final_audio_to_use,
+            "-i", logo_path,
+            "-t", str(audio_duration),
+            "-filter_complex", filter_complex,
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "26",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-threads", "0",
+            output_video_path
+        ]
+    else:
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", input_video_path,
+            "-i", final_audio_to_use,
+            "-t", str(audio_duration),
+            "-vf", base_vf,
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "26",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-threads", "0",
+            output_video_path
+        ]
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 # ----------------- SIDEBAR -----------------
@@ -419,6 +449,7 @@ with st.sidebar:
     menu_options = [
         "🏠 ပင်မစာမျက်နှာ",
         "🎬 ဗီဒီယို ပြုလုပ်ရန်",
+        "📱 Auto-Post (Facebook & TikTok)",
         "✂️ Auto Clips",
         "🎞️ AI ဗီဒီယို စတူဒီယို",
         "📁 သိမ်းဆည်းထားသော ပရောဂျက်များ",
@@ -437,23 +468,21 @@ with st.sidebar:
         st.success("🔑 Gemini API: မှတ်သားပြီး")
     else:
         st.warning("⚠️ Gemini API Key မထည့်ရသေးပါ")
-    st.caption("⚡ **Recap Studio MM v2.5 Pro**")
+    st.caption("⚡ **Recap Studio MM v2.6 Pro**")
 
 # ----------------- PAGE 1: ပင်မစာမျက်နှာ -----------------
 if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
     col_banner, col_status = st.columns(2)
-    
     with col_banner:
         st.markdown("""
         <div class="hero-card">
             <span style="color:#a78bfa; font-size:12px; font-weight:bold; letter-spacing:1px;">✨ RECAP STUDIO MM</span>
             <h1 style="color:#ffffff; margin: 10px 0 6px 0; font-size: 28px;">ဒီနေ့ဘာပြုလုပ်ချင်ပါသလဲ?</h1>
             <p style="color:#cbd5e1; font-size:14px; margin-bottom: 20px;">
-                AI Recap၊ မြန်မာစာတန်းထိုး၊ ဇာတ်လမ်းရှည် Recap၊ ဒေါင်းလုဒ်နှင့် အသံ Tools များကို တစ်နေရာတည်းမှာ အသုံးပြုပါ။
+                AI Recap၊ ရုပ်သံကွက်တိ အသံထွက်၊ Auto BGM Ducking၊ Logo နှင့် Auto-Poster Tools များကို တစ်နေရာတည်းမှာ အသုံးပြုပါ။
             </p>
         </div>
         """, unsafe_allow_html=True)
-        
         st.button(
             "🎬 ဗီဒီယို ပြုလုပ်ရန် (Recap • မြန်မာအသံထွက် • စာတန်းထိုး) ➔",
             type="primary",
@@ -461,12 +490,11 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
             args=("🎬 ဗီဒီယို ပြုလုပ်ရန်",),
             key="btn_hero_create"
         )
-            
     with col_status:
         st.markdown("""
         <div class="hero-card" style="background:#0e1822;">
             <div style="font-size:12px; color:#94a3b8;">သင့်စနစ်အခြေအနေ</div>
-            <div style="font-size:13px; margin-top:4px;">Recap Studio MM</div>
+            <div style="font-size:13px; margin-top:4px;">Recap Studio MM Pro</div>
             <h3 style="color:#10b981; margin:4px 0;">Studio Ready</h3>
             <p style="font-size:11px; color:#64748b;">အသံနှင့် ဗီဒီယို စနစ်များ အားလုံး အသင့်ရှိနေပါသည်။</p>
         </div>
@@ -480,8 +508,8 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
         st.markdown('<div class="action-card"><h4>📥 ဗီဒီယို ဒေါင်းလုဒ်</h4><p style="font-size:12px; color:#94a3b8;">YouTube/TikTok မှ ရယူရန်</p></div>', unsafe_allow_html=True)
         st.button("ဒေါင်းလုဒ်ဆွဲရန် ➔", on_click=navigate_to, args=("📥 ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန်",), key="btn_quick_dl")
     with r1_c2:
-        st.markdown('<div class="action-card"><h4>📁 ပရောဂျက်များ</h4><p style="font-size:12px; color:#94a3b8;">ယခင် ပြုလုပ်ထားသော ဖိုင်များ</p></div>', unsafe_allow_html=True)
-        st.button("ပရောဂျက်များ ➔", on_click=navigate_to, args=("📁 သိမ်းဆည်းထားသော ပရောဂျက်များ",), key="btn_quick_proj")
+        st.markdown('<div class="action-card"><h4>📱 Auto-Post</h4><p style="font-size:12px; color:#94a3b8;">FB & TikTok အချိန်ကိုက်တင်ရန်</p></div>', unsafe_allow_html=True)
+        st.button("Auto-Post ➔", on_click=navigate_to, args=("📱 Auto-Post (Facebook & TikTok)",), key="btn_quick_post")
     with r1_c3:
         st.markdown('<div class="action-card"><h4>🍿 ဇာတ်လမ်းရှည်</h4><p style="font-size:12px; color:#94a3b8;">ဇာတ်ကားရှည် Recap</p></div>', unsafe_allow_html=True)
         st.button("ဇာတ်လမ်းရှည် ➔", on_click=navigate_to, args=("🍿 ဇာတ်လမ်းရှည် Recap",), key="btn_quick_long")
@@ -489,377 +517,11 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
         st.markdown('<div class="action-card"><h4>🎙️ AI အသံ</h4><p style="font-size:12px; color:#94a3b8;">မြန်မာ AI အသံဖန်တီးရန်</p></div>', unsafe_allow_html=True)
         st.button("အသံစတူဒီယို ➔", on_click=navigate_to, args=("🎙️ AI အသံ စတူဒီယို",), key="btn_quick_voice")
 
-    r2_c1, r2_c2, r2_c3, r2_c4 = st.columns(4)
-    with r2_c1:
-        st.markdown('<div class="action-card"><h4>🔄 အသံ ပြောင်းစနစ်</h4><p style="font-size:12px; color:#94a3b8;">Voice Tool</p></div>', unsafe_allow_html=True)
-        st.button("အသံပြောင်းရန် ➔", on_click=navigate_to, args=("🔄 အသံ ပြောင်းစနစ်",), key="btn_quick_vchange")
-    with r2_c2:
-        st.markdown('<div class="action-card"><h4>📖 အသံထွက် စီမံရန်</h4><p style="font-size:12px; color:#94a3b8;">pronunciation.txt</p></div>', unsafe_allow_html=True)
-        st.button("ဝေါဟာရ စီမံရန် ➔", on_click=navigate_to, args=("📖 အသံထွက်နှင့် ဝေါဟာရ စီမံရန်",), key="btn_quick_dict")
-    with r2_c3:
-        st.markdown('<div class="action-card"><h4>✂️ Auto Clips</h4><p style="font-size:12px; color:#94a3b8;">အပိုင်းဖြတ်ရန်</p></div>', unsafe_allow_html=True)
-        st.button("Auto Clips ➔", on_click=navigate_to, args=("✂️ Auto Clips",), key="btn_quick_clips")
-    with r2_c4:
-        st.markdown('<div class="action-card"><h4>🎞️ ဗီဒီယို စတူဒီယို</h4><p style="font-size:12px; color:#94a3b8;">AI Video Studio</p></div>', unsafe_allow_html=True)
-        st.button("ဗီဒီယိုစတူဒီယို ➔", on_click=navigate_to, args=("🎞️ AI ဗီဒီယို စတူဒီယို",), key="btn_quick_vstudio")
-
 # ----------------- PAGE 2: ဗီဒီယို ပြုလုပ်ရန် (CREATE VIDEO) -----------------
 elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ်ရန်":
     st.markdown("## 🎬 **ဗီဒီယို ပြုလုပ်ရန် (Recap Studio Pro)**")
-    st.caption("Anti-Copyright၊ BGM Ducking၊ Two-Step Script Editing၊ A/V Sync နှင့် Auto-Poster အပြည့်အစုံ ပါဝင်ပါသည်။")
+    st.caption("ရုပ်သံအလိုက် အချိန်ကိုက်ဖတ်ပြခြင်း၊ Logo ထည့်သွင်းခြင်း၊ BGM အတိုးအကျယ်နှင့် Subtitle Yes/No ရွေးချယ်မှုများ ပါဝင်ပါသည်။")
     
     # Persistent Gemini API Key Input
     if not st.session_state.gemini_api_key:
-        api_input = st.text_input("🔑 Google Gemini API Key ထည့်သွင်းပါ (ဆာဗာ refresh လုပ်သော်လည်း မပျောက်စေရန် အလိုအလျောက် မှတ်သားထားပါမည်)", type="password")
-        if api_input:
-            st.session_state.gemini_api_key = api_input
-            save_config("gemini_api_key", api_input)
-            st.success("API Key အပြီးအပိုင် မှတ်သားပြီးပါပြီ!")
-            st.rerun()
-            
-    # Model Selection (Gemini 1.5 Flash / Gemini 2.5 Flash)
-    col_m1, col_m2 = st.columns(2)
-    with col_m1:
-        model_choice = st.selectbox(
-            "🤖 AI Model ရွေးချယ်ရန်",
-            ["gemini-1.5-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"],
-            index=0
-        )
-        st.session_state.saved_model = model_choice
-    with col_m2:
-        anti_copyright = st.checkbox("🛡️ Anti-Copyright ကာကွယ်ရေး စနစ် (Zoom + Color Shift)", value=st.session_state.saved_anti_copyright)
-        st.session_state.saved_anti_copyright = anti_copyright
-        bgm_choice = st.checkbox("🎵 Auto BGM ပေါင်းစပ်မှု + Audio Ducking (စကားပြောချိန် သီချင်းတိုးစေရန်)", value=st.session_state.saved_bgm)
-        st.session_state.saved_bgm = bgm_choice
-        
-    tab_upload, tab_link = st.tabs(["📤 ဗီဒီယို တင်ရန်", "🔗 YouTube / TikTok လင့်ခ်"])
-    
-    uploaded_video = None
-    video_url = ""
-    
-    with tab_upload:
-        uploaded_video = st.file_uploader("ဗီဒီယို ရွေးချယ်ပါ (MP4, MOV သို့မဟုတ် WebM - max 1 GB)", type=["mp4", "mov", "webm"])
-        if uploaded_video:
-            st.success(f"တင်ထားသောဖိုင်: {uploaded_video.name}")
-            
-    with tab_link:
-        video_url = st.text_input("YouTube သို့မဟုတ် TikTok Video Link ထည့်ပါ", placeholder="https://www.youtube.com/watch?v=... သို့မဟုတ် https://vt.tiktok.com/...")
-
-    st.markdown("---")
-    
-    # Mode & Voice Selection with Sample Listen Button
-    col_c1, col_c2 = st.columns(2)
-    with col_c1:
-        st.markdown("##### ၁။ ဘာပုံစံ ပြုလုပ်ချင်ပါသလဲ?")
-        mode = st.selectbox("ပုံစံ", [
-            "🎙️ AI Recap (ဗီဒီယို အကျဉ်းချုပ် + အသံထွက်)",
-            "📝 မြန်မာ စာတန်းထိုး (Subtitles)",
-            "🎬 ရုပ်ရှင် ပြန်လည်ပြောပြ (Story Narration)",
-            "✨ Vision Narrator (AI ဇာတ်ကွက် ခွဲခြမ်းစိတ်ဖြာခြင်း)"
-        ], index=0)
-        st.session_state.saved_mode = mode
-        
-    with col_c2:
-        st.markdown("##### ၂။ အသံ ရွေးချယ်မှုနှင့် နမူနာ နားထောင်ရန်")
-        voice_choice = st.selectbox(
-            "ပုံမှန်အသံ",
-            [
-                "သီဟ (Native Burmese - Male Narration)",
-                "နဒီ (Native Burmese - Female Narration)",
-                "ကိုမင်း (Deep Voice - Movie Recap Specialist)",
-                "မေသူ (Soft Voice - Drama/Emotional)"
-            ]
-        )
-        st.session_state.saved_voice = voice_choice
-        
-        # အသံနမူနာ နားထောင်ရန် ခလုတ်ကို ဤနေရာတွင် တိုက်ရိုက် ထည့်သွင်းထားပါသည်
-        if st.button("▶ Sample အသံနမူနာ နားထောင်ရန်", use_container_width=True):
-            with st.spinner("အသံနမူနာ ဖန်တီးနေပါသည်..."):
-                sample_file = "sample_preview.mp3"
-                generate_voice_file("မင်္ဂလာပါ Recap Studio MM မှ ကြိုဆိုပါတယ်။", voice_choice, sample_file, speed_multiplier=st.session_state.saved_voice_speed)
-                st.audio(sample_file)
-        
-    instructions = st.text_area(
-        "ညွှန်ကြားချက်များ (Instructions)",
-        value=st.session_state.saved_instructions,
-        placeholder="ဥပမာ - ရုပ်ရှင်ဇာတ်ညွှန်းကို လူငယ်သုံးစကားဖြင့် စိတ်ဝင်စားဖွယ် recap လုပ်ပါ။ ဇာတ်ကောင်အမည်များကို အသံထွက်မှန်အောင် ထည့်ပေးပါ။",
-        height=70
-    )
-    st.session_state.saved_instructions = instructions
-
-    # Speed Controls (0.7x to 2.0x Bar)
-    st.markdown("#### ၃။ အသံနှင့် ဗီဒီယို Speed အလျော့အတင်း (၀.၇x မှ ၂.၀x အထိ)")
-    col_s1, col_s2 = st.columns(2)
-    with col_s1:
-        voice_speed = st.slider(
-            "🎙️ အသံ Speed (Voice Speed)",
-            min_value=0.7,
-            max_value=2.0,
-            value=float(st.session_state.saved_voice_speed),
-            step=0.05
-        )
-        st.session_state.saved_voice_speed = voice_speed
-    with col_s2:
-        video_speed = st.slider(
-            "🎬 ဗီဒီယို Speed (Video Speed)",
-            min_value=0.7,
-            max_value=2.0,
-            value=float(st.session_state.saved_video_speed),
-            step=0.05
-        )
-        st.session_state.saved_video_speed = video_speed
-
-    # Subtitle Styling & Format
-    col_st1, col_st2 = st.columns(2)
-    with col_st1:
-        st.markdown("##### ၄။ မြန်မာစာတန်းထိုး (Subtitles) စတိုင်")
-        sub_color = st.selectbox("စာလုံး အရောင်", ["Yellow (ရွှေဝါရောင်)", "White (အဖြူရောင်)", "Green (စိမ်းဖန့်ရောင်)", "Cyan (မိုးပြာရောင်)"])
-        sub_bg = st.selectbox("စာတန်းထိုး နောက်ခံ", ["Box (အမည်းနောက်ခံ ဘား)", "Outline & Shadow (အနားကွပ်နှင့် အရိပ်)"])
-        st.session_state.saved_sub_color = sub_color
-        st.session_state.saved_sub_bg = sub_bg
-    with col_st2:
-        st.markdown("##### ၅။ ဗီဒီယို အရွယ်အစား (Format)")
-        format_choice = st.selectbox(
-            "Format ရွေးချယ်ပါ",
-            ["9:16 - ဒေါင်လိုက် (Reels/TikTok/Shorts)", "16:9 - အလျားလိုက် (YouTube)", "4:5 - Feed ပုံစံ (Facebook/IG)", "1:1 - စတုရန်း"]
-        )
-        format_ratio = format_choice.split(" - ")[0]
-        st.session_state.saved_format = format_choice
-
-    st.markdown("---")
-    
-    # ----------------- TWO-STEP WORKFLOW -----------------
-    st.markdown("### 🚀 **အဆင့် (၂) ဆင့် Recap ထုတ်လုပ်မှု စနစ်**")
-    
-    col_step1, col_step2 = st.columns(2)
-    with col_step1:
-        if st.button("📝 အဆင့် (၁): AI ဇာတ်ညွှန်း အရင်ထုတ်ယူမည်", type="primary", use_container_width=True):
-            if not uploaded_video and not video_url:
-                st.error("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် တင်ပါ သို့မဟုတ် Link ထည့်သွင်းပေးပါ။")
-            elif not st.session_state.gemini_api_key:
-                st.error("Gemini API Key ထည့်သွင်းပေးပါ။")
-            else:
-                with st.spinner("Google Gemini AI ဖြင့် မြန်မာ Recap ဇာတ်ညွှန်း ရေးသားနေပါသည်..."):
-                    temp_in = "temp_input.mp4"
-                    if uploaded_video:
-                        with open(temp_in, "wb") as f:
-                            f.write(uploaded_video.getbuffer())
-                    elif video_url:
-                        clean_u = video_url.split("?")[0]
-                        cmd_dl = [
-                            "yt-dlp",
-                            "--no-check-certificates",
-                            "--no-playlist",
-                            "--extractor-args", "youtube:player_client=android,web",
-                            "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-                            "-o", temp_in,
-                            clean_u
-                        ]
-                        res = subprocess.run(cmd_dl, capture_output=True, text=True)
-                        if res.returncode != 0:
-                            st.warning("YouTube မှ Server IP ကို ပိတ်ထားပါသဖြင့် Upload Tab ဖြင့် ဗီဒီယိုတင်ပေးပါခင်ဗျာ။")
-                            
-                    script_res = generate_recap_script(
-                        api_key=st.session_state.gemini_api_key,
-                        model_name=model_choice,
-                        video_path=temp_in if os.path.exists(temp_in) else None,
-                        custom_instructions=instructions
-                    )
-                    st.session_state.recap_script_text = script_res
-                    st.success("AI ဇာတ်ညွှန်း ထွက်ရှိပါပြီ! အောက်တွင် ဖတ်ရှုပြင်ဆင်နိုင်ပါသည်။")
-
-    # Editable Script Area
-    st.markdown("##### 📝 မြန်မာ Recap ဇာတ်ညွှန်း (မိမိစိတ်ကြိုက် စာလုံးများ ဖြည့်စွက်/ပြင်ဆင်နိုင်ပါသည်):")
-    edited_script = st.text_area(
-        "ဇာတ်ညွှန်းတည်းဖြတ်ရန်",
-        value=st.session_state.recap_script_text,
-        height=160,
-        label_visibility="collapsed"
-    )
-    st.session_state.recap_script_text = edited_script
-
-    # Step 2: Final Render Button
-    with col_step2:
-        render_btn = st.button("🎬 အဆင့် (၂): အသံနှင့် ဗီဒီယို Render လုပ်မည်", type="primary", use_container_width=True)
-
-    if render_btn:
-        if not st.session_state.recap_script_text.strip():
-            st.error("⚠️ ကျေးဇူးပြု၍ အဆင့် (၁) တွင် ဇာတ်ညွှန်း အရင်ထုတ်ယူပါ (သို့မဟုတ် စာသားကိုယ်တိုင် ရိုက်ထည့်ပါ)။")
-        elif not os.path.exists("temp_input.mp4") and not uploaded_video:
-            st.error("⚠️ ဗီဒီယိုဖိုင် မရှိသေးပါ။ ဗီဒီယိုဖိုင် အရင်တင်ပေးပါ။")
-        else:
-            try:
-                temp_in = "temp_input.mp4"
-                if uploaded_video and not os.path.exists(temp_in):
-                    with open(temp_in, "wb") as f:
-                        f.write(uploaded_video.getbuffer())
-
-                with st.status("🎬 Recap Studio MM မှ ဗီဒီယို ထုတ်လုပ်နေပါသည်...", expanded=True) as status:
-                    pron_dict = load_replacements("pronunciation.txt")
-                    final_script_for_tts = apply_pronunciation(st.session_state.recap_script_text, pron_dict)
-                    st.write("၁။ pronunciation.txt ဖြင့် အသံထွက် စကားလုံးများ ပြင်ဆင်ပြီးပါပြီ...")
-                    
-                    st.write(f"၂။ [{voice_choice}] (Speed {voice_speed}x) ဖြင့် မြန်မာအသံဖိုင် ထုတ်ယူနေပါသည်...")
-                    temp_audio_out = "temp_voice.mp3"
-                    generate_voice_file(final_script_for_tts, voice_choice, temp_audio_out, speed_multiplier=voice_speed)
-                    audio_dur = get_media_duration(temp_audio_out)
-                    st.write(f"အသံကြာချိန်: {audio_dur:.1f} စက္ကန့်")
-                    
-                    st.write("၃။ စာလုံးရေ ၃၀ နှုန်းဖြင့် မြန်မာစာတန်းထိုး (SRT) ဖန်တီးနေပါသည်...")
-                    temp_srt_path = "temp_sub.srt"
-                    create_srt_subtitles(final_script_for_tts, audio_dur, temp_srt_path, max_chars_per_line=30)
-                    
-                    st.write("၄။ အသံ/ရုပ်/BGM Ducking/Anti-Copyright တို့ဖြင့် Render ပြုလုပ်နေပါသည်...")
-                    final_video_output = "recap_output.mp4"
-                    render_final_video(
-                        input_video_path=temp_in,
-                        audio_path=temp_audio_out,
-                        srt_path=temp_srt_path,
-                        output_video_path=final_video_output,
-                        aspect_format=format_ratio,
-                        video_speed=video_speed,
-                        sub_color=sub_color,
-                        sub_bg=sub_bg,
-                        enable_anti_copyright=anti_copyright,
-                        enable_bgm=bgm_choice
-                    )
-                    status.update(label="✅ Recap ဗီဒီယို အောင်မြင်စွာ ဖန်တီးပြီးပါပြီ!", state="complete", expanded=False)
-                    
-                st.success("🎉 Recap ဗီဒီယို အောင်မြင်စွာ ထွက်ရှိပါပြီ!")
-                
-                # Audio Preview
-                st.markdown("#### 🎙️ ထွက်ရှိလာသော အသံဖိုင်နှင့် စာတန်းထိုး")
-                col_a1, col_a2 = st.columns(2)
-                with col_a1:
-                    st.audio(temp_audio_out)
-                with col_a2:
-                    with open(temp_srt_path, "r", encoding="utf-8") as srt_f:
-                        st.download_button("📥 SRT စာတန်းထိုးဖိုင် ဒေါင်းလုဒ်ဆွဲရန်", data=srt_f.read(), file_name="recap_subtitles.srt")
-
-                # Video Preview in Compact Centered Size
-                st.markdown("#### 🎬 Recap ဗီဒီယို Preview")
-                if os.path.exists(final_video_output):
-                    if format_ratio == "9:16":
-                        vp1, vp_center, vp2 = st.columns((1, 1, 1))
-                        with vp_center:
-                            st.video(final_video_output)
-                    else:
-                        vp1, vp_center, vp2 = st.columns((1, 2, 1))
-                        with vp_center:
-                            st.video(final_video_output)
-                            
-                    with open(final_video_output, "rb") as vid_file:
-                        st.download_button(
-                            label="📥 ပြီးစီးသော Recap ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန် (MP4)",
-                            data=vid_file.read(),
-                            file_name="recap_studio_mm_final.mp4",
-                            mime="video/mp4",
-                            use_container_width=True
-                        )
-                        
-                    # ----------------- SOCIAL MEDIA AUTO-POSTER SECTION -----------------
-                    st.markdown("""
-                    <div class="social-box">
-                        <h3 style="color:#f59e0b; margin-top:0;">🚀 Facebook & TikTok သို့ အချိန်ကိုက် Auto တင်ရန် (Auto-Poster)</h3>
-                        <p style="color:#cbd5e1; font-size:13px;">
-                            ဗီဒီယိုတစ်ခုတည်းကို Facebook Reels နှင့် TikTok ပေါ်သို့ လူကြည့်အများဆုံးအချိန်တွင် တစ်ပြိုင်နက်တည်း Auto ပို့တင်နိုင်ပါသည်။
-                        </p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    col_p1, col_p2 = st.columns(2)
-                    with col_p1:
-                        post_fb = st.checkbox("📱 Facebook Reels သို့ Auto တင်မည်", value=True)
-                        post_tt = st.checkbox("🎵 TikTok သို့ Auto တင်မည်", value=True)
-                        schedule_time = st.selectbox(
-                            "⏰ တင်မည့် အချိန်ဇယား",
-                            [
-                                "⚡ ချက်ချင်းတင်မည် (Post Immediately)",
-                                "🌙 ညနေ Prime Time (ည ၇:၀၀ PM)",
-                                "🌙 ည Prime Time (ည ၈:၃၀ PM)",
-                                "☀️ နေ့လယ် Prime Time (နေ့လယ် ၁၂:၃၀ PM)"
-                            ]
-                        )
-                    with col_p2:
-                        ayr_key_input = st.text_input(
-                            "🔑 Ayrshare API Key",
-                            value=st.session_state.ayrshare_api_key,
-                            type="password",
-                            placeholder="Ayrshare API Key ထည့်ပါ..."
-                        )
-                        if ayr_key_input:
-                            st.session_state.ayrshare_api_key = ayr_key_input
-                            save_config("ayrshare_api_key", ayr_key_input)
-                            
-                    post_caption = st.text_area(
-                        "📝 Post Caption (စာသားနှင့် Hashtag များ)",
-                        value=f"{st.session_state.recap_script_text[:120]}...\n\n#recap #movierecap #myanmar #shorts #reels",
-                        height=90
-                    )
-                    
-                    if st.button("📤 Facebook & TikTok ပေါ်သို့ တစ်ပြိုင်နက်တည်း အချိန်ကိုက် Auto တင်မည်", type="primary"):
-                        if not st.session_state.ayrshare_api_key:
-                            st.warning("⚠️ ကျေးဇူးပြု၍ Ayrshare API Key ထည့်သွင်းပေးပါ (Ayrshare.com တွင် အခမဲ့ ချိတ်ဆက်ရယူနိုင်ပါသည်)။")
-                        else:
-                            with st.spinner("Facebook နှင့် TikTok သို့ ချိတ်ဆက်တင်ပို့နေပါသည်..."):
-                                platforms = []
-                                if post_fb: platforms.append("facebook")
-                                if post_tt: platforms.append("tiktok")
-                                time.sleep(2)
-                                st.success(f"🎉 အောင်မြင်ပါသည်! ဗီဒီယိုကို {', '.join(platforms)} ပေါ်သို့ [{schedule_time}] အချိန်တွင် တင်ရန် အချိန်ဇယား သတ်မှတ်ပြီးပါပြီ!")
-                else:
-                    st.error("ဗီဒီယိုဖိုင် ထွက်ပေါ်မလာပါ။")
-                    
-            except Exception as e:
-                st.error(f"❌ Error ဖြစ်ပေါ်ပါသည်: {str(e)}")
-
-# ----------------- PAGE 3: အသံထွက်နှင့် ဝေါဟာရ စီမံရန် -----------------
-elif st.session_state.nav_menu == "📖 အသံထွက်နှင့် ဝေါဟာရ စီမံရန်":
-    st.markdown("## 📖 **အသံထွက်နှင့် ဝေါဟာရ စီမံခန့်ခွဲရန် (Pronunciation Manager)**")
-    st.caption("TTS အသံထွက်ရာတွင် အင်္ဂလိပ်စကားလုံးများနှင့် ဇာတ်ကောင်အမည်များကို မြန်မာလို အသံထွက်မှန်စေရန် ပြင်ဆင်နိုင်ပါသည်။")
-    
-    pron_file = "pronunciation.txt"
-    existing_content = ""
-    if os.path.exists(pron_file):
-        try:
-            with open(pron_file, "r", encoding="utf-8") as f:
-                existing_content = f.read()
-        except Exception:
-            existing_content = ""
-            
-    st.markdown("##### `pronunciation.txt` ဖိုင် တိုက်ရိုက်ပြင်ဆင်ခြင်း")
-    new_content = st.text_area(
-        "ဖိုင်အကြောင်းအရာ (တစ်ကြောင်းလျှင် စကားလုံးတစ်ခု = အသံထွက် ပုံစံဖြင့် ရေးပါ)",
-        value=existing_content,
-        height=350,
-        placeholder="Iron Man = အိုင်းရွန်းမန်း\nSpider-Man = စပိုက်ဒါမန်း\nThanos = သာနို့စ်"
-    )
-    
-    if st.button("💾 အသံထွက် ပြင်ဆင်ချက်များကို သိမ်းဆည်းမည်", type="primary"):
-        try:
-            with open(pron_file, "w", encoding="utf-8") as f:
-                f.write(new_content)
-            st.success("✅ `pronunciation.txt` ကို အောင်မြင်စွာ သိမ်းဆည်းပြီးပါပြီ!")
-        except Exception as err:
-            st.error(f"ဖိုင်သိမ်းဆည်းရာတွင် အမှားဖြစ်ပေါ်ပါသည်: {err}")
-
-# ----------------- PAGE 4: API & SETTINGS -----------------
-elif st.session_state.nav_menu == "⚙️ API & Settings":
-    st.markdown("## ⚙️ **စနစ် ဆက်တင်များနှင့် API Keys**")
-    st.caption("Recap Studio MM ၏ API Key များကို ဆာဗာ refresh ဖြစ်သော်လည်း မပျောက်စေရန် အပြီးအပိုင် သိမ်းဆည်းထားနိုင်ပါသည်။")
-    
-    api_key_input = st.text_input("Google Gemini API Key", value=st.session_state.gemini_api_key, type="password", placeholder="AIzaSy...")
-    ayr_input = st.text_input("Ayrshare API Key (Social Media Auto-Poster)", value=st.session_state.ayrshare_api_key, type="password", placeholder="Ayrshare Key...")
-    
-    if st.button("💾 API Keys များ အပြီးအပိုင် သိမ်းဆည်းမည်", type="primary"):
-        st.session_state.gemini_api_key = api_key_input
-        save_config("gemini_api_key", api_key_input)
-        st.session_state.ayrshare_api_key = ayr_input
-        save_config("ayrshare_api_key", ayr_input)
-        st.success("✅ API Keys များကို အပြီးအပိုင် မှတ်သားပြီးပါပြီ! (Website refresh လုပ်သော်လည်း ပျောက်မသွားတော့ပါ)")
-
-# ----------------- OTHER PAGES -----------------
-else:
-    st.markdown(f"## {st.session_state.nav_menu}")
-    st.info(f"{st.session_state.nav_menu} လုပ်ဆောင်ချက်များကို သင့် Recap Studio MM တွင် မကြာမီ ထပ်မံဖြည့်စွက်ပေးပါမည်။")
-    st.button("🏠 ပင်မစာမျက်နှာသို့ ပြန်သွားရန်", on_click=navigate_to, args=("🏠 ပင်မစာမျက်နှာ",), key="btn_back_home")
+        api_input = st.text_input
