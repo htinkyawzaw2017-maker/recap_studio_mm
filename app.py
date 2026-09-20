@@ -313,9 +313,9 @@ def render_final_video(
     primary_col = color_map.get(sub_color, "&H00FFFF")
     
     if "Box" in sub_bg:
-        sub_style = f"FontSize=22,PrimaryColour={primary_col},BorderStyle=3,Outline=1,Shadow=0,BackColour=&H80000000,Alignment=2,MarginV=60"
+      sub_style = f"FontName=Pyidaungsu,FontSize=22,PrimaryColour={primary_col},BorderStyle=3,Outline=1,Shadow=0,BackColour=&H80000000,Alignment=2,MarginV=60"
     else:
-        sub_style = f"FontSize=22,PrimaryColour={primary_col},BorderStyle=1,Outline=2,Shadow=2,BackColour=&H00000000,Alignment=2,MarginV=60"
+      sub_style = f"FontName=Pyidaungsu,FontSize=22,PrimaryColour={primary_col},BorderStyle=1,Outline=2,Shadow=2,BackColour=&H00000000,Alignment=2,MarginV=60"
         
     # ၃။ 720p Optimized Aspect Filters
     scale_dict = {
@@ -344,7 +344,9 @@ def render_final_video(
         
     # ၆။ စာတန်းထိုး Hardsub ပေါင်းထည့်ခြင်း
     if srt_path and os.path.exists(srt_path):
-        vf_filters.append(f"subtitles={srt_path}:force_style='{sub_style}'")
+      vf_filters.append(
+          f"subtitles={srt_path}:fontsdir=.:force_style='{sub_style}'"
+      )
         
     full_vf = ",".join(vf_filters)
     
