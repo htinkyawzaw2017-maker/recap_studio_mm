@@ -11,7 +11,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ----------------- CUSTOM STYLING (DARK UI MATCHING SCREENSHOT) -----------------
+# ----------------- CUSTOM STYLING (DARK UI) -----------------
 st.markdown("""
 <style>
     /* Dark Theme Canvas */
@@ -153,6 +153,7 @@ with st.sidebar:
 
 # ----------------- PAGE 1: ပင်မစာမျက်နှာ (HOME DASHBOARD) -----------------
 if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
+    # ပြင်ဆင်ပြီး: parameter ထည့်သွင်းထားပါသည်
     col_banner, col_status = st.columns()
     
     with col_banner:
@@ -388,7 +389,7 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
         label_visibility="collapsed"
     )
     
-    # Step 7: Voice Selection & Sample Listen (Fix: Columns spec passed)
+    # Step 7: Voice Selection (ပြင်ဆင်ပြီး: ထည့်သွင်းထားပါသည်)
     col_v_select, col_v_sample = st.columns()
     with col_v_select:
         voice_choice = st.selectbox(
