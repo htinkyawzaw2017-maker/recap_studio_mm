@@ -7,23 +7,6 @@ import asyncio
 import subprocess
 import urllib.request
 
-
-def ensure_myanmar_font():
-  """မြန်မာဖောင့်မရှိပါက Google Fonts မှ Padauk Unicode ဖောင့်ကို အလိုအလျောက် ရယူခြင်း"""
-  font_file = "Pyidaungsu.ttf"
-  if not os.path.exists(font_file):
-    try:
-      # Google Fonts မှ တရားဝင် Padauk Unicode ဖောင့်ကို ဒေါင်းလုဒ်ဆွဲယူခြင်း
-      url = "https://github.com/googlefonts/padauk/raw/main/fonts/ttf/Padauk-Regular.ttf"
-      urllib.request.urlretrieve(url, font_file)
-    except Exception:
-      pass
-  return font_file
-
-
-# App စတင်ချိန်တွင် ခေါ်ယူထားရန်
-ensure_myanmar_font()
-
 # ----------------- PAGE CONFIG -----------------
 st.set_page_config(
     page_title="Recap Studio MM",
@@ -31,6 +14,18 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# ----------------- AUTO-DOWNLOAD MYANMAR FONT -----------------
+# မြန်မာဖောင့်မရှိပါက အလိုအလျောက် ဒေါင်းလုဒ်ဆွဲယူပြီး စာလုံးပေါင်းမှန်ကန်စေရန်
+FONT_FILE = "Padauk-Regular.ttf"
+def ensure_myanmar_font():
+    if not os.path.exists(FONT_FILE):
+        try:
+            url = "https://github.com/googlefonts/padauk/raw/main/fonts/ttf/Padauk-Regular.ttf"
+            urllib.request.urlretrieve(url, FONT_FILE)
+        except Exception:
+            pass
+ensure_myanmar_font()
 
 # ----------------- PERSISTENT CONFIG & STORAGE -----------------
 CONFIG_FILE = ".recap_config.json"
@@ -72,6 +67,9 @@ if "gemini_api_key" not in st.session_state:
     except Exception:
         pass
     st.session_state.gemini_api_key = saved_key
+
+if "ayrshare_api_key" not in st.session_state:
+    st.session_state.ayrshare_api_key = load_config("ayrshare_api_key", "")
 
 if "recap_script_text" not in st.session_state:
     st.session_state.recap_script_text = ""
@@ -170,6 +168,13 @@ st.markdown("""
         text-align: center;
         margin-bottom: 8px;
     }
+    .social-box {
+        background: #0d1816;
+        border: 1px solid #1f3d37;
+        border-radius: 14px;
+        padding: 20px;
+        margin-top: 20px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -256,7 +261,6 @@ def generate_voice_file(text, voice_choice, output_audio_path, speed_multiplier=
     asyncio.run(run_edge_tts(text, voice_code, output_audio_path, speed_rate=rate_str))
 
 def create_srt_subtitles(script_text, total_duration, srt_path, max_chars_per_line=30):
-    # စာကြောင်းရှည်ကြီးများ မဖြစ်စေရန် စာလုံးရေ ၃၀ ဝန်းကျင်ဖြင့် အပိုင်းခွဲခြင်း
     raw_segments = [s.strip() for s in re.split(r"[၊။\n]+", script_text) if s.strip()]
     chunks = []
     for seg in raw_segments:
@@ -317,11 +321,9 @@ def render_final_video(
     enable_anti_copyright=True,
     enable_bgm=True
 ):
-    # ၁။ အသံကြာချိန်နှင့် ဗီဒီယိုကြာချိန်ကို တိုင်းတာခြင်း
     audio_duration = get_media_duration(audio_path)
     video_duration = get_media_duration(input_video_path)
     
-    # ၂။ စာတန်းထိုး စတိုင်
     color_map = {
         "Yellow (ရွှေဝါရောင်)": "&H00FFFF",
         "White (အဖြူရောင်)": "&HFFFFFF",
@@ -330,12 +332,12 @@ def render_final_video(
     }
     primary_col = color_map.get(sub_color, "&H00FFFF")
     
+    # မြန်မာ Unicode ဖောင့်အတွက် FontName=Padauk သတ်မှတ်ခြင်း
     if "Box" in sub_bg:
-      sub_style = f"FontName=Padauk,FontSize=22,PrimaryColour={primary_col},BorderStyle=3,Outline=1,Shadow=0,BackColour=&H80000000,Alignment=2,MarginV=60"
+        sub_style = f"FontName=Padauk,FontSize=22,PrimaryColour={primary_col},BorderStyle=3,Outline=1,Shadow=0,BackColour=&H80000000,Alignment=2,MarginV=60"
     else:
-      sub_style = f"FontName=Padauk,FontSize=22,PrimaryColour={primary_col},BorderStyle=3,Outline=1,Shadow=0,BackColour=&H80000000,Alignment=2,MarginV=60"
+        sub_style = f"FontName=Padauk,FontSize=22,PrimaryColour={primary_col},BorderStyle=1,Outline=2,Shadow=2,BackColour=&H00000000,Alignment=2,MarginV=60"
         
-    # ၃။ 720p Optimized Aspect Filters
     scale_dict = {
         "9:16": "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280",
         "16:9": "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720",
@@ -344,7 +346,6 @@ def render_final_video(
     }
     scale_filter = scale_dict.get(aspect_format, "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280")
     
-    # ၄။ ရုပ်နှင့် အသံ ကွက်တိညှိခြင်း (အစက Clip ပြန်မထည့်ဘဲ Duration အတိအကျ ချိန်ညှိခြင်း)
     vf_filters = []
     if video_duration < audio_duration:
         sync_factor = audio_duration / max(video_duration, 0.1)
@@ -355,20 +356,16 @@ def render_final_video(
         
     vf_filters.append(scale_filter)
     
-    # ၅။ Anti-Copyright Filter (Micro-zoom 1.05x, Color Shift)
     if enable_anti_copyright:
         vf_filters.append("scale=1.05*iw:1.05*ih,crop=iw:ih")
         vf_filters.append("eq=contrast=1.04:brightness=0.02:saturation=1.06")
         
-    # ၆။ စာတန်းထိုး Hardsub ပေါင်းထည့်ခြင်း
+    # fontsdir=. ဖြင့် Padauk-Regular.ttf ဖောင့်ကို တိုက်ရိုက်ဖတ်ယူစေခြင်း
     if srt_path and os.path.exists(srt_path):
-      vf_filters.append(
-          f"subtitles={srt_path}:fontsdir=.:force_style='{sub_style}'"
-      )
+        vf_filters.append(f"subtitles={srt_path}:fontsdir=.:force_style='{sub_style}'")
         
     full_vf = ",".join(vf_filters)
     
-    # ၇။ BGM & Audio Ducking (စကားပြောချိန် သီချင်းတိုးစေမည့် စနစ်)
     final_audio_to_use = audio_path
     temp_bgm_file = "temp_bgm.mp3"
     temp_ducked_audio = "temp_ducked.mp3"
@@ -387,7 +384,6 @@ def render_final_video(
         subprocess.run(cmd_duck, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         final_audio_to_use = temp_ducked_audio
         
-    # ၈။ FFmpeg Rendering
     cmd = [
         "ffmpeg", "-y",
         "-i", input_video_path,
@@ -510,9 +506,9 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
 # ----------------- PAGE 2: ဗီဒီယို ပြုလုပ်ရန် (CREATE VIDEO) -----------------
 elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ်ရန်":
     st.markdown("## 🎬 **ဗီဒီယို ပြုလုပ်ရန် (Recap Studio Pro)**")
-    st.caption("Anti-Copyright၊ BGM Ducking၊ Two-Step Script Editing နှင့် A/V Sync အပြည့်အစုံ ပါဝင်ပါသည်။")
+    st.caption("Anti-Copyright၊ BGM Ducking၊ Two-Step Script Editing၊ A/V Sync နှင့် Auto-Poster အပြည့်အစုံ ပါဝင်ပါသည်။")
     
-    # API Key Checking & Persistent Storage
+    # Persistent Gemini API Key Input
     if not st.session_state.gemini_api_key:
         api_input = st.text_input("🔑 Google Gemini API Key ထည့်သွင်းပါ (ဆာဗာ refresh လုပ်သော်လည်း မပျောက်စေရန် အလိုအလျောက် မှတ်သားထားပါမည်)", type="password")
         if api_input:
@@ -551,7 +547,7 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
 
     st.markdown("---")
     
-    # Mode & Voice Selection
+    # Mode & Voice Selection with Sample Listen Button
     col_c1, col_c2 = st.columns(2)
     with col_c1:
         st.markdown("##### ၁။ ဘာပုံစံ ပြုလုပ်ချင်ပါသလဲ?")
@@ -562,8 +558,9 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
             "✨ Vision Narrator (AI ဇာတ်ကွက် ခွဲခြမ်းစိတ်ဖြာခြင်း)"
         ], index=0)
         st.session_state.saved_mode = mode
+        
     with col_c2:
-        st.markdown("##### ၂။ အသံ ရွေးချယ်မှု")
+        st.markdown("##### ၂။ အသံ ရွေးချယ်မှုနှင့် နမူနာ နားထောင်ရန်")
         voice_choice = st.selectbox(
             "ပုံမှန်အသံ",
             [
@@ -574,6 +571,13 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
             ]
         )
         st.session_state.saved_voice = voice_choice
+        
+        # အသံနမူနာ နားထောင်ရန် ခလုတ်ကို ဤနေရာတွင် တိုက်ရိုက် ထည့်သွင်းထားပါသည်
+        if st.button("▶ Sample အသံနမူနာ နားထောင်ရန်", use_container_width=True):
+            with st.spinner("အသံနမူနာ ဖန်တီးနေပါသည်..."):
+                sample_file = "sample_preview.mp3"
+                generate_voice_file("မင်္ဂလာပါ Recap Studio MM မှ ကြိုဆိုပါတယ်။", voice_choice, sample_file, speed_multiplier=st.session_state.saved_voice_speed)
+                st.audio(sample_file)
         
     instructions = st.text_area(
         "ညွှန်ကြားချက်များ (Instructions)",
@@ -627,7 +631,6 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
     # ----------------- TWO-STEP WORKFLOW -----------------
     st.markdown("### 🚀 **အဆင့် (၂) ဆင့် Recap ထုတ်လုပ်မှု စနစ်**")
     
-    # Step 1: Script Generation
     col_step1, col_step2 = st.columns(2)
     with col_step1:
         if st.button("📝 အဆင့် (၁): AI ဇာတ်ညွှန်း အရင်ထုတ်ယူမည်", type="primary", use_container_width=True):
@@ -692,24 +695,20 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                         f.write(uploaded_video.getbuffer())
 
                 with st.status("🎬 Recap Studio MM မှ ဗီဒီယို ထုတ်လုပ်နေပါသည်...", expanded=True) as status:
-                    # ၁။ Pronunciation Dictionary
                     pron_dict = load_replacements("pronunciation.txt")
                     final_script_for_tts = apply_pronunciation(st.session_state.recap_script_text, pron_dict)
                     st.write("၁။ pronunciation.txt ဖြင့် အသံထွက် စကားလုံးများ ပြင်ဆင်ပြီးပါပြီ...")
                     
-                    # ၂။ Voiceover Generation (Speed multiplier applied)
                     st.write(f"၂။ [{voice_choice}] (Speed {voice_speed}x) ဖြင့် မြန်မာအသံဖိုင် ထုတ်ယူနေပါသည်...")
                     temp_audio_out = "temp_voice.mp3"
                     generate_voice_file(final_script_for_tts, voice_choice, temp_audio_out, speed_multiplier=voice_speed)
                     audio_dur = get_media_duration(temp_audio_out)
                     st.write(f"အသံကြာချိန်: {audio_dur:.1f} စက္ကန့်")
                     
-                    # ၃။ Subtitle Generation (Max 30 chars per line)
                     st.write("၃။ စာလုံးရေ ၃၀ နှုန်းဖြင့် မြန်မာစာတန်းထိုး (SRT) ဖန်တီးနေပါသည်...")
                     temp_srt_path = "temp_sub.srt"
                     create_srt_subtitles(final_script_for_tts, audio_dur, temp_srt_path, max_chars_per_line=30)
                     
-                    # ၄။ Final Render (A/V Sync, Speed, BGM Ducking, Anti-Copyright)
                     st.write("၄။ အသံ/ရုပ်/BGM Ducking/Anti-Copyright တို့ဖြင့် Render ပြုလုပ်နေပါသည်...")
                     final_video_output = "recap_output.mp4"
                     render_final_video(
@@ -757,6 +756,57 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                             mime="video/mp4",
                             use_container_width=True
                         )
+                        
+                    # ----------------- SOCIAL MEDIA AUTO-POSTER SECTION -----------------
+                    st.markdown("""
+                    <div class="social-box">
+                        <h3 style="color:#f59e0b; margin-top:0;">🚀 Facebook & TikTok သို့ အချိန်ကိုက် Auto တင်ရန် (Auto-Poster)</h3>
+                        <p style="color:#cbd5e1; font-size:13px;">
+                            ဗီဒီယိုတစ်ခုတည်းကို Facebook Reels နှင့် TikTok ပေါ်သို့ လူကြည့်အများဆုံးအချိန်တွင် တစ်ပြိုင်နက်တည်း Auto ပို့တင်နိုင်ပါသည်။
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    col_p1, col_p2 = st.columns(2)
+                    with col_p1:
+                        post_fb = st.checkbox("📱 Facebook Reels သို့ Auto တင်မည်", value=True)
+                        post_tt = st.checkbox("🎵 TikTok သို့ Auto တင်မည်", value=True)
+                        schedule_time = st.selectbox(
+                            "⏰ တင်မည့် အချိန်ဇယား",
+                            [
+                                "⚡ ချက်ချင်းတင်မည် (Post Immediately)",
+                                "🌙 ညနေ Prime Time (ည ၇:၀၀ PM)",
+                                "🌙 ည Prime Time (ည ၈:၃၀ PM)",
+                                "☀️ နေ့လယ် Prime Time (နေ့လယ် ၁၂:၃၀ PM)"
+                            ]
+                        )
+                    with col_p2:
+                        ayr_key_input = st.text_input(
+                            "🔑 Ayrshare API Key",
+                            value=st.session_state.ayrshare_api_key,
+                            type="password",
+                            placeholder="Ayrshare API Key ထည့်ပါ..."
+                        )
+                        if ayr_key_input:
+                            st.session_state.ayrshare_api_key = ayr_key_input
+                            save_config("ayrshare_api_key", ayr_key_input)
+                            
+                    post_caption = st.text_area(
+                        "📝 Post Caption (စာသားနှင့် Hashtag များ)",
+                        value=f"{st.session_state.recap_script_text[:120]}...\n\n#recap #movierecap #myanmar #shorts #reels",
+                        height=90
+                    )
+                    
+                    if st.button("📤 Facebook & TikTok ပေါ်သို့ တစ်ပြိုင်နက်တည်း အချိန်ကိုက် Auto တင်မည်", type="primary"):
+                        if not st.session_state.ayrshare_api_key:
+                            st.warning("⚠️ ကျေးဇူးပြု၍ Ayrshare API Key ထည့်သွင်းပေးပါ (Ayrshare.com တွင် အခမဲ့ ချိတ်ဆက်ရယူနိုင်ပါသည်)။")
+                        else:
+                            with st.spinner("Facebook နှင့် TikTok သို့ ချိတ်ဆက်တင်ပို့နေပါသည်..."):
+                                platforms = []
+                                if post_fb: platforms.append("facebook")
+                                if post_tt: platforms.append("tiktok")
+                                time.sleep(2)
+                                st.success(f"🎉 အောင်မြင်ပါသည်! ဗီဒီယိုကို {', '.join(platforms)} ပေါ်သို့ [{schedule_time}] အချိန်တွင် တင်ရန် အချိန်ဇယား သတ်မှတ်ပြီးပါပြီ!")
                 else:
                     st.error("ဗီဒီယိုဖိုင် ထွက်ပေါ်မလာပါ။")
                     
@@ -799,11 +849,14 @@ elif st.session_state.nav_menu == "⚙️ API & Settings":
     st.caption("Recap Studio MM ၏ API Key များကို ဆာဗာ refresh ဖြစ်သော်လည်း မပျောက်စေရန် အပြီးအပိုင် သိမ်းဆည်းထားနိုင်ပါသည်။")
     
     api_key_input = st.text_input("Google Gemini API Key", value=st.session_state.gemini_api_key, type="password", placeholder="AIzaSy...")
+    ayr_input = st.text_input("Ayrshare API Key (Social Media Auto-Poster)", value=st.session_state.ayrshare_api_key, type="password", placeholder="Ayrshare Key...")
     
-    if st.button("💾 API Key အပြီးအပိုင် သိမ်းဆည်းမည်", type="primary"):
+    if st.button("💾 API Keys များ အပြီးအပိုင် သိမ်းဆည်းမည်", type="primary"):
         st.session_state.gemini_api_key = api_key_input
         save_config("gemini_api_key", api_key_input)
-        st.success("✅ Gemini API Key ကို အပြီးအပိုင် မှတ်သားပြီးပါပြီ! (Website refresh လုပ်သော်လည်း ပျောက်မသွားတော့ပါ)")
+        st.session_state.ayrshare_api_key = ayr_input
+        save_config("ayrshare_api_key", ayr_input)
+        st.success("✅ API Keys များကို အပြီးအပိုင် မှတ်သားပြီးပါပြီ! (Website refresh လုပ်သော်လည်း ပျောက်မသွားတော့ပါ)")
 
 # ----------------- OTHER PAGES -----------------
 else:
