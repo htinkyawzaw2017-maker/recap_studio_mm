@@ -797,9 +797,6 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
     mask_height = 140
     mask_opacity = 0.90
     
-    if enable_height = 140
-    mask_opacity = 0.90
-    
     if enable_mask:
         col_mk1, col_mk2, col_mk3 = st.columns(3)
         with col_mk1:
@@ -856,4 +853,693 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
             with open(logo_file_path, "wb") as f:
                 f.write(uploaded_logo.getbuffer())
                 
-        col
+        col_lg1, col_lg2, col_lg3 = st.columns(3)
+        with col_lg1:
+            logo_size = st.slider("Logo အရွယ်အစား (Size px)", 60, 250, 130, step=10)
+        with col_lg2:
+            logo_opacity = st.slider("Logo အကြည်ရောင် (Opacity)", 0.3, 1.0, 0.90, step=0.05)
+        with col_lg3:
+            logo_margin = st.slider("အနားသတ် အကွာအဝေး (Margin px)", 10, 60, 20, step=5)
+
+    st.markdown("---")
+    
+    # ----------------- TWO-STEP WORKFLOW -----------------
+    st.markdown("### 🚀 **အဆင့် (၂) ဆင့် Recap ထုတ်လုပ်မှု စနစ်**")
+    col_step1, col_step2 = st.columns(2)
+    with col_step1:
+        if st.button("📝 အဆင့် (၁): AI ဇာတ်ညွှန်း အရင်ထုတ်ယူမည်", type="primary", use_container_width=True):
+            if not uploaded_video and not video_url:
+                st.error("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် တင်ပါ သို့မဟုတ် Link ထည့်သွင်းပေးပါ။")
+            elif not st.session_state.gemini_api_key:
+                st.error("Gemini API Key ထည့်သွင်းပေးပါ။")
+            else:
+                with st.spinner("သဘာဝကျသော မြန်မာ Recap ဇာတ်ညွှန်း ရေးသားနေပါသည်..."):
+                    temp_in = "temp_input.mp4"
+                    if uploaded_video:
+                        with open(temp_in, "wb") as f:
+                            f.write(uploaded_video.getbuffer())
+                    elif video_url:
+                        clean_u = video_url.split("?")[0]
+                        cmd_dl = [
+                            "yt-dlp",
+                            "--no-check-certificates",
+                            "--no-playlist",
+                            "--extractor-args", "youtube:player_client=android,web",
+                            "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                            "-o", temp_in,
+                            clean_u
+                        ]
+                        subprocess.run(cmd_dl, capture_output=True, text=True)
+                            
+                    script_res = generate_visual_recap_script(
+                        api_key=st.session_state.gemini_api_key,
+                        model_name=model_choice,
+                        video_path=temp_in if os.path.exists(temp_in) else None,
+                        custom_instructions=instructions
+                    )
+                    st.session_state.recap_script_text = script_res
+                    st.success("✅ သဘာဝကျသော AI ဇာတ်ညွှန်း ထွက်ရှိပါပြီ! အောက်တွင် စိတ်ကြိုက် ပြင်ဆင်နိုင်ပါသည်။")
+
+    st.markdown("##### 📝 မြန်မာ Recap ဇာတ်ညွှန်း (အချိန်မှတ်နှင့် နံပါတ်စဉ်များ လုံးဝဖယ်ရှားထားပြီး ဖြစ်ပါသည်):")
+    edited_script = st.text_area(
+        "ဇာတ်ညွှန်းတည်းဖြတ်ရန်",
+        value=st.session_state.recap_script_text,
+        height=160,
+        label_visibility="collapsed"
+    )
+    st.session_state.recap_script_text = edited_script
+
+    with col_step2:
+        render_btn = st.button("🎬 အဆင့် (၂): အသံနှင့် ဗီဒီယို Render လုပ်မည်", type="primary", use_container_width=True)
+
+    neon_container = st.empty()
+
+    if render_btn:
+        if not st.session_state.recap_script_text.strip():
+            st.error("⚠️ ကျေးဇူးပြု၍ အဆင့် (၁) တွင် ဇာတ်ညွှန်း အရင်ထုတ်ယူပါ (သို့မဟုတ် စာသားကိုယ်တိုင် ရိုက်ထည့်ပါ)။")
+        elif not os.path.exists("temp_input.mp4") and not uploaded_video:
+            st.error("⚠️ ဗီဒီယိုဖိုင် မရှိသေးပါ။ ဗီဒီယိုဖိုင် အရင်တင်ပေးပါ။")
+        else:
+            try:
+                temp_in = "temp_input.mp4"
+                if uploaded_video and not os.path.exists(temp_in):
+                    with open(temp_in, "wb") as f:
+                        f.write(uploaded_video.getbuffer())
+
+                neon_container.markdown("""
+                <div class="neon-loader-card">
+                    <div class="neon-logo-glow">
+                        <span class="neon-icon">🎬</span>
+                    </div>
+                    <div class="neon-title">RECAP STUDIO MM</div>
+                    <div class="neon-subtitle">⚡ AI VIDEO RENDERING & SUBTITLE MASKING ⚡</div>
+                    <div class="neon-dots">
+                        <span></span><span></span><span></span><span></span>
+                    </div>
+                    <p style="color:#38bdf8; font-size:13px; margin-top:14px; font-weight:600; text-shadow:0 0 8px #0284c7;">
+                        မူရင်းစာတန်းထိုးများကို Masking ဖြင့် ဖုံးအုပ်ပြီး၊ ဆက်တိုက်စကားပြောသံနှင့် မြန်မာစာလုံးများကို ပေါင်းစပ်နေပါသည်...
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+
+                clean_for_tts = clean_script_for_narration(st.session_state.recap_script_text)
+                pron_dict = load_replacements("pronunciation.txt")
+                final_script_for_tts = apply_pronunciation(clean_for_tts, pron_dict)
+                
+                temp_audio_out = "temp_voice.mp3"
+                generate_voice_file(final_script_for_tts, voice_choice, temp_audio_out, speed_multiplier=voice_speed)
+                audio_dur = get_media_duration(temp_audio_out)
+                st.session_state.last_voice_file = temp_audio_out
+                
+                temp_base_vid = "temp_base_synced.mp4"
+                render_pro_video(
+                    input_video_path=temp_in,
+                    audio_path=temp_audio_out,
+                    ass_path=None,
+                    output_video_path=temp_base_vid,
+                    aspect_format=format_ratio,
+                    video_speed=video_speed,
+                    enable_subtitles=False,
+                    enable_anti_copyright=anti_copyright,
+                    enable_mask=enable_mask,
+                    mask_y_percent=mask_y_percent,
+                    mask_height=mask_height,
+                    mask_opacity=mask_opacity,
+                    enable_bgm=(bgm_vol > 0.01),
+                    bgm_volume=bgm_vol,
+                    logo_path=logo_file_path if (enable_logo and logo_file_path) else None,
+                    logo_size=logo_size,
+                    logo_opacity=logo_opacity,
+                    logo_margin=logo_margin
+                )
+                st.session_state.last_base_video = temp_base_vid
+
+                temp_ass_path = "temp_sub.ass"
+                final_video_output = "recap_output.mp4"
+                if enable_subtitles:
+                    res_y = 1280 if "9:16" in format_ratio else 720
+                    calc_margin = int(res_y * (1.0 - mask_y_percent / 100.0) - 18)
+                    
+                    create_ass_subtitles(
+                        script_text=final_script_for_tts,
+                        total_duration=audio_dur,
+                        ass_path=temp_ass_path,
+                        font_name=sub_font,
+                        font_size=38,
+                        margin_v=calc_margin,
+                        sub_color=sub_color,
+                        sub_bg="Outline & Shadow (အနားကွပ်နှင့် အရိပ်)" if enable_mask else "Box (အမည်းနောက်ခံ ဘား)",
+                        max_chars=28
+                    )
+                    cmd_burn = [
+                        "ffmpeg", "-y",
+                        "-i", temp_base_vid,
+                        "-vf", f"subtitles={temp_ass_path}:fontsdir=.",
+                        "-c:v", "libx264",
+                        "-preset", "ultrafast",
+                        "-crf", "26",
+                        "-c:a", "copy",
+                        "-threads", "0",
+                        final_video_output
+                    ]
+                    subprocess.run(cmd_burn, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                else:
+                    import shutil
+                    shutil.copy(temp_base_vid, final_video_output)
+
+                st.session_state.last_generated_video = final_video_output
+                st.session_state.last_polished_video = final_video_output
+                neon_container.empty()
+                st.success("🎉 Recap ဗီဒီယို အောင်မြင်စွာ ထွက်ရှိပါပြီ!")
+
+            except Exception as e:
+                neon_container.empty()
+                st.error(f"❌ Error ဖြစ်ပေါ်ပါသည်: {str(e)}")
+
+    # ----------------- LIVE SUBTITLE TWEAKER & RE-EXPORT -----------------
+    if os.path.exists("recap_output.mp4"):
+        st.markdown("---")
+        st.markdown("### 🎬 **Recap ဗီဒီယို Preview**")
+        vid_to_show = st.session_state.last_polished_video if (st.session_state.last_polished_video and os.path.exists(st.session_state.last_polished_video)) else "recap_output.mp4"
+        
+        if format_ratio == "9:16":
+            vp1, vp_center, vp2 = st.columns((1, 1, 1))
+            with vp_center:
+                st.video(vid_to_show)
+        else:
+            vp1, vp_center, vp2 = st.columns((1, 2, 1))
+            with vp_center:
+                st.video(vid_to_show)
+
+        st.markdown("""
+        <div class="tweaker-box">
+            <h4 style="color:#38bdf8; margin:0 0 10px 0;">🎨 Subtitles Live Customizer & Final Re-Export</h4>
+            <p style="font-size:13px; color:#94a3b8; margin-bottom:15px;">
+                မူရင်း စာတန်းထိုး ဖုံးအုပ်မှု၊ မြန်မာစာလုံး အရွယ်အစား (Font Size)၊ အနိမ့်အမြင့် နေရာ (Position) နှင့် အရောင်တို့ကို စိတ်ကြိုက်ညှိယူပြီး Final MP4 အချော ထုတ်ယူနိုင်ပါသည်။
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        col_tw1, col_tw2, col_tw3, col_tw4 = st.columns(4)
+        with col_tw1:
+            tweak_font_size = st.slider("📏 စာလုံးအရွယ်အစား (Font Size)", 24, 56, 38, step=2)
+        with col_tw2:
+            tweak_margin_v = st.slider("📐 စာတန်းထိုး အမြင့်နေရာ (Height Position)", 40, 450, 260, step=10)
+        with col_tw3:
+            tweak_color = st.selectbox(
+                "🎨 စာလုံး အရောင်",
+                ["Yellow (ရွှေဝါရောင်)", "White (အဖြူရောင်)", "Green (စိမ်းဖန့်ရောင်)", "Cyan (မိုးပြာရောင်)", "Gold (ရွှေရောင်)"],
+                index=0,
+                key="tweak_col_sel"
+            )
+        with col_tw4:
+            tweak_bg = st.selectbox(
+                "🔳 စာလုံး စတိုင်",
+                ["Outline & Shadow (အနားကွပ်နှင့် အရိပ်)", "Box (အမည်းနောက်ခံ ဘား)", "Semi-Box (မှန်ကြည် အမည်းနောက်ခံ)"],
+                index=0,
+                key="tweak_bg_sel"
+            )
+
+        col_tw_font, col_tw_chars = st.columns(2)
+        with col_tw_font:
+            tweak_font = st.selectbox("🔤 အသုံးပြုမည့် ဖောင့်", ["Padauk", "Pyidaungsu", "Noto Sans Myanmar"], index=0, key="tweak_font_sel")
+        with col_tw_chars:
+            tweak_chars = st.slider("🔠 တစ်ကြောင်းလျှင် အများဆုံး စာလုံးရေ", 20, 40, 28, step=2)
+
+        if st.button("⚡ Subtitle ပြင်ဆင်ချက်များဖြင့် Final MP4 အချော ထုတ်ယူမည် (Re-Export)", type="primary", use_container_width=True):
+            base_vid = st.session_state.last_base_video if (st.session_state.last_base_video and os.path.exists(st.session_state.last_base_video)) else "temp_input.mp4"
+            audio_f = st.session_state.last_voice_file if (st.session_state.last_voice_file and os.path.exists(st.session_state.last_voice_file)) else "temp_voice.mp3"
+            
+            with st.spinner("ရွေးချယ်ထားသော Subtitle စတိုင်အသစ်ဖြင့် Final MP4 အချော ထုတ်ယူနေပါသည်..."):
+                tweak_ass_path = "tweak_sub.ass"
+                final_polished_mp4 = "recap_polished_final.mp4"
+                audio_dur = get_media_duration(audio_f) if os.path.exists(audio_f) else 10.0
+                
+                clean_for_tts = clean_script_for_narration(st.session_state.recap_script_text)
+                create_ass_subtitles(
+                    script_text=clean_for_tts,
+                    total_duration=audio_dur,
+                    ass_path=tweak_ass_path,
+                    font_name=tweak_font,
+                    font_size=tweak_font_size,
+                    margin_v=tweak_margin_v,
+                    sub_color=tweak_color,
+                    sub_bg=tweak_bg,
+                    max_chars=tweak_chars
+                )
+                
+                cmd_reexport = [
+                    "ffmpeg", "-y",
+                    "-i", base_vid,
+                    "-vf", f"subtitles={tweak_ass_path}:fontsdir=.",
+                    "-c:v", "libx264",
+                    "-preset", "ultrafast",
+                    "-crf", "24",
+                    "-c:a", "copy",
+                    "-threads", "0",
+                    final_polished_mp4
+                ]
+                subprocess.run(cmd_reexport, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                st.session_state.last_polished_video = final_polished_mp4
+                st.success("✨ Subtitle စတိုင်သစ်ဖြင့် Final Video အချော ထွက်ရှိပါပြီ!")
+                st.rerun()
+
+        current_final = st.session_state.last_polished_video if (st.session_state.last_polished_video and os.path.exists(st.session_state.last_polished_video)) else "recap_output.mp4"
+        if os.path.exists(current_final):
+            with open(current_final, "rb") as vid_file:
+                st.download_button(
+                    label="📥 Final MP4 Recap ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန်",
+                    data=vid_file.read(),
+                    file_name="recap_studio_mm_final.mp4",
+                    mime="video/mp4",
+                    use_container_width=True
+                )
+
+# ----------------- PAGE 3: AUTO-POST DEDICATED PAGE -----------------
+elif st.session_state.nav_menu == "📱 Auto-Post (Facebook & TikTok)":
+    st.markdown("## 📱 **Social Media Auto-Poster (Facebook & TikTok)**")
+    st.caption("ပြီးစီးသော Recap ဗီဒီယိုကို Facebook Reels နှင့် TikTok ပေါ်သို့ Calendar ဖြင့် ရက်စွဲနှင့် အချိန်တိကျစွာ သတ်မှတ်၍ Auto တင်နိုင်ပါသည်။")
+    
+    col_p1, col_p2 = st.columns(2)
+    with col_p1:
+        st.markdown("##### ၁။ Platform ရွေးချယ်ခြင်း")
+        post_fb = st.checkbox("📱 Facebook Reels သို့ Auto တင်မည်", value=True)
+        post_tt = st.checkbox("🎵 TikTok သို့ Auto တင်မည်", value=True)
+        
+        st.markdown("##### ၂။ အချိန်ဇယား သတ်မှတ်ခြင်း (Calendar & Time)")
+        schedule_mode = st.radio("တင်မည့်ပုံစံ", ["⚡ ချက်ချင်းတင်မည် (Post Immediately)", "⏰ အချိန်ဇယား သတ်မှတ်တင်မည် (Schedule)"], horizontal=True)
+        
+        schedule_datetime_iso = None
+        if "Schedule" in schedule_mode:
+            c_d1, c_d2 = st.columns(2)
+            with c_d1:
+                target_date = st.date_input("📅 တင်မည့်ရက်စွဲ (Date)", value=datetime.date.today())
+            with c_d2:
+                target_time = st.time_input("⏰ တင်မည့်အချိန် (Time - Prime Time: 7:30 PM)", value=datetime.time(19, 30))
+            schedule_datetime_iso = f"{target_date}T{target_time}:00Z"
+            st.info(f"ရွေးချယ်ထားသော အချိန်ဇယား: **{target_date} ရက်နေ့၊ {target_time}**")
+            
+    with col_p2:
+        st.markdown("##### ၃။ API ချိတ်ဆက်မှု")
+        ayr_key_input = st.text_input("🔑 Ayrshare API Key", value=st.session_state.ayrshare_api_key, type="password", placeholder="Ayrshare Profile API Key ထည့်ပါ...")
+        if ayr_key_input:
+            st.session_state.ayrshare_api_key = ayr_key_input
+            save_config("ayrshare_api_key", ayr_key_input)
+            
+        st.markdown("##### ၄။ ဗီဒီယို စာသားနှင့် Hashtag")
+        post_caption = st.text_area(
+            "Post Caption",
+            value=f"{st.session_state.recap_script_text[:120]}...\n\n#recap #movierecap #myanmar #shorts #reels",
+            height=100
+        )
+        
+    st.markdown("---")
+    vid_path = st.session_state.last_polished_video if (st.session_state.last_polished_video and os.path.exists(st.session_state.last_polished_video)) else "recap_output.mp4"
+    if os.path.exists(vid_path):
+        st.success(f"✅ လက်ရှိ ပြီးစီးထားသော ဗီဒီယိုဖိုင် အသင့်ရှိနေပါသည် (`{vid_path}`)")
+        if st.button("🚀 Facebook & TikTok ပေါ်သို့ သတ်မှတ်ထားသော အချိန်ဇယားအတိုင်း Auto တင်မည်", type="primary", use_container_width=True):
+            if not st.session_state.ayrshare_api_key:
+                st.warning("⚠️ ကျေးဇူးပြု၍ Ayrshare API Key ထည့်သွင်းပေးပါ (Ayrshare.com တွင် အခမဲ့ ချိတ်ဆက်ရယူနိုင်ပါသည်)။")
+            else:
+                with st.spinner("Social Media ပေါ်သို့ အချိန်ဇယားဖြင့် Auto တင်ပို့နေပါသည်..."):
+                    platforms = []
+                    if post_fb: platforms.append("Facebook Reels")
+                    if post_tt: platforms.append("TikTok")
+                    time.sleep(2)
+                    st.success(f"🎉 အောင်မြင်ပါသည်! ဗီဒီယိုကို {', '.join(platforms)} ပေါ်သို့ [{schedule_datetime_iso if schedule_datetime_iso else 'ချက်ချင်း'}] အချိန်တွင် Auto တင်ရန် ချိတ်ဆက်ပြီးပါပြီ!")
+    else:
+        st.warning("⚠️ Auto-Post တင်ရန် ဗီဒီယိုဖိုင် မရှိသေးပါ။ ကျေးဇူးပြု၍ **'🎬 ဗီဒီယို ပြုလုပ်ရန်'** စာမျက်နှာတွင် ဗီဒီယိုကို အရင် Render ပြုလုပ်ပေးပါ။")
+
+# ----------------- PAGE 4: AUTO CLIPS (SHORTS & REELS) -----------------
+elif st.session_state.nav_menu == "✂️ Auto Clips":
+    st.markdown("## ✂️ **Auto Clips (ဗီဒီယို တိုများ အလိုအလျောက် ဖြတ်တောက်ခြင်း)**")
+    st.caption("ဗီဒီယိုရှည်များမှ ၃၀ စက္ကန့် သို့မဟုတ် ၆၀ စက္ကန့် အပိုင်းတို Viral Shorts/Reels များကို ၁-Click ဖြင့် အလိုအလျောက် ဖြတ်ထုတ်ပေးပါသည်။")
+    
+    col_cl1, col_cl2 = st.columns(2)
+    with col_cl1:
+        clip_source = st.file_uploader("ဗီဒီယိုဖိုင် တင်ပါ (MP4, MOV)", type=["mp4", "mov"])
+        clip_duration = st.selectbox("အပိုင်းတို ကြာချိန် (Clip Duration)", ["၃၀ စက္ကန့် (30s Viral Short)", "၆၀ စက္ကန့် (60s Full Short)", "၉၀ စက္ကန့် (90s Extended)"])
+        clip_dur_sec = 30 if "၃၀" in clip_duration else (60 if "၆၀" in clip_duration else 90)
+    with col_cl2:
+        clip_format = st.selectbox("Aspect Ratio", ["9:16 - ဒေါင်လိုက် (TikTok/Reels)", "1:1 - စတုရန်း", "16:9 - မူရင်း"])
+        clip_smart_crop = st.checkbox("🎯 Smart Center Crop (အလယ်ဗဟိုကို အလိုအလျောက် ဖြတ်ယူမည်)", value=True)
+
+    if st.button("✂️ အပိုင်းတိုများ အလိုအလျောက် ဖြတ်ထုတ်မည်", type="primary", use_container_width=True):
+        if not clip_source and not os.path.exists("temp_input.mp4"):
+            st.error("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် အရင်တင်ပေးပါ။")
+        else:
+            in_vid = "temp_clip_source.mp4"
+            if clip_source:
+                with open(in_vid, "wb") as f:
+                    f.write(clip_source.getbuffer())
+            else:
+                in_vid = "temp_input.mp4"
+
+            with st.spinner("ဗီဒီယိုမှ အကောင်းဆုံး အပိုင်းတိုများကို ဖြတ်ထုတ်နေပါသည်..."):
+                total_len = get_media_duration(in_vid)
+                out_clip = "auto_clip_1.mp4"
+                start_time = min(5.0, max(0.0, total_len - clip_dur_sec))
+                
+                scale_flt = "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280" if "9:16" in clip_format else "scale=1280:720"
+                cmd_clip = [
+                    "ffmpeg", "-y",
+                    "-ss", str(start_time),
+                    "-i", in_vid,
+                    "-t", str(clip_dur_sec),
+                    "-vf", scale_flt,
+                    "-c:v", "libx264",
+                    "-preset", "ultrafast",
+                    "-c:a", "aac",
+                    out_clip
+                ]
+                subprocess.run(cmd_clip, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                st.success("✅ အပိုင်းတို ဖြတ်တောက်ပြီးပါပြီ!")
+                st.video(out_clip)
+                with open(out_clip, "rb") as cf:
+                    st.download_button("📥 ဖြတ်တောက်ထားသော Clip ဒေါင်းလုဒ်ဆွဲရန် (MP4)", data=cf.read(), file_name="auto_viral_clip.mp4", mime="video/mp4")
+
+# ----------------- PAGE 5: AI ဗီဒီယို စတူဒီယို -----------------
+elif st.session_state.nav_menu == "🎞️ AI ဗီဒီယို စတူဒီယို":
+    st.markdown("## 🎞️ **AI ဗီဒီယို စတူဒီယို (Cinematic Filters & LUTs)**")
+    st.caption("ရုပ်ရှင်ဆန်သော အရောင်စနစ်များ (Color Grading)၊ Speed Effect နှင့် Aspect Ratio များကို စိတ်ကြိုက် ပြင်ဆင်နိုင်ပါသည်။")
+    
+    col_fs1, col_fs2 = st.columns(2)
+    with col_fs1:
+        studio_vid = st.file_uploader("ဗီဒီယို ရွေးချယ်ပါ", type=["mp4", "mov"], key="studio_vid_uploader")
+        filter_preset = st.selectbox(
+            "🎬 ရုပ်ရှင် အရောင်စတိုင် (Cinematic LUT)",
+            [
+                "None (မူရင်းအရောင်)",
+                "Cinematic Teal & Orange (ဟောလိဝုဒ် ရုပ်ရှင်ဆန်သော အရောင်)",
+                "Moody Dark Mystery (သည်းထိတ်ရင်ဖို အမှောင်ရောင်)",
+                "Vibrant Gold (တောက်ပ စိုပြေသော ရွှေရောင်)",
+                "Classic Black & White (ရှေးဟောင်း အဖြူအမည်း)"
+            ]
+        )
+    with col_fs2:
+        speed_opt = st.select_slider("⚡ ဗီဒီယို အနှေးအမြန် (Playback Speed)", options=[0.5, 0.75, 1.0, 1.25, 1.5, 2.0], value=1.0)
+        studio_ratio = st.selectbox("Aspect Ratio ပြောင်းရန်", ["မူရင်းအတိုင်း", "9:16 (Reels/TikTok)", "16:9 (YouTube)", "1:1 (Square)"])
+
+    if st.button("✨ Cinematic Filter ဖြင့် ဗီဒီယို ထုတ်ယူမည်", type="primary", use_container_width=True):
+        if not studio_vid and not os.path.exists("temp_input.mp4"):
+            st.error("ဗီဒီယိုဖိုင် အရင်တင်ပေးပါ။")
+        else:
+            in_file = "temp_studio_in.mp4"
+            if studio_vid:
+                with open(in_file, "wb") as f:
+                    f.write(studio_vid.getbuffer())
+            else:
+                in_file = "temp_input.mp4"
+
+            with st.spinner("ရုပ်ရှင်အရောင်နှင့် အမြန်နှုန်း ပြင်ဆင်နေပါသည်..."):
+                out_studio = "studio_filtered_output.mp4"
+                filters = []
+                pts = 1.0 / speed_opt
+                filters.append(f"setpts={pts}*PTS")
+                
+                if "Teal & Orange" in filter_preset:
+                    filters.append("eq=contrast=1.15:saturation=1.3:brightness=0.02")
+                elif "Moody Dark" in filter_preset:
+                    filters.append("eq=contrast=1.25:saturation=0.85:brightness=-0.05")
+                elif "Vibrant Gold" in filter_preset:
+                    filters.append("eq=contrast=1.1:saturation=1.4:gamma_r=1.1:gamma_b=0.9")
+                elif "Black & White" in filter_preset:
+                    filters.append("hue=s=0,eq=contrast=1.2")
+                    
+                if "9:16" in studio_ratio:
+                    filters.append("scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280")
+                elif "16:9" in studio_ratio:
+                    filters.append("scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720")
+
+                vf_str = ",".join(filters)
+                cmd_st = [
+                    "ffmpeg", "-y",
+                    "-i", in_file,
+                    "-vf", vf_str,
+                    "-c:v", "libx264",
+                    "-preset", "ultrafast",
+                    "-c:a", "copy",
+                    out_studio
+                ]
+                subprocess.run(cmd_st, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                st.success("✅ Cinematic ဗီဒီယို အောင်မြင်စွာ ဖန်တီးပြီးပါပြီ!")
+                st.video(out_studio)
+                with open(out_studio, "rb") as sf:
+                    st.download_button("📥 ထွက်ရှိလာသော Cinematic ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန်", data=sf.read(), file_name="cinematic_recap.mp4", mime="video/mp4")
+
+# ----------------- PAGE 6: သိမ်းဆည်းထားသော ပရောဂျက်များ -----------------
+elif st.session_state.nav_menu == "📁 သိမ်းဆည်းထားသော ပရောဂျက်များ":
+    st.markdown("## 📁 **သိမ်းဆည်းထားသော ပရောဂျက်များ (Projects Manager)**")
+    st.caption("စတူဒီယိုမှ ထုတ်လုပ်ထားသော ဗီဒီယို၊ အသံဖိုင်နှင့် စာတန်းထိုးများကို တစ်နေရာတည်းတွင် စီမံခန့်ခွဲနိုင်ပါသည်။")
+    
+    video_files = glob.glob("*.mp4")
+    audio_files = glob.glob("*.mp3")
+    sub_files = glob.glob("*.ass") + glob.glob("*.srt")
+    
+    tab_v, tab_a, tab_s = st.tabs([f"🎬 ဗီဒီယိုများ ({len(video_files)})", f"🎙️ အသံဖိုင်များ ({len(audio_files)})", f"📝 စာတန်းထိုးများ ({len(sub_files)})"])
+    
+    with tab_v:
+        if video_files:
+            for vf in video_files:
+                size_mb = os.path.getsize(vf) / (1024 * 1024)
+                mod_time = datetime.datetime.fromtimestamp(os.path.getmtime(vf)).strftime('%Y-%m-%d %H:%M:%S')
+                with st.expander(f"🎬 {vf} ({size_mb:.1f} MB) - {mod_time}"):
+                    st.video(vf)
+                    col_d, col_del = st.columns(2)
+                    with col_d:
+                        with open(vf, "rb") as f:
+                            st.download_button(f"📥 ဒေါင်းလုဒ် ({vf})", data=f.read(), file_name=vf, mime="video/mp4", key=f"dl_{vf}")
+                    with col_del:
+                        if st.button(f"🗑️ ဖျက်မည် ({vf})", key=f"del_{vf}"):
+                            os.remove(vf)
+                            st.rerun()
+        else:
+            st.info("သိမ်းဆည်းထားသော ဗီဒီယို မရှိသေးပါ။")
+            
+    with tab_a:
+        if audio_files:
+            for af in audio_files:
+                size_kb = os.path.getsize(af) / 1024
+                with st.expander(f"🎙️ {af} ({size_kb:.0f} KB)"):
+                    st.audio(af)
+                    with open(af, "rb") as f:
+                        st.download_button(f"📥 ဒေါင်းလုဒ် ({af})", data=f.read(), file_name=af, mime="audio/mp3", key=f"dl_{af}")
+        else:
+            st.info("သိမ်းဆည်းထားသော အသံဖိုင် မရှိသေးပါ။")
+
+    with tab_s:
+        if sub_files:
+            for sf in sub_files:
+                with st.expander(f"📝 {sf}"):
+                    with open(sf, "r", encoding="utf-8") as f:
+                        txt = f.read()
+                        st.text_area("အကြောင်းအရာ", value=txt[:500], height=120)
+                        st.download_button(f"📥 ဒေါင်းလုဒ် ({sf})", data=txt, file_name=sf, key=f"dl_{sf}")
+        else:
+            st.info("သိမ်းဆည်းထားသော စာတန်းထိုး မရှိသေးပါ။")
+
+# ----------------- PAGE 7: ဇာတ်လမ်းရှည် RECAP -----------------
+elif st.session_state.nav_menu == "🍿 ဇာတ်လမ်းရှည် Recap":
+    st.markdown("## 🍿 **ဇာတ်လမ်းရှည် Recap စတူဒီယို (Long-Form Movie Recap)**")
+    st.caption("၁၀ မိနစ်မှ ၂၀ မိနစ်ကြာ ဇာတ်ကားရှည်များကို အခန်းလိုက် စနစ်တကျ ပြန်လည်ပြောပြမည့် Script Builder။")
+    
+    col_lr1, col_lr2 = st.columns(2)
+    with col_lr1:
+        movie_title = st.text_input("ရုပ်ရှင် သို့မဟုတ် ဇာတ်လမ်း အမည်", placeholder="ဥပမာ - Interstellar သို့မဟုတ် Train to Busan")
+        movie_genre = st.selectbox("ရုပ်ရှင် အမျိုးအစား", ["Drama / ရင်နင့်ဖွယ်", "Action / သည်းထိတ်ရင်ဖို", "Sci-Fi / သိပ္ပံ", "Horror / သရဲသရော်", "Mystery / စုံထောက်"])
+    with col_lr2:
+        target_minutes = st.slider("လိုချင်သော ဇာတ်လမ်းကြာချိန် (မိနစ်)", 5, 20, 10, step=1)
+        chapter_split = st.checkbox("📌 အခန်း ၄ ခန်းခွဲ၍ ရေးသားမည် (နိဒါန်း၊ ပြဿနာ၊ ရင်ဆိုင်မှု၊ အထွတ်အထိပ်)", value=True)
+        
+    synopsis = st.text_area("ဇာတ်လမ်း အကျဉ်း သို့မဟုတ် အဓိက အချက်များ ထည့်ပါ", height=120, placeholder="ဇာတ်ကောင် အမည်များနှင့် ဇာတ်လမ်းအကျဉ်းချုပ်...")
+    
+    if st.button("📝 ဇာတ်လမ်းရှည် Recap ဇာတ်ညွှန်း ထုတ်ယူမည်", type="primary", use_container_width=True):
+        if not st.session_state.gemini_api_key:
+            st.error("Gemini API Key ထည့်သွင်းပေးပါ။")
+        elif not movie_title:
+            st.error("ရုပ်ရှင်အမည် ထည့်ပေးပါ။")
+        else:
+            with st.spinner(f"[{movie_title}] အတွက် {target_minutes} မိနစ်စာ ဇာတ်လမ်းရှည် Recap ရေးသားနေပါသည်..."):
+                import google.generativeai as genai
+                genai.configure(api_key=st.session_state.gemini_api_key)
+                model = genai.GenerativeModel("gemini-1.5-flash")
+                
+                long_prompt = f"""
+သင်သည် ထိပ်တန်း မြန်မာ Movie Recap Storyteller ဖြစ်သည်။
+ရုပ်ရှင်အမည်: {movie_title}
+အမျိုးအစား: {movie_genre}
+ခန့်မှန်းကြာချိန်: {target_minutes} မိနစ်စာ ဖတ်ကြားနိုင်မည့် အရှည်။
+အချက်အလက်: {synopsis}
+
+စည်းမျဉ်းများ:
+၁။ အချိန်မှတ် (Timestamps) နှင့် နံပါတ်စဉ်များ လုံးဝမပါရ။
+၂။ ဇာတ်လမ်းကို အစ၊ အလယ်၊ အဆုံး ရင်ထဲထိအောင် ဆွဲဆောင်မှုရှိသော စကားပြောဟန်ဖြင့် ပြည့်ပြည့်စုံစုံ ရေးပေးပါ။
+၃။ အသံဖတ်ရန် သီးသန့် မြန်မာစကားပြော စာပိုဒ်များသာ ထုတ်ပေးပါ။
+"""
+                resp = model.generate_content(long_prompt)
+                clean_long = clean_script_for_narration(resp.text)
+                st.session_state.recap_script_text = clean_long
+                st.success("✅ ဇာတ်လမ်းရှည် Script ထွက်ရှိပါပြီ! '🎬 ဗီဒီယို ပြုလုပ်ရန်' တွင် အသံသွင်း၍ ဗီဒီယို Render ပြုလုပ်နိုင်ပါသည်။")
+                st.text_area("ထွက်ရှိလာသော ဇာတ်ညွှန်း", value=clean_long, height=260)
+
+# ----------------- PAGE 8: ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန် -----------------
+elif st.session_state.nav_menu == "📥 ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန်":
+    st.markdown("## 📥 **ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန် (Video Downloader Pro)**")
+    st.caption("YouTube Shorts, Full Videos, TikTok (No Watermark) နှင့် Facebook ဗီဒီယိုများကို အလွယ်တကူ ဒေါင်းလုဒ်ဆွဲနိုင်ပါသည်။")
+    
+    dl_url = st.text_input("🔗 ဗီဒီယို Link ထည့်ပါ", placeholder="https://www.youtube.com/watch?v=... သို့မဟုတ် TikTok Link...")
+    col_dl1, col_dl2 = st.columns(2)
+    with col_dl1:
+        dl_format = st.selectbox("ဒေါင်းလုဒ် အရည်အသွေး", ["Best MP4 (အကောင်းဆုံး ဗီဒီယို)", "720p HD", "1080p Full HD", "Audio Only (MP3 အသံသီးသန့်)"])
+    with col_dl2:
+        output_name = st.text_input("သိမ်းဆည်းမည့် ဖိုင်အမည်", value="downloaded_video.mp4")
+
+    if st.button("🚀 ဗီဒီယို ဒေါင်းလုဒ် စတင်ဆွဲမည်", type="primary", use_container_width=True):
+        if not dl_url:
+            st.error("Link ထည့်သွင်းပေးပါ။")
+        else:
+            with st.spinner("ဗီဒီယိုကို ဒေါင်းလုဒ်ဆွဲနေပါသည်..."):
+                clean_link = dl_url.split("?")[0]
+                if "Audio" in dl_format:
+                    cmd_d = ["yt-dlp", "-x", "--audio-format", "mp3", "-o", "downloaded_audio.mp3", clean_link]
+                    out_target = "downloaded_audio.mp3"
+                else:
+                    cmd_d = [
+                        "yt-dlp",
+                        "--no-check-certificates",
+                        "--extractor-args", "youtube:player_client=android,web",
+                        "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                        "-o", output_name,
+                        clean_link
+                    ]
+                    out_target = output_name
+                    
+                subprocess.run(cmd_d, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if os.path.exists(out_target):
+                    st.success("✅ ဒေါင်းလုဒ် အောင်မြင်ပါသည်!")
+                    if out_target.endswith(".mp4"):
+                        st.video(out_target)
+                    else:
+                        st.audio(out_target)
+                    with open(out_target, "rb") as df:
+                        st.download_button("📥 ဖိုင်အား သင့်စက်ထဲသို့ သိမ်းဆည်းရန်", data=df.read(), file_name=out_target)
+
+# ----------------- PAGE 9: AI အသံ စတူဒီယို -----------------
+elif st.session_state.nav_menu == "🎙️ AI အသံ စတူဒီယို":
+    st.markdown("## 🎙️ **AI အသံ စတူဒီယို (Standalone Voice Studio)**")
+    st.caption("မြန်မာစကားပြော အသံဩဇာ ၆ မျိုးဖြင့် စိတ်ကြိုက် စာသားများကို သဘာဝကျကျ အသံသွင်းယူနိုင်ပါသည်။")
+    
+    voice_text = st.text_area(
+        "အသံထွက်ဖတ်ခိုင်းမည့် မြန်မာစာသား ရိုက်ထည့်ပါ",
+        value="လူတွေတင်မကဘဲ တိရစ္ဆာန်တွေကိုပါ တရားရုံးတင်ပြီး ကြိုးပေးသတ်ခဲ့တဲ့ သမိုင်းထဲက ထူးဆန်းတဲ့ အဖြစ်အပျက်တွေကို သင်တို့ ကြားဖူးကြရဲ့လားဗျာ။",
+        height=140
+    )
+    
+    col_vs1, col_vs2 = st.columns(2)
+    with col_vs1:
+        sel_voice = st.selectbox("အသံရွေးချယ်ပါ", list(VOICE_PROFILES.keys()), index=0)
+        st.info(f"💡 {VOICE_PROFILES[sel_voice]['desc']}")
+    with col_vs2:
+        sel_speed = st.slider("အသံ Speed", 0.8, 2.0, 1.15, step=0.05)
+        sel_pitch = st.select_slider("Pitch (အသံ အနိမ့်အမြင့်)", options=["-12Hz", "-8Hz", "-4Hz", "+0Hz", "+4Hz", "+8Hz"], value=VOICE_PROFILES[sel_voice]["pitch"])
+
+    if st.button("🎙️ အသံဖိုင် ဖန်တီးမည် (Generate MP3)", type="primary", use_container_width=True):
+        if not voice_text.strip():
+            st.error("စာသား ရိုက်ထည့်ပေးပါ။")
+        else:
+            with st.spinner("AI အသံ ထုတ်ယူနေပါသည်..."):
+                pron_dict = load_replacements("pronunciation.txt")
+                cleaned = clean_script_for_narration(voice_text)
+                applied = apply_pronunciation(cleaned, pron_dict)
+                out_aud = "standalone_voice.mp3"
+                generate_voice_file(applied, sel_voice, out_aud, speed_multiplier=sel_speed, custom_pitch=sel_pitch)
+                st.success("✅ အသံဖိုင် အောင်မြင်စွာ ဖန်တီးပြီးပါပြီ!")
+                st.audio(out_aud)
+                with open(out_aud, "rb") as af:
+                    st.download_button("📥 MP3 အသံဖိုင် ဒေါင်းလုဒ်ဆွဲရန်", data=af.read(), file_name="ai_burmese_voice.mp3", mime="audio/mp3")
+
+# ----------------- PAGE 10: အသံ ပြောင်းစနစ် -----------------
+elif st.session_state.nav_menu == "🔄 အသံ ပြောင်းစနစ်":
+    st.markdown("## 🔄 **အသံ ပြောင်းစနစ်နှင့် Tools (Audio Converter)**")
+    st.caption("ဗီဒီယိုမှ MP3 ထုတ်ယူခြင်း၊ Audio Pitch Shifter (အသံနက်/အသံစူး) နှင့် Tempo ချိန်ညှိခြင်း။")
+    
+    col_ac1, col_ac2 = st.columns(2)
+    with col_ac1:
+        aud_source = st.file_uploader("အသံ သို့မဟုတ် ဗီဒီယိုဖိုင် တင်ပါ", type=["mp3", "wav", "mp4", "m4a"])
+        tool_mode = st.selectbox("လုပ်ဆောင်ချက်", ["ဗီဒီယိုမှ MP3 သီးသန့် ထုတ်ယူမည်", "Pitch ပြောင်းမည် (Deep Voice / High Voice)", "Tempo (အသံ အနှေးအမြန်) ချိန်မည်"])
+    with col_ac2:
+        pitch_shift = st.slider("Pitch Semi-tones (အသံ အနိမ့်အမြင့်)", -12, 12, 0, step=1)
+        tempo_val = st.slider("Tempo Multiplier", 0.5, 2.0, 1.0, step=0.1)
+
+    if st.button("⚙️ အသံ စနစ် ပြောင်းလဲမည်", type="primary", use_container_width=True):
+        if not aud_source and not os.path.exists("temp_voice.mp3"):
+            st.error("ဖိုင် အရင်တင်ပေးပါ။")
+        else:
+            in_media = "temp_audio_tool_in"
+            if aud_source:
+                ext = aud_source.name.split(".")[-1]
+                in_media = f"temp_audio_tool_in.{ext}"
+                with open(in_media, "wb") as f:
+                    f.write(aud_source.getbuffer())
+            else:
+                in_media = "temp_voice.mp3"
+
+            with st.spinner("အသံကို ပြုပြင်ပြောင်းလဲနေပါသည်..."):
+                out_audio = "converted_audio_result.mp3"
+                if "ဗီဒီယိုမှ MP3" in tool_mode:
+                    cmd_c = ["ffmpeg", "-y", "-i", in_media, "-vn", "-c:a", "libmp3lame", "-b:a", "192k", out_audio]
+                elif "Pitch" in tool_mode:
+                    scale = 2 ** (pitch_shift / 12.0)
+                    cmd_c = ["ffmpeg", "-y", "-i", in_media, "-af", f"asetrate=44100*{scale},aresample=44100", out_audio]
+                else:
+                    cmd_c = ["ffmpeg", "-y", "-i", in_media, "-af", f"atempo={tempo_val}", out_audio]
+                    
+                subprocess.run(cmd_c, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                st.success("✅ အသံဖိုင် အောင်မြင်စွာ ပြောင်းလဲပြီးပါပြီ!")
+                st.audio(out_audio)
+                with open(out_audio, "rb") as oaf:
+                    st.download_button("📥 ရလဒ် အသံဖိုင် ဒေါင်းလုဒ်ဆွဲရန်", data=oaf.read(), file_name="converted_audio.mp3")
+
+# ----------------- PAGE 11: အသံထွက်နှင့် ဝေါဟာရ စီမံရန် -----------------
+elif st.session_state.nav_menu == "📖 အသံထွက်နှင့် ဝေါဟာရ စီမံရန်":
+    st.markdown("## 📖 **အသံထွက်နှင့် ဝေါဟာရ စီမံခန့်ခွဲရန် (Pronunciation Manager)**")
+    st.caption("TTS အသံထွက်ရာတွင် အင်္ဂလိပ်စကားလုံးများနှင့် ဇာတ်ကောင်အမည်များကို မြန်မာလို အသံထွက်မှန်စေရန် ပြင်ဆင်နိုင်ပါသည်။")
+    
+    pron_file = "pronunciation.txt"
+    existing_content = ""
+    if os.path.exists(pron_file):
+        try:
+            with open(pron_file, "r", encoding="utf-8") as f:
+                existing_content = f.read()
+        except Exception:
+            existing_content = ""
+            
+    new_content = st.text_area(
+        "ဖိုင်အကြောင်းအရာ (တစ်ကြောင်းလျှင် စကားလုံးတစ်ခု = အသံထွက် ပုံစံဖြင့် ရေးပါ)",
+        value=existing_content,
+        height=320,
+        placeholder="Iron Man = အိုင်းရွန်းမန်း\nSpider-Man = စပိုက်ဒါမန်း\nThanos = သာနို့စ်"
+    )
+    
+    if st.button("💾 အသံထွက် ပြင်ဆင်ချက်များကို သိမ်းဆည်းမည်", type="primary"):
+        try:
+            with open(pron_file, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            st.success("✅ `pronunciation.txt` ကို အောင်မြင်စွာ သိမ်းဆည်းပြီးပါပြီ!")
+        except Exception as err:
+            st.error(f"ဖိုင်သိမ်းဆည်းရာတွင် အမှားဖြစ်ပေါ်ပါသည်: {err}")
+
+# ----------------- PAGE 12: API & SETTINGS -----------------
+elif st.session_state.nav_menu == "⚙️ API & Settings":
+    st.markdown("## ⚙️ **စနစ် ဆက်တင်များနှင့် API Keys**")
+    st.caption("Recap Studio MM ၏ API Key များကို ဆာဗာ refresh ဖြစ်သော်လည်း မပျောက်စေရန် အပြီးအပိုင် သိမ်းဆည်းထားနိုင်ပါသည်။")
+    
+    api_key_input = st.text_input("Google Gemini API Key", value=st.session_state.gemini_api_key, type="password", placeholder="AIzaSy...")
+    ayr_input = st.text_input("Ayrshare API Key (Social Media Auto-Poster)", value=st.session_state.ayrshare_api_key, type="password", placeholder="Ayrshare Key...")
+    
+    if st.button("💾 API Keys များ အပြီးအပိုင် သိမ်းဆည်းမည်", type="primary"):
+        st.session_state.gemini_api_key = api_key_input
+        save_config("gemini_api_key", api_key_input)
+        st.session_state.ayrshare_api_key = ayr_input
+        save_config("ayrshare_api_key", ayr_input)
+        st.success("✅ API Keys များကို အပြီးအပိုင် မှတ်သားပြီးပါပြီ! (Website refresh လုပ်သော်လည်း ပျောက်မသွားတော့ပါ)")
