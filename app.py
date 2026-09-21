@@ -4,10 +4,12 @@ import re
 import time
 import json
 import glob
+import base64
 import asyncio
 import datetime
 import subprocess
 import urllib.request
+from PIL import Image, ImageDraw
 
 # ----------------- PAGE CONFIG -----------------
 st.set_page_config(
@@ -54,21 +56,79 @@ def ensure_myanmar_fonts():
 
 ensure_myanmar_fonts()
 
-# ----------------- LOGO DETECTION -----------------
-def find_studio_logo():
+# ----------------- WEBSITE LOGO DETECTION -----------------
+def find_website_logo():
     candidates = [
-        "logo.png", "logo.jpg", "logo.jpeg",
-        "Gemini_Generated_Image_mx9b8emx9b8emx9b.jpg"
+        "Gemini_Generated_Image_mx9b8emx9b8emx9b.jpg",
+        "recap_studiomm_logo.png",
+        "recap_studiomm.jpg",
+        "website_logo.png",
+        "website_logo.jpg",
+        "logo.png",
+        "logo.jpg"
     ]
     for c in candidates:
         if os.path.exists(c):
             return c
-    matches = glob.glob("*logo*.png") + glob.glob("*logo*.jpg") + glob.glob("*Gemini_Generated_Image*.jpg")
+    matches = glob.glob("*Gemini_Generated_Image*.jpg") + glob.glob("*recap*.png") + glob.glob("*recap*.jpg") + glob.glob("*logo*.png")
     if matches:
         return matches[0]
     return None
 
-STUDIO_LOGO_PATH = find_studio_logo()
+WEBSITE_LOGO_PATH = find_website_logo()
+
+def get_base64_image(image_path):
+    if image_path and os.path.exists(image_path):
+        try:
+            with open(image_path, "rb") as img_f:
+                b64 = base64.b64encode(img_f.read()).decode("utf-8")
+                ext = image_path.split(".")[-1].lower()
+                mime = "image/png" if ext == "png" else "image/jpeg"
+                return f"data:{mime};base64,{b64}"
+        except Exception:
+            pass
+    return ""
+
+WEBSITE_LOGO_B64 = get_base64_image(WEBSITE_LOGO_PATH)
+
+# ----------------- USER WATERMARK LOGO PROCESSOR (REMOVE BG & CIRCLE) -----------------
+def process_user_logo(input_img_path, output_img_path, make_circle=True, remove_white_bg=True, add_border=True):
+    """
+    User တင်ပေးသော Video Watermark Logo ကို နောက်ခံရှင်းလင်းပြီး (Remove BG)
+    ဗီဒီယိုပေါ်တွင် ကပ်ရန် အလွန်သန့်ပြန့်လှပသော အဝိုင်းပုံ badge အဖြစ် ပြောင်းလဲပေးသည်။
+    """
+    img = Image.open(input_img_path).convert("RGBA")
+    if remove_white_bg:
+        data = list(img.getdata())
+        new_data = []
+        for item in data:
+            if item[0] > 230 and item > 230 and item > 230:
+                new_data.append((255, 255, 255, 0))
+            else:
+                new_data.append(item)
+        img.putdata(new_data)
+        
+    if make_circle:
+        w, h = img.size
+        min_dim = min(w, h)
+        left = (w - min_dim) // 2
+        top = (h - min_dim) // 2
+        img = img.crop((left, top, left + min_dim, top + min_dim))
+        
+        size = (min_dim * 2, min_dim * 2)
+        mask = Image.new("L", size, 0)
+        draw = ImageDraw.Draw(mask)
+        draw.ellipse((0, 0) + size, fill=255)
+        mask = mask.resize((min_dim, min_dim), Image.Resampling.LANCZOS)
+        
+        out = Image.new("RGBA", (min_dim, min_dim), (0, 0, 0, 0))
+        out.paste(img, (0, 0), mask=mask)
+        if add_border:
+            draw_out = ImageDraw.Draw(out)
+            b_width = max(2, min_dim // 40)
+            draw_out.ellipse((b_width//2, b_width//2, min_dim - b_width//2, min_dim - b_width//2), outline=(255, 255, 255, 230), width=b_width)
+        img = out
+    img.save(output_img_path, "PNG")
 
 # ----------------- PERSISTENT CONFIG & STORAGE -----------------
 CONFIG_FILE = ".recap_config.json"
@@ -98,8 +158,14 @@ def save_config(key, value):
     except Exception:
         pass
 
-# ----------------- VOICE PROFILES (DISTINCT TIMBRES) -----------------
+# ----------------- VOICE PROFILES (MATCHING PREMIUM RECAP) -----------------
 VOICE_PROFILES = {
+    "မင်းသန့် (Recommended - Agency, Confident Narrator)": {
+        "voice": "my-MM-ThihaNeural",
+        "pitch": "-2Hz",
+        "rate_offset": 8,
+        "desc": "ဆွဲဆောင်မှုရှိပြီး စကားပြောအလွန်ပီပြင်သော Movie Recap အသံ (ထိပ်တန်းရွေးချယ်မှု)"
+    },
     "ကိုမင်း (Deep Cinematic Voice - Movie Recap Specialist)": {
         "voice": "my-MM-ThihaNeural",
         "pitch": "-8Hz",
@@ -116,24 +182,24 @@ VOICE_PROFILES = {
         "voice": "my-MM-ThihaNeural",
         "pitch": "+4Hz",
         "rate_offset": 10,
-        "desc": "ဆွဲဆောင်မှုရှိပြီး စကားပြောအလွန်သွက်လက်သော အသံ"
+        "desc": "အလွန်သွက်လက်ပြီး ဆွဲဆောင်အားပြင်းသော အသံ"
     },
     "မေသူ (Soft Emotional Voice - Drama & Mystery)": {
         "voice": "my-MM-NilarNeural",
-        "pitch": "+5Hz",
+        "pitch": "+4Hz",
         "rate_offset": 2,
-        "desc": "နူးညံ့ညင်သာပြီး စိတ်ခံစားမှုပေးစွမ်းနိုင်သော အသံ"
+        "desc": "နူးညံ့ညင်သာပြီး စိတ်ခံစားမှု အပြည့်ပါသော အမျိုးသမီးအသံ"
     },
     "နဒီ (Native Female - Standard Narration)": {
         "voice": "my-MM-NilarNeural",
         "pitch": "+0Hz",
-        "rate_offset": 4,
+        "rate_offset": 5,
         "desc": "ကြည်လင်ပြတ်သားသော မြန်မာအမျိုးသမီး အသံ"
     },
     "ဇင်ဇင် (Fast-Paced Storyteller Female)": {
         "voice": "my-MM-NilarNeural",
         "pitch": "-3Hz",
-        "rate_offset": 8,
+        "rate_offset": 9,
         "desc": "ခေတ်မီဆန်းသစ်ပြီး စကားပြောဟန် သွက်လက်သော ဇာတ်လမ်းပြောသံ"
     }
 }
@@ -157,6 +223,12 @@ if "ayrshare_api_key" not in st.session_state:
 if "recap_script_text" not in st.session_state:
     st.session_state.recap_script_text = ""
 
+if "top_hook_text" not in st.session_state:
+    st.session_state.top_hook_text = "တိရစ္ဆာန်တွေကို တရားစွဲ"
+
+if "bottom_hook_text" not in st.session_state:
+    st.session_state.bottom_hook_text = "ကြိုးပေးကွပ်မျက်ခဲ့"
+
 if "saved_voice_speed" not in st.session_state:
     st.session_state.saved_voice_speed = 1.15
 
@@ -164,13 +236,13 @@ if "saved_video_speed" not in st.session_state:
     st.session_state.saved_video_speed = 1.0
 
 if "saved_voice" not in st.session_state:
-    st.session_state.saved_voice = "ကိုမင်း (Deep Cinematic Voice - Movie Recap Specialist)"
+    st.session_state.saved_voice = "မင်းသန့် (Recommended - Agency, Confident Narrator)"
 
 if "saved_model" not in st.session_state:
     st.session_state.saved_model = "gemini-1.5-flash"
 
 if "saved_bgm_vol" not in st.session_state:
-    st.session_state.saved_bgm_vol = 0.15
+    st.session_state.saved_bgm_vol = 0.12
 
 if "last_base_video" not in st.session_state:
     st.session_state.last_base_video = ""
@@ -187,21 +259,21 @@ if "last_polished_video" not in st.session_state:
 def navigate_to(page_name):
     st.session_state.nav_menu = page_name
 
-# ----------------- CUSTOM STYLING WITH NEON ANIMATIONS -----------------
+# ----------------- CUSTOM STYLING (DARK NEON THEME) -----------------
 st.markdown("""
 <style>
     .stApp {
-        background-color: #07100e !important;
+        background-color: #070e13 !important;
         color: #e2e8f0;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
     section[data-testid="stSidebar"] {
-        background-color: #040908 !important;
-        border-right: 1px solid #132420;
+        background-color: #03080b !important;
+        border-right: 1px solid #11222c;
     }
     .user-profile-box {
-        background: linear-gradient(135deg, #0e1e1b, #091412);
-        border: 1px solid #1b3630;
+        background: linear-gradient(135deg, #0e1c26, #09131a);
+        border: 1px solid #1b3548;
         border-radius: 12px;
         padding: 12px 14px;
         margin-bottom: 18px;
@@ -218,15 +290,15 @@ st.markdown("""
         border-radius: 6px;
     }
     .hero-card {
-        background: linear-gradient(135deg, #131d33 0%, #0f1726 60%, #0a0f1a 100%);
-        border: 1px solid #25334d;
+        background: linear-gradient(135deg, #0d2232 0%, #081622 60%, #040c13 100%);
+        border: 1px solid #1c3b52;
         border-radius: 18px;
         padding: 24px;
         margin-bottom: 24px;
     }
     .action-card {
-        background: #0d1917;
-        border: 1px solid #172d29;
+        background: #09141e;
+        border: 1px solid #162b3d;
         border-radius: 14px;
         padding: 18px;
         margin-bottom: 14px;
@@ -234,75 +306,114 @@ st.markdown("""
         transition: transform 0.2s, border-color 0.2s;
     }
     .action-card:hover {
-        border-color: #f59e0b;
+        border-color: #06b6d4;
         transform: translateY(-2px);
     }
     .tweaker-box {
-        background: linear-gradient(135deg, #0b1a20, #050d11);
+        background: linear-gradient(135deg, #081722, #040c12);
         border: 2px solid #0284c7;
         border-radius: 16px;
-        padding: 22px;
-        margin: 20px 0;
-        box-shadow: 0 0 25px rgba(2, 132, 199, 0.3);
+        padding: 20px;
+        margin: 18px 0;
+        box-shadow: 0 0 25px rgba(2, 132, 199, 0.25);
     }
-    /* NEON GLOWING ANIMATION */
+    /* NEON GLOWING RENDERING SCREEN MATCHING PREMIUM RECAP */
     .neon-loader-card {
-        background: radial-gradient(circle, #0b1c24 0%, #030a0d 100%);
+        background: radial-gradient(circle, #09202e 0%, #030a10 100%);
         border: 2px solid #06b6d4;
-        border-radius: 20px;
-        padding: 35px 20px;
+        border-radius: 22px;
+        padding: 40px 24px;
         text-align: center;
-        box-shadow: 0 0 25px rgba(6, 182, 212, 0.45), inset 0 0 20px rgba(59, 130, 246, 0.25);
-        animation: neonCardPulse 2s infinite alternate;
+        box-shadow: 0 0 35px rgba(6, 182, 212, 0.4), inset 0 0 25px rgba(59, 130, 246, 0.25);
+        animation: neonCardPulse 2.5s infinite alternate;
         margin: 20px 0;
     }
     @keyframes neonCardPulse {
-        0% { box-shadow: 0 0 20px #06b6d4, inset 0 0 15px #3b82f6; border-color: #06b6d4; }
-        50% { box-shadow: 0 0 35px #ec4899, inset 0 0 25px #8b5cf6; border-color: #ec4899; }
-        100% { box-shadow: 0 0 20px #06b6d4, inset 0 0 15px #3b82f6; border-color: #06b6d4; }
+        0% { box-shadow: 0 0 25px #06b6d4, inset 0 0 20px #3b82f6; border-color: #06b6d4; }
+        50% { box-shadow: 0 0 45px #ec4899, inset 0 0 30px #8b5cf6; border-color: #ec4899; }
+        100% { box-shadow: 0 0 25px #06b6d4, inset 0 0 20px #3b82f6; border-color: #06b6d4; }
     }
-    .neon-logo-glow {
-        width: 90px;
-        height: 90px;
-        margin: 0 auto 15px auto;
-        border-radius: 50%;
+    .neon-ring-container {
+        position: relative;
+        width: 130px;
+        height: 130px;
+        margin: 0 auto 16px auto;
         display: flex;
         align-items: center;
         justify-content: center;
-        background: linear-gradient(135deg, #06b6d4, #ec4899);
-        box-shadow: 0 0 25px #06b6d4, 0 0 50px #ec4899;
     }
-    .neon-title {
-        color: #ffffff;
-        font-size: 24px;
-        font-weight: 800;
-        letter-spacing: 3px;
-        text-shadow: 0 0 10px #06b6d4, 0 0 20px #06b6d4, 0 0 30px #3b82f6;
-    }
-    .neon-subtitle {
-        color: #38bdf8;
-        font-size: 13px;
-        letter-spacing: 2px;
-        font-weight: 700;
-        margin-top: 6px;
-    }
-    .neon-dots span {
-        display: inline-block;
-        width: 10px;
-        height: 10px;
-        margin: 15px 4px 0 4px;
-        background-color: #06b6d4;
+    .neon-spinner-ring {
+        position: absolute;
+        width: 130px;
+        height: 130px;
         border-radius: 50%;
-        box-shadow: 0 0 10px #06b6d4;
-        animation: neonDotsBounce 1.2s infinite ease-in-out both;
+        border: 3px solid transparent;
+        border-top-color: #06b6d4;
+        border-right-color: #ec4899;
+        border-bottom-color: #f59e0b;
+        animation: neonSpin 2s linear infinite;
+        box-shadow: 0 0 20px rgba(6, 182, 212, 0.6);
     }
-    .neon-dots span:nth-child(1) { animation-delay: -0.32s; }
-    .neon-dots span:nth-child(2) { animation-delay: -0.16s; }
-    .neon-dots span:nth-child(3) { animation-delay: 0s; }
-    .neon-dots span:nth-child(4) { animation-delay: 0.16s; }
-    @keyframes neonDotsBounce {
-        0%, 80%, 100% { transform: scale(0); opacity: 0.3; }
-        40% { transform: scale(1.3); opacity: 1; box-shadow: 0 0 15px #ec4899; background-color: #ec4899; }
+    @keyframes neonSpin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    .neon-logo-img {
+        width: 90px;
+        height: 90px;
+        border-radius: 50%;
+        object-fit: cover;
+        box-shadow: 0 0 20px rgba(255, 255, 255, 0.3);
+    }
+    .recap-voice-badge {
+        display: inline-block;
+        background: linear-gradient(90deg, #0284c7, #2563eb);
+        color: #ffffff;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 2px;
+        padding: 4px 14px;
+        border-radius: 20px;
+        margin-bottom: 12px;
+        box-shadow: 0 0 15px rgba(2, 132, 199, 0.6);
+    }
+    .neon-phase-text {
+        color: #ffffff;
+        font-size: 22px;
+        font-weight: 800;
+        letter-spacing: 1px;
+        margin: 10px 0 4px 0;
+        text-shadow: 0 0 12px #06b6d4, 0 0 24px #3b82f6;
+    }
+    .neon-sub-phase {
+        color: #38bdf8;
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: 1px;
+    }
+    .neon-sound-waves {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 6px;
+        height: 30px;
+        margin: 18px 0;
+    }
+    .neon-bar {
+        width: 5px;
+        background: linear-gradient(180deg, #06b6d4, #ec4899);
+        border-radius: 3px;
+        animation: waveGrow 1.2s infinite ease-in-out alternate;
+    }
+    .neon-bar:nth-child(1) { height: 10px; animation-delay: 0.1s; }
+    .neon-bar:nth-child(2) { height: 22px; animation-delay: 0.3s; }
+    .neon-bar:nth-child(3) { height: 32px; animation-delay: 0.2s; }
+    .neon-bar:nth-child(4) { height: 18px; animation-delay: 0.4s; }
+    .neon-bar:nth-child(5) { height: 28px; animation-delay: 0.1s; }
+    .neon-bar:nth-child(6) { height: 12px; animation-delay: 0.5s; }
+    @keyframes waveGrow {
+        0% { transform: scaleY(0.4); opacity: 0.4; }
+        100% { transform: scaleY(1.4); opacity: 1; box-shadow: 0 0 10px #06b6d4; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -322,11 +433,6 @@ def clean_script_for_narration(text):
     return cleaned_text
 
 def prepare_uninterrupted_narration_text(raw_text):
-    """
-    အသံသွင်းရာတွင် ကြားထဲ ရပ်တန့်နေခြင်း (Awkward 1.5s Pauses) ကို အမြစ်ပြတ် ဖယ်ရှားပြီး
-    YouTuber စကားပြောဟန်ကဲ့သို့ တစ်ဆက်တည်း တောက်လျှောက် ဖတ်ပြစေရန်
-    ပုဒ်မ (။) နှင့် မလိုလားအပ်သော ပုဒ်ကလေး (၊) များကို ဖယ်ရှားပေးသည်။
-    """
     if not raw_text:
         return ""
     t = clean_script_for_narration(raw_text)
@@ -335,7 +441,6 @@ def prepare_uninterrupted_narration_text(raw_text):
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
-# ----------------- PRONUNCIATION UTILS -----------------
 def load_replacements(filepath):
     data = {}
     if os.path.exists(filepath):
@@ -359,7 +464,6 @@ def apply_pronunciation(text, pron_dict):
         text = re.sub(rf"\b{re.escape(word)}\b", pron, text, flags=re.IGNORECASE)
     return text
 
-# ----------------- MEDIA UTILS -----------------
 def get_media_duration(file_path):
     cmd = [
         "ffprobe", "-v", "error",
@@ -414,7 +518,7 @@ async def run_edge_tts(text, voice_name, output_path, rate="+0%", pitch="+0Hz"):
     await communicate.save(output_path)
 
 def generate_voice_file(text, voice_choice, output_audio_path, speed_multiplier=1.15, custom_pitch=None):
-    prof = VOICE_PROFILES.get(voice_choice, VOICE_PROFILES["ကိုမင်း (Deep Cinematic Voice - Movie Recap Specialist)"])
+    prof = VOICE_PROFILES.get(voice_choice, VOICE_PROFILES["မင်းသန့် (Recommended - Agency, Confident Narrator)"])
     voice_code = prof["voice"]
     base_pitch = custom_pitch if custom_pitch is not None else prof["pitch"]
     rate_val = int(round((speed_multiplier - 1.0) * 100)) + prof["rate_offset"]
@@ -423,42 +527,22 @@ def generate_voice_file(text, voice_choice, output_audio_path, speed_multiplier=
     flowing_text = prepare_uninterrupted_narration_text(text)
     asyncio.run(run_edge_tts(flowing_text, voice_code, output_audio_path, rate=rate_str, pitch=base_pitch))
 
-# ----------------- ADVANCED SUBTITLES (ASS FORMAT) -----------------
-def create_ass_subtitles(
+# ----------------- ASS SUBTITLE & AI HOOK GENERATOR -----------------
+def create_ass_with_hook_and_subtitles(
+    hook_line1,
+    hook_line2,
     script_text,
     total_duration,
     ass_path,
     font_name="Padauk",
-    font_size=36,
-    margin_v=260,
+    sub_font_size=38,
+    sub_margin_v=240,
     sub_color="Yellow (ရွှေဝါရောင်)",
     sub_bg="Box (အမည်းနောက်ခံ ဘား)",
+    hook_color="Yellow (ရွှေဝါရောင်)",
+    enable_hook=True,
     max_chars=28
 ):
-    clean_text = clean_script_for_narration(script_text)
-    raw_segments = [s.strip() for s in re.split(r"[၊။\n]+", clean_text) if s.strip()]
-    chunks = []
-    for seg in raw_segments:
-        if len(seg) <= max_chars:
-            chunks.append(seg)
-        else:
-            words = seg.split(" ")
-            current = ""
-            for w in words:
-                if len(current) + len(w) + 1 <= max_chars:
-                    current = (current + " " + w).strip()
-                else:
-                    if current:
-                        chunks.append(current)
-                    current = w
-            if current:
-                chunks.append(current)
-                
-    if not chunks:
-        chunks = [clean_text]
-        
-    chunk_time = total_duration / len(chunks)
-    
     def format_ass_time(seconds):
         hrs = int(seconds // 3600)
         mins = int((seconds % 3600) // 60)
@@ -471,11 +555,11 @@ def create_ass_subtitles(
         "White (အဖြူရောင်)": "&H00FFFFFF",
         "Green (စိမ်းဖန့်ရောင်)": "&H0000FF00",
         "Cyan (မိုးပြာရောင်)": "&H00FFFF00",
-        "Coral Pink (ပန်းနုရောင်)": "&H008080FF",
         "Gold (ရွှေရောင်)": "&H0000D7FF"
     }
-    primary_col = color_map.get(sub_color, "&H0000FFFF")
-    
+    sub_col_ass = color_map.get(sub_color, "&H0000FFFF")
+    hook_col_ass = color_map.get(hook_color, "&H0000FFFF")
+
     if "Box" in sub_bg and "Semi" not in sub_bg:
         border_style = "3"
         outline = "1"
@@ -488,7 +572,7 @@ def create_ass_subtitles(
         back_colour = "&H40000000"
     else:
         border_style = "1"
-        outline = "3"
+        outline = "3.5"
         shadow = "2"
         back_colour = "&H00000000"
 
@@ -501,17 +585,49 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},{primary_col},&H000000FF,&H00000000,{back_colour},-1,0,0,0,100,100,0,0,{border_style},{outline},{shadow},2,30,30,{margin_v},1
+Style: SubtitleStyle,{font_name},{sub_font_size},{sub_col_ass},&H000000FF,&H00000000,{back_colour},-1,0,0,0,100,100,0,0,{border_style},{outline},{shadow},2,30,30,{sub_margin_v},1
+Style: HookStyle,{font_name},44,{hook_col_ass},&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,4,2,8,20,20,130,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
+    # 1. Add Hook Text at top
+    if enable_hook and (hook_line1 or hook_line2):
+        hook_display = ""
+        if hook_line1 and hook_line2:
+            hook_display = f"{hook_line1}\\N{hook_line2}"
+        elif hook_line1:
+            hook_display = hook_line1
+        else:
+            hook_display = hook_line2
+        ass_content += f"Dialogue: 1,0:00:00.00,{format_ass_time(total_duration)},HookStyle,,0,0,0,,{hook_display}\n"
+
+    # 2. Add chunks of Myanmar subtitles
+    raw_segments = [s.strip() for s in re.split(r"[၊။\n]+", script_text) if s.strip()]
+    chunks = []
+    for seg in raw_segments:
+        if len(seg) <= max_chars:
+            chunks.append(seg)
+        else:
+            words = seg.split(" ")
+            current = ""
+            for w in words:
+                if len(current) + len(w) + 1 <= max_chars:
+                    current = (current + " " + w).strip()
+                else:
+                    if current: chunks.append(current)
+                    current = w
+            if current: chunks.append(current)
+    if not chunks: chunks = [script_text]
+    chunk_time = total_duration / len(chunks)
+
+    for idx, chunk in enumerate(chunks):
+        start = idx * chunk_time
+        end = min((idx + 1) * chunk_time, total_duration)
+        ass_content += f"Dialogue: 0,{format_ass_time(start)},{format_ass_time(end)},SubtitleStyle,,0,0,0,,{chunk}\n"
+
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write(ass_content)
-        for idx, chunk in enumerate(chunks):
-            start = idx * chunk_time
-            end = min((idx + 1) * chunk_time, total_duration)
-            f.write(f"Dialogue: 0,{format_ass_time(start)},{format_ass_time(end)},Default,,0,0,0,,{chunk}\n")
 
 def generate_simple_bgm(output_path, duration):
     cmd = [
@@ -523,12 +639,13 @@ def generate_simple_bgm(output_path, duration):
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
+# ----------------- FFMPEG VIDEO RENDERER (AUDIO BUG 100% FIXED) -----------------
 def render_pro_video(
     input_video_path,
-    audio_path,
+    myanmar_audio_path,
     ass_path,
     output_video_path,
-    aspect_format,
+    aspect_format="9:16",
     video_speed=1.0,
     enable_subtitles=True,
     enable_anti_copyright=True,
@@ -537,13 +654,19 @@ def render_pro_video(
     mask_height=140,
     mask_opacity=0.90,
     enable_bgm=True,
-    bgm_volume=0.15,
+    bgm_volume=0.12,
+    original_audio_volume=0.0,  # 0.0 means original English audio is 100% discarded!
     logo_path=None,
     logo_size=120,
     logo_opacity=0.90,
     logo_margin=20
 ):
-    audio_duration = get_media_duration(audio_path)
+    """
+    CRITICAL BUG FIX:
+    အသံ mapping ကို တိကျစွာ သတ်မှတ်ပေးထားသဖြင့် မူရင်း English အသံ လုံးဝ (လုံးဝ) ပါမလာဘဲ
+    မြန်မာ AI အသံ (+ စိတ်ကြိုက် Background Music) သာ ထွက်ရှိမည်ဖြစ်သည်။
+    """
+    audio_duration = get_media_duration(myanmar_audio_path)
     video_duration = get_media_duration(input_video_path)
     
     scale_dict = {
@@ -573,30 +696,36 @@ def render_pro_video(
         y_calc = f"ih*{mask_y_percent/100.0}-({mask_height}/2)"
         vf_filters.append(f"drawbox=y={y_calc}:w=iw:h={mask_height}:color=black@{mask_opacity:.2f}:t=fill")
 
-    if enable_subtitles and ass_path and os.path.exists(ass_path):
-        vf_filters.append(f"subtitles={ass_path}:fontsdir=.")
-        
     base_vf = ",".join(vf_filters)
     
-    final_audio_to_use = audio_path
+    # 1. Prepare Audio: Pure Myanmar Voice or Mixed with BGM
+    final_audio_to_use = myanmar_audio_path
     temp_bgm = "temp_bgm.mp3"
-    temp_duck = "temp_duck.mp3"
+    temp_mixed_audio = "temp_final_narration_mix.mp3"
+    
     if enable_bgm and bgm_volume > 0.01:
         generate_simple_bgm(temp_bgm, audio_duration + 2)
         cmd_duck = [
             "ffmpeg", "-y",
-            "-i", audio_path,
+            "-i", myanmar_audio_path,
             "-i", temp_bgm,
             "-filter_complex", f"[0:a]volume=1.0[v];[1:a]volume={bgm_volume:.2f}[b];[v][b]amix=inputs=2:duration=first:dropout_transition=2[aout]",
             "-map", "[aout]",
             "-c:a", "libmp3lame",
-            temp_duck
+            temp_mixed_audio
         ]
         subprocess.run(cmd_duck, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        final_audio_to_use = temp_duck
-        
+        final_audio_to_use = temp_mixed_audio
+
+    # 2. Render Video with Logo & Subtitles
+    # Explicitly map [vfinal] and [1:a:0] so the original English audio NEVER enters!
     if logo_path and os.path.exists(logo_path):
-        filter_complex = f"[0:v]{base_vf}[vid];[2:v]scale={logo_size}:-1,format=rgba,colorchannelmixer=aa={logo_opacity:.2f}[logo];[vid][logo]overlay=main_w-overlay_w-{logo_margin}:{logo_margin}"
+        filter_complex = f"[0:v]{base_vf}[vid];[2:v]scale={logo_size}:-1,format=rgba,colorchannelmixer=aa={logo_opacity:.2f}[logo];[vid][logo]overlay=main_w-overlay_w-{logo_margin}:{logo_margin}[vwithlogo]"
+        if enable_subtitles and ass_path and os.path.exists(ass_path):
+            filter_complex += f";[vwithlogo]subtitles={ass_path}:fontsdir=.[vfinal]"
+        else:
+            filter_complex += ";[vwithlogo]null[vfinal]"
+            
         cmd = [
             "ffmpeg", "-y",
             "-i", input_video_path,
@@ -604,28 +733,35 @@ def render_pro_video(
             "-i", logo_path,
             "-t", str(audio_duration),
             "-filter_complex", filter_complex,
+            "-map", "[vfinal]",
+            "-map", "1:a:0",
             "-c:v", "libx264",
             "-preset", "ultrafast",
-            "-crf", "26",
+            "-crf", "25",
             "-c:a", "aac",
-            "-b:a", "128k",
+            "-b:a", "192k",
             "-threads", "0",
             output_video_path
         ]
     else:
+        if enable_subtitles and ass_path and os.path.exists(ass_path):
+            final_vf = f"{base_vf},subtitles={ass_path}:fontsdir=."
+        else:
+            final_vf = base_vf
+            
         cmd = [
             "ffmpeg", "-y",
             "-i", input_video_path,
             "-i", final_audio_to_use,
             "-t", str(audio_duration),
-            "-vf", base_vf,
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-crf", "26",
-            "-c:a", "aac",
-            "-b:a", "128k",
+            "-vf", final_vf,
             "-map", "0:v:0",
             "-map", "1:a:0",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "25",
+            "-c:a", "aac",
+            "-b:a", "192k",
             "-threads", "0",
             output_video_path
         ]
@@ -633,8 +769,8 @@ def render_pro_video(
 
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
-    if STUDIO_LOGO_PATH:
-        st.image(STUDIO_LOGO_PATH, use_container_width=True)
+    if WEBSITE_LOGO_PATH:
+        st.image(WEBSITE_LOGO_PATH, use_container_width=True)
     else:
         st.markdown("### 🎬 **RECAP STUDIO MM**")
     
@@ -642,7 +778,7 @@ with st.sidebar:
     <div class="user-profile-box">
         <div>
             <div style="font-weight:bold; font-size:14px; color:#fff;">👤 Studio Master</div>
-            <div style="font-size:11px; color:#94a3b8;">Recap Studio MM Pro</div>
+            <div style="font-size:11px; color:#38bdf8;">Recap Studio MM Pro v2.9</div>
         </div>
         <span class="badge-status">Active</span>
     </div>
@@ -670,7 +806,7 @@ with st.sidebar:
         st.success("🔑 Gemini API: မှတ်သားပြီး")
     else:
         st.warning("⚠️ Gemini API Key မထည့်ရသေးပါ")
-    st.caption("⚡ **Recap Studio MM v2.9 Pro**")
+    st.caption("⚡ **Recap Studio MM Pro**")
 
 # ----------------- PAGE 1: ပင်မစာမျက်နှာ -----------------
 if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
@@ -678,10 +814,10 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
     with col_banner:
         st.markdown("""
         <div class="hero-card">
-            <span style="color:#a78bfa; font-size:12px; font-weight:bold; letter-spacing:1px;">✨ RECAP STUDIO MM PRO</span>
+            <span style="color:#38bdf8; font-size:12px; font-weight:bold; letter-spacing:1px;">✨ RECAP STUDIO MM PRO</span>
             <h1 style="color:#ffffff; margin: 10px 0 6px 0; font-size: 26px;">ဒီနေ့ဘာပြုလုပ်ချင်ပါသလဲ?</h1>
             <p style="color:#cbd5e1; font-size:14px; margin-bottom: 20px;">
-                Subtitle Masking (မူရင်းစာတန်းထိုး ဖုံးအုပ်ခြင်း)၊ ဆက်တိုက် စကားပြောသံ၊ Logo Watermark နှင့် Live Tweaker အားလုံး ပါဝင်ပါသည်။
+                AI Hook Overlay၊ Subtitle Masking၊ မြန်မာ AI အသံစစ်စစ်နှင့် Logo Watermark စနစ် အပြည့်အစုံ ပါဝင်ပါသည်။
             </p>
         </div>
         """, unsafe_allow_html=True)
@@ -694,11 +830,11 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
         )
     with col_status:
         st.markdown("""
-        <div class="hero-card" style="background:#0e1822;">
+        <div class="hero-card" style="background:#071520;">
             <div style="font-size:12px; color:#94a3b8;">သင့်စနစ်အခြေအနေ</div>
             <div style="font-size:13px; margin-top:4px;">Recap Studio MM Pro v2.9</div>
             <h3 style="color:#10b981; margin:4px 0;">Studio Ready</h3>
-            <p style="font-size:11px; color:#64748b;">Subtitle Masking, Uninterrupted Voice & Logo Ready.</p>
+            <p style="font-size:11px; color:#64748b;">AI Hook, 100% Burmese Voice, Masking & Circle Logo Ready.</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -719,10 +855,10 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
         st.markdown('<div class="action-card"><h4>🎙️ AI အသံ</h4><p style="font-size:12px; color:#94a3b8;">မြန်မာ AI အသံဖန်တီးရန်</p></div>', unsafe_allow_html=True)
         st.button("အသံစတူဒီယို ➔", on_click=navigate_to, args=("🎙️ AI အသံ စတူဒီယို",), key="btn_quick_voice")
 
-# ----------------- PAGE 2: ဗီဒီယို ပြုလုပ်ရန် (CREATE VIDEO) -----------------
+# ----------------- PAGE 2: ဗီဒီယို ပြုလုပ်ရန် (CREATE & PRO EDITOR) -----------------
 elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ်ရန်":
     st.markdown("## 🎬 **ဗီဒီယို ပြုလုပ်ရန် (Recap Studio Pro)**")
-    st.caption("Subtitle Masking (မူရင်းစာတန်းထိုး ဖုံးအုပ်ခြင်း)၊ ဆက်တိုက် စကားပြောသံ၊ Logo Watermark နှင့် Live Tweaker အပြည့်အစုံ။")
+    st.caption("AI Hook Overlay၊ Subtitle Masking၊ မြန်မာ AI အသံစစ်စစ် (English အသံ လုံးဝမပါ) နှင့် Circular Logo Watermark အပြည့်အစုံ။")
     
     if not st.session_state.gemini_api_key:
         api_input = st.text_input("🔑 Google Gemini API Key ထည့်သွင်းပါ (အလိုအလျောက် မှတ်သားထားပါမည်)", type="password")
@@ -767,7 +903,7 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
             "✨ Vision Narrator (AI ဇာတ်ကွက် ခွဲခြမ်းစိတ်ဖြာခြင်း)"
         ], index=0)
     with col_c2:
-        st.markdown("##### ၂။ အသံ ရွေးချယ်မှု (ဆက်တိုက် စကားပြောသံ)")
+        st.markdown("##### ၂။ Fast AI Voice ရွေးချယ်မှု")
         voice_choice = st.selectbox(
             "အသံရွေးချယ်ပါ",
             list(VOICE_PROFILES.keys()),
@@ -779,7 +915,7 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
         if st.button("▶ ရွေးချယ်ထားသော အသံကို နမူနာ နားထောင်ရန်", use_container_width=True):
             with st.spinner("အသံနမူနာ ဖန်တီးနေပါသည်..."):
                 sample_file = "sample_preview.mp3"
-                generate_voice_file("လူတွေတင်မကဘဲ တိရစ္ဆာန်တွေကိုပါ တရားရုံးတင်ပြီး ကြိုးပေးသတ်ခဲ့တဲ့ သမိုင်းထဲက အဖြစ်အပျက်တွေကို သင်တို့ ကြားဖူးကြရဲ့လားဗျာ။", voice_choice, sample_file, speed_multiplier=st.session_state.saved_voice_speed)
+                generate_voice_file("မင်္ဂလာပါ ကျွန်တော်ကတော့ မင်းသန့်ပါ။ ရုပ်ရှင်ဇာတ်လမ်း အစအဆုံးကို အကောင်းဆုံး ပြန်လည်ပြောပြပေးသွားမှာ ဖြစ်ပါတယ်။", voice_choice, sample_file, speed_multiplier=st.session_state.saved_voice_speed)
                 st.audio(sample_file)
         
     instructions = st.text_area(
@@ -788,92 +924,19 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
         height=65
     )
 
-    # ----------------- SUBTITLE MASKING SETTINGS -----------------
-    st.markdown("#### ၃။ မူရင်း စာတန်းထိုး ဖုံးအုပ်ခြင်း (Subtitle Masking)")
-    st.caption("မူရင်း ဗီဒီယိုထဲတွင် အင်္ဂလိပ်စာတန်းထိုး ပါပြီးသားဖြစ်နေပါက ၎င်းနေရာကို အမည်းရောင်ဘားဖြင့် ဖုံးအုပ်ပြီး မြန်မာစာလုံး ပေါ်လွင်အောင် ထားနိုင်ပါသည်။")
-    
-    enable_mask = st.checkbox("🛡️ မူရင်း စာတန်းထိုး ဖုံးအုပ်မည့် Mask Bar ထည့်မည် (Masking Enable)", value=True)
-    mask_y_percent = 78
-    mask_height = 140
-    mask_opacity = 0.90
-    
-    if enable_mask:
-        col_mk1, col_mk2, col_mk3 = st.columns(3)
-        with col_mk1:
-            mask_y_percent = st.slider("Mask ဒေါင်လိုက်နေရာ (Vertical %)", 50, 95, 78, step=1, help="78% သည် မူရင်းစာတန်းထိုး နေရာဖြစ်ပါသည်")
-        with col_mk2:
-            mask_height = st.slider("Mask ဘား အထူ/အမြင့် (Height px)", 60, 250, 140, step=10)
-        with col_mk3:
-            mask_opacity = st.slider("Mask အမည်းရောင် အကြည်/အနောက် (Opacity)", 0.4, 1.0, 0.90, step=0.05)
-
-    # ----------------- SUBTITLES & SPEED SETTINGS -----------------
-    st.markdown("#### ၄။ မြန်မာစာတန်းထိုးနှင့် Speed ချိန်ညှိချက်")
-    col_sub_btn, col_sub_style1, col_sub_font = st.columns(3)
-    with col_sub_btn:
-        sub_option = st.radio("မြန်မာ စာတန်းထိုး ထည့်သွင်းမည်လား?", ["✅ ထည့်သွင်းမည် (Yes)", "❌ မထည့်ပါ (No)"], horizontal=True)
-        enable_subtitles = (sub_option == "✅ ထည့်သွင်းမည် (Yes)")
-    with col_sub_style1:
-        sub_color = st.selectbox("စာလုံး အရောင်", ["Yellow (ရွှေဝါရောင်)", "White (အဖြူရောင်)", "Green (စိမ်းဖန့်ရောင်)", "Cyan (မိုးပြာရောင်)", "Gold (ရွှေရောင်)"], disabled=not enable_subtitles)
-    with col_sub_font:
-        sub_font = st.selectbox("အသုံးပြုမည့် ဖောင့်", ["Padauk", "Pyidaungsu", "Noto Sans Myanmar"], disabled=not enable_subtitles)
-
-    col_s1, col_s2, col_s3 = st.columns(3)
-    with col_s1:
-        voice_speed = st.slider("🎙️ စကားပြော Speed (1.15x အကြံပြုပါသည်)", min_value=0.8, max_value=2.0, value=float(st.session_state.saved_voice_speed), step=0.05)
-        st.session_state.saved_voice_speed = voice_speed
-    with col_s2:
-        video_speed = st.slider("🎬 ဗီဒီယို Speed", min_value=0.7, max_value=2.0, value=float(st.session_state.saved_video_speed), step=0.05)
-        st.session_state.saved_video_speed = video_speed
-    with col_s3:
-        bgm_vol = st.slider("🎵 Suspense BGM အတိုးအကျယ် (Volume)", min_value=0.0, max_value=0.5, value=float(st.session_state.saved_bgm_vol), step=0.02, format="%.2f")
-        st.session_state.saved_bgm_vol = bgm_vol
-
-    # ----------------- LOGO WATERMARK SETTINGS -----------------
-    st.markdown("#### ၅။ ဗီဒီယို Format နှင့် Studio Logo Watermark")
-    col_fmt, col_logo_chk = st.columns(2)
-    with col_fmt:
-        format_choice = st.selectbox(
-            "Format ရွေးချယ်ပါ",
-            ["9:16 - ဒေါင်လိုက် (Reels/TikTok/Shorts)", "16:9 - အလျားလိုက် (YouTube)", "4:5 - Feed ပုံစံ (Facebook/IG)", "1:1 - စတုရန်း"]
-        )
-        format_ratio = format_choice.split(" - ")[0]
-        
-    with col_logo_chk:
-        enable_logo = st.checkbox("🖼️ ဗီဒီယိုပေါ်တွင် Logo ထည့်သွင်းမည် (အပေါ်ထောင့် ညာဘက်)", value=True)
-        
-    logo_file_path = STUDIO_LOGO_PATH
-    logo_size = 130
-    logo_opacity = 0.90
-    logo_margin = 20
-    
-    if enable_logo:
-        uploaded_logo = st.file_uploader("Logo ပုံ ရွေးချယ်ပါ (မရွေးပါက သင့်မူရင်း Logo ကို သုံးပါမည်)", type=["png", "jpg", "jpeg"])
-        if uploaded_logo:
-            logo_file_path = "temp_custom_logo.png"
-            with open(logo_file_path, "wb") as f:
-                f.write(uploaded_logo.getbuffer())
-                
-        col_lg1, col_lg2, col_lg3 = st.columns(3)
-        with col_lg1:
-            logo_size = st.slider("Logo အရွယ်အစား (Size px)", 60, 250, 130, step=10)
-        with col_lg2:
-            logo_opacity = st.slider("Logo အကြည်ရောင် (Opacity)", 0.3, 1.0, 0.90, step=0.05)
-        with col_lg3:
-            logo_margin = st.slider("အနားသတ် အကွာအဝေး (Margin px)", 10, 60, 20, step=5)
-
     st.markdown("---")
     
     # ----------------- TWO-STEP WORKFLOW -----------------
     st.markdown("### 🚀 **အဆင့် (၂) ဆင့် Recap ထုတ်လုပ်မှု စနစ်**")
     col_step1, col_step2 = st.columns(2)
     with col_step1:
-        if st.button("📝 အဆင့် (၁): AI ဇာတ်ညွှန်း အရင်ထုတ်ယူမည်", type="primary", use_container_width=True):
+        if st.button("📝 အဆင့် (၁): AI ဇာတ်ညွှန်းနှင့် Hook ခေါင်းစဉ် ထုတ်ယူမည်", type="primary", use_container_width=True):
             if not uploaded_video and not video_url:
                 st.error("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် တင်ပါ သို့မဟုတ် Link ထည့်သွင်းပေးပါ။")
             elif not st.session_state.gemini_api_key:
                 st.error("Gemini API Key ထည့်သွင်းပေးပါ။")
             else:
-                with st.spinner("သဘာဝကျသော မြန်မာ Recap ဇာတ်ညွှန်း ရေးသားနေပါသည်..."):
+                with st.spinner("သဘာဝကျသော မြန်မာ Recap ဇာတ်ညွှန်းနှင့် Hook ခေါင်းစဉ် ထုတ်ယူနေပါသည်..."):
                     temp_in = "temp_input.mp4"
                     if uploaded_video:
                         with open(temp_in, "wb") as f:
@@ -898,13 +961,28 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                         custom_instructions=instructions
                     )
                     st.session_state.recap_script_text = script_res
-                    st.success("✅ သဘာဝကျသော AI ဇာတ်ညွှန်း ထွက်ရှိပါပြီ! အောက်တွင် စိတ်ကြိုက် ပြင်ဆင်နိုင်ပါသည်။")
+                    
+                    # Try generating catchy 2-line Hook Text
+                    try:
+                        import google.generativeai as genai
+                        genai.configure(api_key=st.session_state.gemini_api_key)
+                        hook_m = genai.GenerativeModel("gemini-1.5-flash")
+                        hook_prompt = f"ဒီဗီဒီယိုဇာတ်ညွှန်းအတွက် TikTok/Reels ပေါ်မှာ လူစိတ်ဝင်စားစေမယ့် စာကြောင်းတို ၂ ကြောင်းပါ ထိပ်စီး Hook Title (ဥပမာ Line 1: တိရစ္ဆာန်တွေကို တရားစွဲ, Line 2: ကြိုးပေးကွပ်မျက်ခဲ့) ကို ၂ ကြောင်းတည်း ရေးပေးပါ။ စာသားသက်သက်သာ ပေးပါ:\n{script_res[:300]}"
+                        h_res = hook_m.generate_content(hook_prompt).text.strip().split("\n")
+                        h_lines = [hl.strip() for hl in h_res if hl.strip() and not hl.startswith("#") and not hl.startswith("Line")]
+                        if len(h_lines) >= 2:
+                            st.session_state.top_hook_text = h_lines[0].replace("Line 1:", "").replace("၁။", "").strip()
+                            st.session_state.bottom_hook_text = h_lines.replace("Line 2:", "").replace("၂။", "").strip()
+                    except Exception:
+                        pass
+                        
+                    st.success("✅ သဘာဝကျသော AI ဇာတ်ညွှန်းနှင့် Hook ခေါင်းစဉ် ထွက်ရှိပါပြီ!")
 
     st.markdown("##### 📝 မြန်မာ Recap ဇာတ်ညွှန်း (အချိန်မှတ်နှင့် နံပါတ်စဉ်များ လုံးဝဖယ်ရှားထားပြီး ဖြစ်ပါသည်):")
     edited_script = st.text_area(
         "ဇာတ်ညွှန်းတည်းဖြတ်ရန်",
         value=st.session_state.recap_script_text,
-        height=160,
+        height=140,
         label_visibility="collapsed"
     )
     st.session_state.recap_script_text = edited_script
@@ -926,194 +1004,271 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                     with open(temp_in, "wb") as f:
                         f.write(uploaded_video.getbuffer())
 
-                neon_container.markdown("""
-                <div class="neon-loader-card">
-                    <div class="neon-logo-glow">
-                        <span class="neon-icon">🎬</span>
+                # BEAUTIFUL NEON RENDERING SCREEN WITH WEBSITE LOGO
+                logo_html_tag = f'<img src="{WEBSITE_LOGO_B64}" class="neon-logo-img" />' if WEBSITE_LOGO_B64 else '<span style="font-size:40px;">🎬</span>'
+                
+                def update_neon_phase(main_phase, sub_phase):
+                    neon_container.markdown(f"""
+                    <div class="neon-loader-card">
+                        <div class="neon-ring-container">
+                            <div class="neon-spinner-ring"></div>
+                            {logo_html_tag}
+                        </div>
+                        <div class="recap-voice-badge">⚡ RECAP VOICE ACTIVE</div>
+                        <div class="neon-phase-text">{main_phase}</div>
+                        <div class="neon-sub-phase">{sub_phase}</div>
+                        <div class="neon-sound-waves">
+                            <div class="neon-bar"></div><div class="neon-bar"></div>
+                            <div class="neon-bar"></div><div class="neon-bar"></div>
+                            <div class="neon-bar"></div><div class="neon-bar"></div>
+                        </div>
                     </div>
-                    <div class="neon-title">RECAP STUDIO MM</div>
-                    <div class="neon-subtitle">⚡ AI VIDEO RENDERING & SUBTITLE MASKING ⚡</div>
-                    <div class="neon-dots">
-                        <span></span><span></span><span></span><span></span>
-                    </div>
-                    <p style="color:#38bdf8; font-size:13px; margin-top:14px; font-weight:600; text-shadow:0 0 8px #0284c7;">
-                        မူရင်းစာတန်းထိုးများကို Masking ဖြင့် ဖုံးအုပ်ပြီး၊ ဆက်တိုက်စကားပြောသံနှင့် မြန်မာစာလုံးများကို ပေါင်းစပ်နေပါသည်...
-                    </p>
-                </div>
-                """, unsafe_allow_html=True)
+                    """, unsafe_allow_html=True)
+
+                update_neon_phase("Uploading your video...", "Securing and uploading your video...")
+                time.sleep(1.0)
+                update_neon_phase("သင့် Recap ဖန်တီးနေသည်...", "Analyzing your video...")
+                time.sleep(1.2)
+                update_neon_phase("သင့် Recap ဖန်တီးနေသည်...", "Creating your recap script...")
+                time.sleep(1.0)
+                update_neon_phase("သင့် Recap ဖန်တီးနေသည်...", "Generating Myanmar Narration Voice...")
 
                 clean_for_tts = clean_script_for_narration(st.session_state.recap_script_text)
                 pron_dict = load_replacements("pronunciation.txt")
                 final_script_for_tts = apply_pronunciation(clean_for_tts, pron_dict)
                 
                 temp_audio_out = "temp_voice.mp3"
-                generate_voice_file(final_script_for_tts, voice_choice, temp_audio_out, speed_multiplier=voice_speed)
+                generate_voice_file(final_script_for_tts, voice_choice, temp_audio_out, speed_multiplier=st.session_state.saved_voice_speed)
                 audio_dur = get_media_duration(temp_audio_out)
                 st.session_state.last_voice_file = temp_audio_out
+
+                update_neon_phase("Rendering Final Video...", "Applying Subtitle Masking & Hook Overlay...")
                 
-                temp_base_vid = "temp_base_synced.mp4"
+                temp_ass_path = "temp_render.ass"
+                create_ass_with_hook_and_subtitles(
+                    hook_line1=st.session_state.top_hook_text,
+                    hook_line2=st.session_state.bottom_hook_text,
+                    script_text=final_script_for_tts,
+                    total_duration=audio_dur,
+                    ass_path=temp_ass_path,
+                    font_name="Padauk",
+                    sub_font_size=38,
+                    sub_margin_v=240,
+                    sub_color="Yellow (ရွှေဝါရောင်)",
+                    sub_bg="Box (အမည်းနောက်ခံ ဘား)",
+                    hook_color="Yellow (ရွှေဝါရောင်)",
+                    enable_hook=True,
+                    max_chars=28
+                )
+
+                final_video_output = "recap_output.mp4"
+                
+                # Check for user watermark logo
+                watermark_to_use = None
+                if os.path.exists("circle_user_watermark.png"):
+                    watermark_to_use = "circle_user_watermark.png"
+                
                 render_pro_video(
                     input_video_path=temp_in,
-                    audio_path=temp_audio_out,
-                    ass_path=None,
-                    output_video_path=temp_base_vid,
-                    aspect_format=format_ratio,
-                    video_speed=video_speed,
-                    enable_subtitles=False,
+                    myanmar_audio_path=temp_audio_out,
+                    ass_path=temp_ass_path,
+                    output_video_path=final_video_output,
+                    aspect_format="9:16",
+                    video_speed=st.session_state.saved_video_speed,
+                    enable_subtitles=True,
                     enable_anti_copyright=anti_copyright,
-                    enable_mask=enable_mask,
-                    mask_y_percent=mask_y_percent,
-                    mask_height=mask_height,
-                    mask_opacity=mask_opacity,
-                    enable_bgm=(bgm_vol > 0.01),
-                    bgm_volume=bgm_vol,
-                    logo_path=logo_file_path if (enable_logo and logo_file_path) else None,
-                    logo_size=logo_size,
-                    logo_opacity=logo_opacity,
-                    logo_margin=logo_margin
+                    enable_mask=True,
+                    mask_y_percent=78,
+                    mask_height=140,
+                    mask_opacity=0.90,
+                    enable_bgm=(st.session_state.saved_bgm_vol > 0.01),
+                    bgm_volume=st.session_state.saved_bgm_vol,
+                    original_audio_volume=0.0, # 100% English audio silenced!
+                    logo_path=watermark_to_use,
+                    logo_size=120,
+                    logo_opacity=0.90,
+                    logo_margin=20
                 )
-                st.session_state.last_base_video = temp_base_vid
-
-                temp_ass_path = "temp_sub.ass"
-                final_video_output = "recap_output.mp4"
-                if enable_subtitles:
-                    res_y = 1280 if "9:16" in format_ratio else 720
-                    calc_margin = int(res_y * (1.0 - mask_y_percent / 100.0) - 18)
-                    
-                    create_ass_subtitles(
-                        script_text=final_script_for_tts,
-                        total_duration=audio_dur,
-                        ass_path=temp_ass_path,
-                        font_name=sub_font,
-                        font_size=38,
-                        margin_v=calc_margin,
-                        sub_color=sub_color,
-                        sub_bg="Outline & Shadow (အနားကွပ်နှင့် အရိပ်)" if enable_mask else "Box (အမည်းနောက်ခံ ဘား)",
-                        max_chars=28
-                    )
-                    cmd_burn = [
-                        "ffmpeg", "-y",
-                        "-i", temp_base_vid,
-                        "-vf", f"subtitles={temp_ass_path}:fontsdir=.",
-                        "-c:v", "libx264",
-                        "-preset", "ultrafast",
-                        "-crf", "26",
-                        "-c:a", "copy",
-                        "-threads", "0",
-                        final_video_output
-                    ]
-                    subprocess.run(cmd_burn, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                else:
-                    import shutil
-                    shutil.copy(temp_base_vid, final_video_output)
 
                 st.session_state.last_generated_video = final_video_output
                 st.session_state.last_polished_video = final_video_output
                 neon_container.empty()
-                st.success("🎉 Recap ဗီဒီယို အောင်မြင်စွာ ထွက်ရှိပါပြီ!")
+                st.success("🎉 Recap ဗီဒီယို အောင်မြင်စွာ ထွက်ရှိပါပြီ! အောက်ရှိ Editor တွင် စိတ်ကြိုက် ပြင်ဆင်နိုင်ပါသည်။")
 
             except Exception as e:
                 neon_container.empty()
                 st.error(f"❌ Error ဖြစ်ပေါ်ပါသည်: {str(e)}")
 
-    # ----------------- LIVE SUBTITLE TWEAKER & RE-EXPORT -----------------
+    # ----------------- PRO RECAP EDITOR TABS (MATCHING VIDEO) -----------------
     if os.path.exists("recap_output.mp4"):
         st.markdown("---")
-        st.markdown("### 🎬 **Recap ဗီဒီယို Preview**")
+        st.markdown("### 🎬 **Recap Pro Editor (Live Preview & Settings)**")
+        
         vid_to_show = st.session_state.last_polished_video if (st.session_state.last_polished_video and os.path.exists(st.session_state.last_polished_video)) else "recap_output.mp4"
         
-        if format_ratio == "9:16":
-            vp1, vp_center, vp2 = st.columns((1, 1, 1))
-            with vp_center:
-                st.video(vid_to_show)
-        else:
-            vp1, vp_center, vp2 = st.columns((1, 2, 1))
-            with vp_center:
-                st.video(vid_to_show)
-
-        st.markdown("""
-        <div class="tweaker-box">
-            <h4 style="color:#38bdf8; margin:0 0 10px 0;">🎨 Subtitles Live Customizer & Final Re-Export</h4>
-            <p style="font-size:13px; color:#94a3b8; margin-bottom:15px;">
-                မူရင်း စာတန်းထိုး ဖုံးအုပ်မှု၊ မြန်မာစာလုံး အရွယ်အစား (Font Size)၊ အနိမ့်အမြင့် နေရာ (Position) နှင့် အရောင်တို့ကို စိတ်ကြိုက်ညှိယူပြီး Final MP4 အချော ထုတ်ယူနိုင်ပါသည်။
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        col_tw1, col_tw2, col_tw3, col_tw4 = st.columns(4)
-        with col_tw1:
-            tweak_font_size = st.slider("📏 စာလုံးအရွယ်အစား (Font Size)", 24, 56, 38, step=2)
-        with col_tw2:
-            tweak_margin_v = st.slider("📐 စာတန်းထိုး အမြင့်နေရာ (Height Position)", 40, 450, 260, step=10)
-        with col_tw3:
-            tweak_color = st.selectbox(
-                "🎨 စာလုံး အရောင်",
-                ["Yellow (ရွှေဝါရောင်)", "White (အဖြူရောင်)", "Green (စိမ်းဖန့်ရောင်)", "Cyan (မိုးပြာရောင်)", "Gold (ရွှေရောင်)"],
-                index=0,
-                key="tweak_col_sel"
-            )
-        with col_tw4:
-            tweak_bg = st.selectbox(
-                "🔳 စာလုံး စတိုင်",
-                ["Outline & Shadow (အနားကွပ်နှင့် အရိပ်)", "Box (အမည်းနောက်ခံ ဘား)", "Semi-Box (မှန်ကြည် အမည်းနောက်ခံ)"],
-                index=0,
-                key="tweak_bg_sel"
-            )
-
-        col_tw_font, col_tw_chars = st.columns(2)
-        with col_tw_font:
-            tweak_font = st.selectbox("🔤 အသုံးပြုမည့် ဖောင့်", ["Padauk", "Pyidaungsu", "Noto Sans Myanmar"], index=0, key="tweak_font_sel")
-        with col_tw_chars:
-            tweak_chars = st.slider("🔠 တစ်ကြောင်းလျှင် အများဆုံး စာလုံးရေ", 20, 40, 28, step=2)
-
-        if st.button("⚡ Subtitle ပြင်ဆင်ချက်များဖြင့် Final MP4 အချော ထုတ်ယူမည် (Re-Export)", type="primary", use_container_width=True):
-            base_vid = st.session_state.last_base_video if (st.session_state.last_base_video and os.path.exists(st.session_state.last_base_video)) else "temp_input.mp4"
-            audio_f = st.session_state.last_voice_file if (st.session_state.last_voice_file and os.path.exists(st.session_state.last_voice_file)) else "temp_voice.mp3"
+        col_preview, col_editor_tabs = st.columns((1.1, 1.4))
+        
+        with col_preview:
+            st.markdown("##### 📱 9:16 Video Preview")
+            st.video(vid_to_show)
+            if st.session_state.last_voice_file and os.path.exists(st.session_state.last_voice_file):
+                with open(st.session_state.last_voice_file, "rb") as vf:
+                    st.download_button(
+                        "📥 Voice အသံ ဒေါင်းလုဒ် (Download MP3)",
+                        data=vf.read(),
+                        file_name="recap_voice_narration.mp3",
+                        mime="audio/mp3",
+                        use_container_width=True
+                    )
+                    
+        with col_editor_tabs:
+            tab_sub, tab_hook, tab_aud, tab_blur, tab_logo = st.tabs([
+                "📝 Subtitles",
+                "⚡ AI Hook",
+                "🎵 Audio",
+                "👁️ Blur",
+                "🖼️ Logo"
+            ])
             
-            with st.spinner("ရွေးချယ်ထားသော Subtitle စတိုင်အသစ်ဖြင့် Final MP4 အချော ထုတ်ယူနေပါသည်..."):
-                tweak_ass_path = "tweak_sub.ass"
-                final_polished_mp4 = "recap_polished_final.mp4"
-                audio_dur = get_media_duration(audio_f) if os.path.exists(audio_f) else 10.0
+            # --- TAB 1: SUBTITLES ---
+            with tab_sub:
+                st.markdown("##### စာတန်းထိုး ချိန်ညှိချက် (Subtitles)")
+                show_subs = st.checkbox("Show Subtitles (စာတန်းထိုး ပြသမည်)", value=True)
                 
-                clean_for_tts = clean_script_for_narration(st.session_state.recap_script_text)
-                create_ass_subtitles(
-                    script_text=clean_for_tts,
-                    total_duration=audio_dur,
-                    ass_path=tweak_ass_path,
-                    font_name=tweak_font,
-                    font_size=tweak_font_size,
-                    margin_v=tweak_margin_v,
-                    sub_color=tweak_color,
-                    sub_bg=tweak_bg,
-                    max_chars=tweak_chars
-                )
-                
-                cmd_reexport = [
-                    "ffmpeg", "-y",
-                    "-i", base_vid,
-                    "-vf", f"subtitles={tweak_ass_path}:fontsdir=.",
-                    "-c:v", "libx264",
-                    "-preset", "ultrafast",
-                    "-crf", "24",
-                    "-c:a", "copy",
-                    "-threads", "0",
-                    final_polished_mp4
-                ]
-                subprocess.run(cmd_reexport, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                st.session_state.last_polished_video = final_polished_mp4
-                st.success("✨ Subtitle စတိုင်သစ်ဖြင့် Final Video အချော ထွက်ရှိပါပြီ!")
-                st.rerun()
+                col_ts1, col_ts2 = st.columns(2)
+                with col_ts1:
+                    sub_font_style = st.selectbox("Font Style", ["Classic", "Clean", "Bold Display", "Outline", "Poster", "Cinematic Serif"], index=0)
+                    sub_col_pick = st.selectbox("Top Color", ["Yellow (ရွှေဝါရောင်)", "White (အဖြူရောင်)", "Green (စိမ်းဖန့်ရောင်)", "Cyan (မိုးပြာရောင်)", "Gold (ရွှေရောင်)"], index=0)
+                with col_ts2:
+                    sub_bg_style = st.selectbox("Subtitle Background", ["Box (အမည်းနောက်ခံ ဘား)", "Outline & Shadow (အနားကွပ်နှင့် အရိပ်)", "Semi-Box (မှန်ကြည် အမည်းနောက်ခံ)"], index=0)
+                    sub_font_size_sl = st.slider("Font Size (စာလုံး အရွယ်အစား)", 24, 56, 38, step=2)
+                    
+                sub_v_pos = st.slider("စာတန်းထိုး အမြင့်နေရာ (Height Position)", 40, 450, 240, step=10, help="Drag or slide to place subtitle over the mask")
+                sub_width_sl = st.slider("Subtitle Width (အကျယ် - အများဆုံး စာလုံးရေ)", 20, 40, 28, step=2)
 
-        current_final = st.session_state.last_polished_video if (st.session_state.last_polished_video and os.path.exists(st.session_state.last_polished_video)) else "recap_output.mp4"
-        if os.path.exists(current_final):
-            with open(current_final, "rb") as vid_file:
-                st.download_button(
-                    label="📥 Final MP4 Recap ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန်",
-                    data=vid_file.read(),
-                    file_name="recap_studio_mm_final.mp4",
-                    mime="video/mp4",
-                    use_container_width=True
+            # --- TAB 2: AI HOOK ---
+            with tab_hook:
+                st.markdown("##### ထိပ်စီး Hook စာတန်း (AI Hook Overlay)")
+                enable_hook_chk = st.checkbox("Hook Overlay ဖွင့်မည် (အပေါ်ထိပ် ခေါင်းစဉ်)", value=True)
+                
+                hook_l1 = st.text_input("Top Hook Text (ပထမ စာကြောင်း)", value=st.session_state.top_hook_text)
+                hook_l2 = st.text_input("Bottom Hook Text (ဒုတိယ စာကြောင်း)", value=st.session_state.bottom_hook_text)
+                st.session_state.top_hook_text = hook_l1
+                st.session_state.bottom_hook_text = hook_l2
+                
+                col_hk1, col_hk2 = st.columns(2)
+                with col_hk1:
+                    hook_col_sel = st.selectbox("Hook Color", ["Yellow (ရွှေဝါရောင်)", "Gold (ရွှေရောင်)", "White (အဖြူရောင်)", "Cyan (မိုးပြာရောင်)"], index=0)
+                with col_hk2:
+                    hook_font_size = st.slider("Hook Font Size", 30, 60, 44, step=2)
+                    
+                st.markdown("##### 📱 Post စာသားများ (Social Media)")
+                st.text_area(
+                    "Facebook Reels & TikTok Caption",
+                    value=f"{hook_l1} {hook_l2}!\n\n{st.session_state.recap_script_text[:140]}...\n\n#recap #movierecap #myanmar #tiktok #reels #viral",
+                    height=80
                 )
+
+            # --- TAB 3: AUDIO ---
+            with tab_aud:
+                st.markdown("##### အသံ ချိန်ညှိချက် (Audio Settings)")
+                aud_spd = st.slider("🎙️ Narration Voice Speed", 0.8, 2.0, float(st.session_state.saved_voice_speed), step=0.05)
+                st.session_state.saved_voice_speed = aud_spd
+                
+                orig_vol_sl = st.slider("🔇 မူရင်း ဗီဒီယို အသံ (Original Audio Volume)", 0.0, 0.5, 0.0, step=0.05, help="0.0 ထားရှိပါက မူရင်း English အသံ လုံးဝ ပိတ်ထားမည်ဖြစ်သည်")
+                bgm_vol_sl = st.slider("🎵 Suspense BGM Volume", 0.0, 0.5, float(st.session_state.saved_bgm_vol), step=0.02)
+                st.session_state.saved_bgm_vol = bgm_vol_sl
+
+            # --- TAB 4: BLUR / MASK ---
+            with tab_blur:
+                st.markdown("##### မူရင်း စာတန်းထိုး ဖုံးအုပ်ခြင်း (Original Subtitle Masking)")
+                enable_blur_chk = st.checkbox("Blur / Mask Bar ဖွင့်ရန်", value=True)
+                blur_y_sl = st.slider("Mask ဒေါင်လိုက်နေရာ (Vertical %)", 50, 95, 78, step=1)
+                blur_h_sl = st.slider("Mask ဘား အထူ (Height px)", 60, 250, 140, step=10)
+                blur_op_sl = st.slider("Mask အမည်းရောင် အကြည်/အနောက် (Opacity)", 0.4, 1.0, 0.90, step=0.05)
+
+            # --- TAB 5: LOGO ---
+            with tab_logo:
+                st.markdown("##### Video Watermark Logo တင်ရန်")
+                user_logo_file = st.file_uploader("User Logo ရွေးချယ်ပါ (PNG / JPG)", type=["png", "jpg", "jpeg"], key="user_logo_uploader")
+                make_circle_chk = st.checkbox("✂️ အဝိုင်းပုံလှလှလေး ပြုလုပ်မည် (Auto Circular Badge)", value=True)
+                remove_bg_chk = st.checkbox("🪄 နောက်ခံ အဖြူရောင် ဖယ်ရှားမည် (Remove BG)", value=True)
+                
+                if user_logo_file:
+                    raw_path = "temp_user_raw_logo.png"
+                    with open(raw_path, "wb") as lf:
+                        lf.write(user_logo_file.getbuffer())
+                    process_user_logo(raw_path, "circle_user_watermark.png", make_circle=make_circle_chk, remove_white_bg=remove_bg_chk)
+                    st.image("circle_user_watermark.png", width=90, caption="အဝိုင်းပုံ ပြင်ဆင်ပြီး Logo")
+                    
+                col_lg_s1, col_lg_s2 = st.columns(2)
+                with col_lg_s1:
+                    lg_size_sl = st.slider("Logo Size (px)", 60, 250, 120, step=10)
+                with col_lg_s2:
+                    lg_op_sl = st.slider("Logo Opacity", 0.3, 1.0, 0.90, step=0.05)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("⚡ ပြင်ဆင်ချက်များဖြင့် Final Video အချော ထုတ်ယူမည် (Re-Export MP4)", type="primary", use_container_width=True):
+                with st.spinner("ရွေးချယ်ထားသော စတိုင်သစ်များဖြင့် Final Video အချော ထုတ်ယူနေပါသည်..."):
+                    tweak_ass = "tweak_editor.ass"
+                    audio_f = st.session_state.last_voice_file if (st.session_state.last_voice_file and os.path.exists(st.session_state.last_voice_file)) else "temp_voice.mp3"
+                    audio_len = get_media_duration(audio_f) if os.path.exists(audio_f) else 10.0
+                    
+                    clean_for_tts = clean_script_for_narration(st.session_state.recap_script_text)
+                    create_ass_with_hook_and_subtitles(
+                        hook_line1=hook_l1,
+                        hook_line2=hook_l2,
+                        script_text=clean_for_tts,
+                        total_duration=audio_len,
+                        ass_path=tweak_ass,
+                        font_name="Padauk",
+                        sub_font_size=sub_font_size_sl,
+                        sub_margin_v=sub_v_pos,
+                        sub_color=sub_col_pick,
+                        sub_bg=sub_bg_style,
+                        hook_color=hook_col_sel,
+                        enable_hook=enable_hook_chk,
+                        max_chars=sub_width_sl
+                    )
+                    
+                    final_reexport_mp4 = "recap_polished_final.mp4"
+                    watermark_path = "circle_user_watermark.png" if os.path.exists("circle_user_watermark.png") else None
+                    
+                    render_pro_video(
+                        input_video_path="temp_input.mp4",
+                        myanmar_audio_path=audio_f,
+                        ass_path=tweak_ass if show_subs else None,
+                        output_video_path=final_reexport_mp4,
+                        aspect_format="9:16",
+                        video_speed=st.session_state.saved_video_speed,
+                        enable_subtitles=show_subs,
+                        enable_anti_copyright=anti_copyright,
+                        enable_mask=enable_blur_chk,
+                        mask_y_percent=blur_y_sl,
+                        mask_height=blur_h_sl,
+                        mask_opacity=blur_op_sl,
+                        enable_bgm=(bgm_vol_sl > 0.01),
+                        bgm_volume=bgm_vol_sl,
+                        original_audio_volume=orig_vol_sl,
+                        logo_path=watermark_path,
+                        logo_size=lg_size_sl,
+                        logo_opacity=lg_op_sl,
+                        logo_margin=20
+                    )
+                    st.session_state.last_polished_video = final_reexport_mp4
+                    st.success("✨ Final Video အချော ပြန်လည်ထုတ်ယူပြီးပါပြီ!")
+                    st.rerun()
+
+            current_final = st.session_state.last_polished_video if (st.session_state.last_polished_video and os.path.exists(st.session_state.last_polished_video)) else "recap_output.mp4"
+            if os.path.exists(current_final):
+                with open(current_final, "rb") as vid_file:
+                    st.download_button(
+                        label="📥 Final MP4 Recap ဗီဒီယို ဒေါင်းလုဒ်ဆွဲရန်",
+                        data=vid_file.read(),
+                        file_name="recap_studio_mm_final.mp4",
+                        mime="video/mp4",
+                        use_container_width=True
+                    )
 
 # ----------------- PAGE 3: AUTO-POST DEDICATED PAGE -----------------
 elif st.session_state.nav_menu == "📱 Auto-Post (Facebook & TikTok)":
@@ -1149,7 +1304,7 @@ elif st.session_state.nav_menu == "📱 Auto-Post (Facebook & TikTok)":
         st.markdown("##### ၄။ ဗီဒီယို စာသားနှင့် Hashtag")
         post_caption = st.text_area(
             "Post Caption",
-            value=f"{st.session_state.recap_script_text[:120]}...\n\n#recap #movierecap #myanmar #shorts #reels",
+            value=f"{st.session_state.top_hook_text} {st.session_state.bottom_hook_text}!\n\n{st.session_state.recap_script_text[:120]}...\n\n#recap #movierecap #myanmar #shorts #reels",
             height=100
         )
         
@@ -1427,7 +1582,7 @@ elif st.session_state.nav_menu == "📥 ဗီဒီယို ဒေါင်း
 # ----------------- PAGE 9: AI အသံ စတူဒီယို -----------------
 elif st.session_state.nav_menu == "🎙️ AI အသံ စတူဒီယို":
     st.markdown("## 🎙️ **AI အသံ စတူဒီယို (Standalone Voice Studio)**")
-    st.caption("မြန်မာစကားပြော အသံဩဇာ ၆ မျိုးဖြင့် စိတ်ကြိုက် စာသားများကို သဘာဝကျကျ အသံသွင်းယူနိုင်ပါသည်။")
+    st.caption("မြန်မာစကားပြော အသံဩဇာ ၇ မျိုးဖြင့် စိတ်ကြိုက် စာသားများကို သဘာဝကျကျ အသံသွင်းယူနိုင်ပါသည်။")
     
     voice_text = st.text_area(
         "အသံထွက်ဖတ်ခိုင်းမည့် မြန်မာစာသား ရိုက်ထည့်ပါ",
