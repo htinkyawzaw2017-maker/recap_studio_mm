@@ -91,29 +91,33 @@ def get_base64_image(image_path):
 
 WEBSITE_LOGO_B64 = get_base64_image(WEBSITE_LOGO_PATH)
 
-# ----------------- USER WATERMARK LOGO PROCESSOR (BUG FIXED) -----------------
+# ----------------- USER WATERMARK LOGO PROCESSOR (BUG 100% FIXED) -----------------
 def process_user_logo(input_img_path, output_img_path, make_circle=True, remove_white_bg=True, remove_black_bg=False, add_border=True, border_color=(255, 255, 255, 230)):
     """
     User တင်ပေးသော Video Watermark Logo ကို နောက်ခံရှင်းလင်းပြီး (Remove BG)
     ဗီဒီယိုပေါ်တွင် ကပ်ရန် အလွန်သန့်ပြန့်လှပသော အဝိုင်းပုံ badge အဖြစ် ပြောင်းလဲပေးသည်။
+    (Bug Fix: Tuple comparison error ကို တိကျစွာ ရှင်းထုတ်ပြီး ဖြစ်သည်)
     """
     img = Image.open(input_img_path).convert("RGBA")
     
-    # 1. Background removal (Exact tuple indexing fix)
+    # 1. Background removal using explicit item[0], item, item indexing
     if remove_white_bg or remove_black_bg:
         data = list(img.getdata())
         new_data = []
         for item in data:
-            r, g, b, a = item[0], item, item, item[3]
-            if remove_white_bg and r > 220 and g > 220 and b > 220:
+            r = item[0]
+            g = item
+            b = item
+            a = item[3] if len(item) > 3 else 255
+            if remove_white_bg and r > 215 and g > 215 and b > 215:
                 new_data.append((255, 255, 255, 0))
             elif remove_black_bg and r < 35 and g < 35 and b < 35:
                 new_data.append((0, 0, 0, 0))
             else:
-                new_data.append(item)
+                new_data.append((r, g, b, a))
         img.putdata(new_data)
         
-    # 2. Circular crop
+    # 2. Circular crop with anti-aliasing
     if make_circle:
         w, h = img.size
         min_dim = min(w, h)
@@ -175,49 +179,91 @@ def save_config(key, value):
     except Exception:
         pass
 
-# ----------------- VOICE PROFILES (MATCHING PREMIUM RECAP) -----------------
-VOICE_PROFILES = {
-    "မင်းသန့် (Recommended - Agency, Confident Narrator)": {
-        "voice": "my-MM-ThihaNeural",
-        "pitch": "-2Hz",
-        "rate_offset": 8,
-        "desc": "ဆွဲဆောင်မှုရှိပြီး စကားပြောအလွန်ပီပြင်သော Movie Recap အသံ (ထိပ်တန်းရွေးချယ်မှု)"
+# ----------------- MULTILINGUAL VOICE PROFILES -----------------
+LANGUAGE_OPTIONS = {
+    "🇲🇲 မြန်မာ (Myanmar / Burmese)": {
+        "code": "my",
+        "default_voice": "မင်းသန့် (Recommended - Agency, Confident Narrator)",
+        "voices": {
+            "မင်းသန့် (Recommended - Agency, Confident Narrator)": {
+                "voice": "my-MM-ThihaNeural", "pitch": "-2Hz", "rate_offset": 8,
+                "desc": "ဆွဲဆောင်မှုရှိပြီး စကားပြောအလွန်ပီပြင်သော Movie Recap အသံ (ထိပ်တန်းရွေးချယ်မှု)"
+            },
+            "ကိုမင်း (Deep Cinematic Voice - Movie Recap Specialist)": {
+                "voice": "my-MM-ThihaNeural", "pitch": "-8Hz", "rate_offset": 5,
+                "desc": "ရုပ်ရှင်ဇာတ်လမ်းပြော ရင်ထဲထိစေမည့် အသံဩဇာကြီးမားသော အသံနက်ကြီး (Bass Deep Voice)"
+            },
+            "သီဟ (Native Male - Action & Dynamic)": {
+                "voice": "my-MM-ThihaNeural", "pitch": "+1Hz", "rate_offset": 8,
+                "desc": "သွက်လက်တက်ကြွပြီး စိတ်လှုပ်ရှားဖွယ် ဇာတ်ကွက်များအတွက် စကားပြောဟန်"
+            },
+            "အောင်ကျော် (Radio & Dramatic Narrator)": {
+                "voice": "my-MM-ThihaNeural", "pitch": "+4Hz", "rate_offset": 10,
+                "desc": "အလွန်သွက်လက်ပြီး ဆွဲဆောင်အားပြင်းသော အသံ"
+            },
+            "မေသူ (Soft Emotional Voice - Drama & Mystery)": {
+                "voice": "my-MM-NilarNeural", "pitch": "+4Hz", "rate_offset": 2,
+                "desc": "နူးညံ့ညင်သာပြီး စိတ်ခံစားမှု အပြည့်ပါသော အမျိုးသမီးအသံ"
+            },
+            "နဒီ (Native Female - Standard Narration)": {
+                "voice": "my-MM-NilarNeural", "pitch": "+0Hz", "rate_offset": 5,
+                "desc": "ကြည်လင်ပြတ်သားသော မြန်မာအမျိုးသမီး အသံ"
+            },
+            "ဇင်ဇင် (Fast-Paced Storyteller Female)": {
+                "voice": "my-MM-NilarNeural", "pitch": "-3Hz", "rate_offset": 9,
+                "desc": "ခေတ်မီဆန်းသစ်ပြီး စကားပြောဟန် သွက်လက်သော ဇာတ်လမ်းပြောသံ"
+            }
+        }
     },
-    "ကိုမင်း (Deep Cinematic Voice - Movie Recap Specialist)": {
-        "voice": "my-MM-ThihaNeural",
-        "pitch": "-8Hz",
-        "rate_offset": 5,
-        "desc": "ရုပ်ရှင်ဇာတ်လမ်းပြော ရင်ထဲထိစေမည့် အသံဩဇာကြီးမားသော အသံနက်ကြီး (Bass Deep Voice)"
+    "🇺🇸 English (အင်္ဂလိပ်)": {
+        "code": "en",
+        "default_voice": "Christopher (Cinematic Deep Narrator)",
+        "voices": {
+            "Christopher (Cinematic Deep Narrator)": {
+                "voice": "en-US-ChristopherNeural", "pitch": "-4Hz", "rate_offset": 5,
+                "desc": "Deep, resonant cinematic Hollywood documentary male narrator"
+            },
+            "Guy (Viral Recap Storyteller - High Retention)": {
+                "voice": "en-US-GuyNeural", "pitch": "+0Hz", "rate_offset": 8,
+                "desc": "Energetic, engaging TikTok/Shorts movie recapper voice"
+            },
+            "Jenny (Clear & Natural Conversational Female)": {
+                "voice": "en-US-JennyNeural", "pitch": "+0Hz", "rate_offset": 6,
+                "desc": "Crystal clear colloquial female storyteller"
+            },
+            "Aria (Expressive Dramatic Female)": {
+                "voice": "en-US-AriaNeural", "pitch": "+2Hz", "rate_offset": 7,
+                "desc": "Emotional, dynamic mystery storytelling female voice"
+            }
+        }
     },
-    "သီဟ (Native Male - Action & Dynamic)": {
-        "voice": "my-MM-ThihaNeural",
-        "pitch": "+1Hz",
-        "rate_offset": 8,
-        "desc": "သွက်လက်တက်ကြွပြီး စိတ်လှုပ်ရှားဖွယ် ဇာတ်ကွက်များအတွက် စကားပြောဟန်"
+    "🇹🇭 ไทย (Thai / ထိုင်း)": {
+        "code": "th",
+        "default_voice": "Niwat (Thai Male Storyteller)",
+        "voices": {
+            "Niwat (Thai Male Storyteller)": {
+                "voice": "th-TH-NiwatNeural", "pitch": "+0Hz", "rate_offset": 6,
+                "desc": "Professional Thai movie recap male voice"
+            },
+            "Premwadee (Thai Female Narrator)": {
+                "voice": "th-TH-PremwadeeNeural", "pitch": "+0Hz", "rate_offset": 6,
+                "desc": "Engaging Thai storytelling female voice"
+            }
+        }
     },
-    "အောင်ကျော် (Radio & Dramatic Narrator)": {
-        "voice": "my-MM-ThihaNeural",
-        "pitch": "+4Hz",
-        "rate_offset": 10,
-        "desc": "အလွန်သွက်လက်ပြီး ဆွဲဆောင်အားပြင်းသော အသံ"
-    },
-    "မေသူ (Soft Emotional Voice - Drama & Mystery)": {
-        "voice": "my-MM-NilarNeural",
-        "pitch": "+4Hz",
-        "rate_offset": 2,
-        "desc": "နူးညံ့ညင်သာပြီး စိတ်ခံစားမှု အပြည့်ပါသော အမျိုးသမီးအသံ"
-    },
-    "နဒီ (Native Female - Standard Narration)": {
-        "voice": "my-MM-NilarNeural",
-        "pitch": "+0Hz",
-        "rate_offset": 5,
-        "desc": "ကြည်လင်ပြတ်သားသော မြန်မာအမျိုးသမီး အသံ"
-    },
-    "ဇင်ဇင် (Fast-Paced Storyteller Female)": {
-        "voice": "my-MM-NilarNeural",
-        "pitch": "-3Hz",
-        "rate_offset": 9,
-        "desc": "ခေတ်မီဆန်းသစ်ပြီး စကားပြောဟန် သွက်လက်သော ဇာတ်လမ်းပြောသံ"
+    "🇨🇳 中文 (Chinese / တရုတ်)": {
+        "code": "zh",
+        "default_voice": "Yunxi (Chinese Recap Narrator)",
+        "voices": {
+            "Yunxi (Chinese Recap Narrator)": {
+                "voice": "zh-CN-YunxiNeural", "pitch": "+0Hz", "rate_offset": 8,
+                "desc": "Popular Douyin/TikTok cinematic storytelling male voice"
+            },
+            "Xiaoxiao (Chinese Expressive Female)": {
+                "voice": "zh-CN-XiaoxiaoNeural", "pitch": "+0Hz", "rate_offset": 7,
+                "desc": "Clear, expressive movie review female voice"
+            }
+        }
     }
 }
 
@@ -237,6 +283,9 @@ if "gemini_api_key" not in st.session_state:
 if "ayrshare_api_key" not in st.session_state:
     st.session_state.ayrshare_api_key = load_config("ayrshare_api_key", "")
 
+if "target_language" not in st.session_state:
+    st.session_state.target_language = "🇲🇲 မြန်မာ (Myanmar / Burmese)"
+
 if "recap_script_text" not in st.session_state:
     st.session_state.recap_script_text = ""
 
@@ -245,6 +294,12 @@ if "top_hook_text" not in st.session_state:
 
 if "bottom_hook_text" not in st.session_state:
     st.session_state.bottom_hook_text = "ကြိုးပေးကွပ်မျက်ခဲ့"
+
+if "sub_v_pos_percent" not in st.session_state:
+    st.session_state.sub_v_pos_percent = 22  # 22% from bottom
+
+if "sub_width_percent" not in st.session_state:
+    st.session_state.sub_width_percent = 85
 
 if "saved_voice_speed" not in st.session_state:
     st.session_state.saved_voice_speed = 1.15
@@ -454,12 +509,13 @@ def clean_script_for_narration(text):
     cleaned_text = re.sub(r"\s+", " ", cleaned_text).strip()
     return cleaned_text
 
-def prepare_uninterrupted_narration_text(raw_text):
+def prepare_uninterrupted_narration_text(raw_text, lang_code="my"):
     if not raw_text:
         return ""
     t = clean_script_for_narration(raw_text)
     t = re.sub(r"\n+", " ", t)
-    t = t.replace("။", " ").replace("၊", " ")
+    if lang_code == "my":
+        t = t.replace("။", " ").replace("၊", " ")
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
@@ -497,7 +553,8 @@ def get_media_duration(file_path):
     data = json.loads(res.stdout)
     return float(data["format"]["duration"])
 
-def generate_visual_recap_script(api_key, model_name, video_path, custom_instructions):
+# ----------------- MULTILINGUAL VISUAL RECAP GENERATOR -----------------
+def generate_visual_recap_script(api_key, model_name, video_path, target_lang_name, custom_instructions):
     import google.generativeai as genai
     genai.configure(api_key=api_key)
     
@@ -506,7 +563,33 @@ def generate_visual_recap_script(api_key, model_name, video_path, custom_instruc
     except Exception:
         model = genai.GenerativeModel("gemini-1.5-flash")
         
-    prompt = f"""
+    if "English" in target_lang_name:
+        prompt = f"""
+You are a viral TikTok and YouTube Shorts Movie / Story Recap Storyteller.
+Watch the provided video and write an ultra-engaging, fast-paced colloquial storytelling recap script in ENGLISH.
+
+CRITICAL RULES:
+1. Write in natural spoken storytelling English (e.g., 'Have you ever heard of animals being put on trial? In medieval France, a pig was actually arrested and taken to court...').
+2. NO timestamps (0:00-0:03), NO scene numbers (1, 2, 3), NO bracketed tags like (Scene 1), NO markdown symbols.
+3. Pure spoken narration paragraphs only so TTS voice can read continuously without robotic pauses.
+Additional instructions: {custom_instructions}
+"""
+    elif "Thai" in target_lang_name:
+        prompt = f"""
+คุณคือนักเล่าเรื่อง Movie Recap บน TikTok และ Facebook Reels
+ดูวิดีโอที่ให้มาและเขียนบทบรรยาย Recap ภาพยนตร์ที่น่าตื่นเต้นและน่าติดตามเป็นภาษาไทย (Colloquial Thai Storytelling)
+ห้ามใส่เครื่องหมายเวลา (0:00) และตัวเลข ให้เขียนเป็นข้อความบรรยายล้วนๆ
+Additional instructions: {custom_instructions}
+"""
+    elif "Chinese" in target_lang_name:
+        prompt = f"""
+你是一名在抖音和TikTok上非常受欢迎的电影解说博主。
+请观看视频，用地道生动的中文解说风格编写一段引人入胜的电影解说文案。
+切勿包含时间戳（0:00）或数字编号，仅输出可直接配音的纯解说文本。
+Additional instructions: {custom_instructions}
+"""
+    else: # Myanmar Default
+        prompt = f"""
 သင်သည် TikTok နှင့် Facebook Reels ပေါ်တွင် အလွန်လူကြိုက်များသော မြန်မာ Movie / Story Recap Storyteller (ဥပမာ- Spoiler ကြီး၊ The Spoiler စတိုင်) ဖြစ်သည်။
 ပေးထားသော ဗီဒီယိုကို ကြည့်ရှုပြီး ပရိတ်သတ် ရင်ခုန်စိတ်လှုပ်ရှားစေမည့် မြန်မာ Recap စကားပြော ဇာတ်ညွှန်းကို ရေးသားပေးပါ။
 
@@ -539,14 +622,13 @@ async def run_edge_tts(text, voice_name, output_path, rate="+0%", pitch="+0Hz"):
     communicate = edge_tts.Communicate(text=text, voice=voice_name, rate=rate, pitch=pitch)
     await communicate.save(output_path)
 
-def generate_voice_file(text, voice_choice, output_audio_path, speed_multiplier=1.15, custom_pitch=None):
-    prof = VOICE_PROFILES.get(voice_choice, VOICE_PROFILES["မင်းသန့် (Recommended - Agency, Confident Narrator)"])
-    voice_code = prof["voice"]
-    base_pitch = custom_pitch if custom_pitch is not None else prof["pitch"]
-    rate_val = int(round((speed_multiplier - 1.0) * 100)) + prof["rate_offset"]
+def generate_voice_file(text, voice_dict, output_audio_path, speed_multiplier=1.15, custom_pitch=None, lang_code="my"):
+    voice_code = voice_dict["voice"]
+    base_pitch = custom_pitch if custom_pitch is not None else voice_dict["pitch"]
+    rate_val = int(round((speed_multiplier - 1.0) * 100)) + voice_dict["rate_offset"]
     rate_str = f"{rate_val:+d}%"
     
-    flowing_text = prepare_uninterrupted_narration_text(text)
+    flowing_text = prepare_uninterrupted_narration_text(text, lang_code=lang_code)
     asyncio.run(run_edge_tts(flowing_text, voice_code, output_audio_path, rate=rate_str, pitch=base_pitch))
 
 # ----------------- ASS SUBTITLE & AI HOOK GENERATOR -----------------
@@ -623,7 +705,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             hook_display = hook_line2
         ass_content += f"Dialogue: 1,0:00:00.00,{format_ass_time(total_duration)},HookStyle,,0,0,0,,{hook_display}\n"
 
-    raw_segments = [s.strip() for s in re.split(r"[၊။\n]+", script_text) if s.strip()]
+    raw_segments = [s.strip() for s in re.split(r"[၊။\.\?\!\n]+", script_text) if s.strip()]
     chunks = []
     for seg in raw_segments:
         if len(seg) <= max_chars:
@@ -659,7 +741,7 @@ def generate_simple_bgm(output_path, duration):
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-# ----------------- FFMPEG VIDEO RENDERER (AUDIO BUG & LOGO POSITION FIXED) -----------------
+# ----------------- FFMPEG VIDEO RENDERER -----------------
 def render_pro_video(
     input_video_path,
     myanmar_audio_path,
@@ -707,14 +789,13 @@ def render_pro_video(
         vf_filters.append("scale=1.05*iw:1.05*ih,crop=iw:ih")
         vf_filters.append("eq=contrast=1.04:brightness=0.02:saturation=1.06")
         
-    # SUBTITLE MASKING: Cover old English subtitles
+    # SUBTITLE MASKING
     if enable_mask:
         y_calc = f"ih*{mask_y_percent/100.0}-({mask_height}/2)"
         vf_filters.append(f"drawbox=y={y_calc}:w=iw:h={mask_height}:color=black@{mask_opacity:.2f}:t=fill")
 
     base_vf = ",".join(vf_filters)
     
-    # 1. Audio handling (pure Myanmar voice + optional background music)
     final_audio_to_use = myanmar_audio_path
     temp_bgm = "temp_bgm.mp3"
     temp_mixed_audio = "temp_final_narration_mix.mp3"
@@ -733,7 +814,6 @@ def render_pro_video(
         subprocess.run(cmd_duck, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         final_audio_to_use = temp_mixed_audio
 
-    # 2. Render Video with Logo & Subtitles (Strict Audio Mapping: -map 1:a:0)
     overlay_xy = get_overlay_coords(logo_pos, logo_margin)
     if logo_path and os.path.exists(logo_path):
         filter_complex = f"[0:v]{base_vf}[vid];[2:v]scale={logo_size}:-1,format=rgba,colorchannelmixer=aa={logo_opacity:.2f}[logo];[vid][logo]overlay={overlay_xy}[vwithlogo]"
@@ -816,7 +896,6 @@ with st.sidebar:
     ]
     
     st.radio("Menu", menu_options, key="nav_menu", label_visibility="collapsed")
-    
     st.divider()
     if st.session_state.gemini_api_key:
         st.success("🔑 Gemini API: မှတ်သားပြီး")
@@ -833,7 +912,7 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
             <span style="color:#38bdf8; font-size:12px; font-weight:bold; letter-spacing:1px;">✨ RECAP STUDIO MM PRO</span>
             <h1 style="color:#ffffff; margin: 10px 0 6px 0; font-size: 26px;">ဒီနေ့ဘာပြုလုပ်ချင်ပါသလဲ?</h1>
             <p style="color:#cbd5e1; font-size:14px; margin-bottom: 20px;">
-                AI Hook Overlay၊ Subtitle Masking၊ မြန်မာ AI အသံစစ်စစ်နှင့် Circular Logo Watermark စနစ် အပြည့်အစုံ ပါဝင်ပါသည်။
+                ဘာသာပေါင်းစုံ AI Recap Voice၊ Live Subtitle Drag Visualizer၊ AI Hook နှင့် Circular Logo Watermark စနစ် အပြည့်အစုံ ပါဝင်ပါသည်။
             </p>
         </div>
         """, unsafe_allow_html=True)
@@ -850,7 +929,7 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
             <div style="font-size:12px; color:#94a3b8;">သင့်စနစ်အခြေအနေ</div>
             <div style="font-size:13px; margin-top:4px;">Recap Studio MM Pro v2.9</div>
             <h3 style="color:#10b981; margin:4px 0;">Studio Ready</h3>
-            <p style="font-size:11px; color:#64748b;">AI Hook, 100% Burmese Voice, Masking & Circle Logo Ready.</p>
+            <p style="font-size:11px; color:#64748b;">Multilingual Voices, Live Subtitle Drag & Circle Logo Ready.</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -868,13 +947,13 @@ if st.session_state.nav_menu == "🏠 ပင်မစာမျက်နှာ":
         st.markdown('<div class="action-card"><h4>🍿 ဇာတ်လမ်းရှည်</h4><p style="font-size:12px; color:#94a3b8;">ဇာတ်ကားရှည် Recap</p></div>', unsafe_allow_html=True)
         st.button("ဇာတ်လမ်းရှည် ➔", on_click=navigate_to, args=("🍿 ဇာတ်လမ်းရှည် Recap",), key="btn_quick_long")
     with r1_c4:
-        st.markdown('<div class="action-card"><h4>🎙️ AI အသံ</h4><p style="font-size:12px; color:#94a3b8;">မြန်မာ AI အသံဖန်တီးရန်</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="action-card"><h4>🎙️ AI အသံ</h4><p style="font-size:12px; color:#94a3b8;">မြန်မာ/အင်္ဂလိပ် AI အသံဖန်တီးရန်</p></div>', unsafe_allow_html=True)
         st.button("အသံစတူဒီယို ➔", on_click=navigate_to, args=("🎙️ AI အသံ စတူဒီယို",), key="btn_quick_voice")
 
 # ----------------- PAGE 2: ဗီဒီယို ပြုလုပ်ရန် (CREATE & PRO EDITOR) -----------------
 elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ်ရန်":
     st.markdown("## 🎬 **ဗီဒီယို ပြုလုပ်ရန် (Recap Studio Pro)**")
-    st.caption("AI Hook Overlay၊ Subtitle Masking၊ မြန်မာ AI အသံစစ်စစ် (English အသံ လုံးဝမပါ) နှင့် Circular Logo Watermark အပြည့်အစုံ။")
+    st.caption("ဘာသာစကားရွေးချယ်မှု (မြန်မာ/အင်္ဂလိပ်/ထိုင်း/တရုတ်)၊ Live Subtitle Drag နေရာရွှေ့မှု နှင့် Circular Logo Watermark အပြည့်အစုံ။")
     
     if not st.session_state.gemini_api_key:
         api_input = st.text_input("🔑 Google Gemini API Key ထည့်သွင်းပါ (အလိုအလျောက် မှတ်သားထားပါမည်)", type="password")
@@ -909,29 +988,45 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
 
     st.markdown("---")
     
-    col_c1, col_c2 = st.columns(2)
-    with col_c1:
-        st.markdown("##### ၁။ ဘာပုံစံ ပြုလုပ်ချင်ပါသလဲ?")
-        mode = st.selectbox("ပုံစံ", [
-            "🎙️ AI Recap (ဗီဒီယို အကျဉ်းချုပ် + အသံထွက်)",
-            "📝 မြန်မာ စာတန်းထိုး (Subtitles)",
-            "🎬 ရုပ်ရှင် ပြန်လည်ပြောပြ (Story Narration)",
-            "✨ Vision Narrator (AI ဇာတ်ကွက် ခွဲခြမ်းစိတ်ဖြာခြင်း)"
-        ], index=0)
-    with col_c2:
-        st.markdown("##### ၂။ Fast AI Voice ရွေးချယ်မှု")
+    # ----------------- MULTILINGUAL SELECTION -----------------
+    col_lang1, col_lang2, col_voice = st.columns(3)
+    with col_lang1:
+        src_lang = st.selectbox(
+            "🌐 မူရင်း ဗီဒီယို ဘာသာစကား (Source)",
+            ["Auto detect (အလိုအလျောက် သိရှိစေမည်)", "English", "Myanmar", "Thai", "Chinese", "Japanese", "Korean"],
+            index=0
+        )
+    with col_lang2:
+        target_lang = st.selectbox(
+            "🗣️ ထုတ်ယူမည့် ဘာသာစကား (Target Recap Language)",
+            list(LANGUAGE_OPTIONS.keys()),
+            index=0
+        )
+        st.session_state.target_language = target_lang
+        
+    current_lang_info = LANGUAGE_OPTIONS[target_lang]
+    available_voices = current_lang_info["voices"]
+    
+    with col_voice:
         voice_choice = st.selectbox(
-            "အသံရွေးချယ်ပါ",
-            list(VOICE_PROFILES.keys()),
+            f"🎙️ AI အသံ ရွေးချယ်ပါ ({target_lang.split(' ')[0]})",
+            list(available_voices.keys()),
             index=0
         )
         st.session_state.saved_voice = voice_choice
-        st.caption(f"💡 {VOICE_PROFILES[voice_choice]['desc']}")
+        st.caption(f"💡 {available_voices[voice_choice]['desc']}")
         
         if st.button("▶ ရွေးချယ်ထားသော အသံကို နမူနာ နားထောင်ရန်", use_container_width=True):
             with st.spinner("အသံနမူနာ ဖန်တီးနေပါသည်..."):
                 sample_file = "sample_preview.mp3"
-                generate_voice_file("မင်္ဂလာပါ ကျွန်တော်ကတော့ မင်းသန့်ပါ။ ရုပ်ရှင်ဇာတ်လမ်း အစအဆုံးကို အကောင်းဆုံး ပြန်လည်ပြောပြပေးသွားမှာ ဖြစ်ပါတယ်။", voice_choice, sample_file, speed_multiplier=st.session_state.saved_voice_speed)
+                sample_txt = "မင်္ဂလာပါ ကျွန်တော်ကတော့ မင်းသန့်ပါ။" if "မြန်မာ" in target_lang else ("Welcome! Today we are looking at an unbelievable story." if "English" in target_lang else "สวัสดีครับ ยินดีต้อนรับสู่การสรุปเนื้อเรื่องภาพยนตร์")
+                generate_voice_file(
+                    sample_txt,
+                    available_voices[voice_choice],
+                    sample_file,
+                    speed_multiplier=st.session_state.saved_voice_speed,
+                    lang_code=current_lang_info["code"]
+                )
                 st.audio(sample_file)
         
     instructions = st.text_area(
@@ -979,7 +1074,7 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
             elif not st.session_state.gemini_api_key:
                 st.error("Gemini API Key ထည့်သွင်းပေးပါ။")
             else:
-                with st.spinner("သဘာဝကျသော မြန်မာ Recap ဇာတ်ညွှန်းနှင့် Hook ခေါင်းစဉ် ထုတ်ယူနေပါသည်..."):
+                with st.spinner(f"{target_lang} ဖြင့် Recap ဇာတ်ညွှန်းနှင့် Hook ခေါင်းစဉ် ထုတ်ယူနေပါသည်..."):
                     temp_in = "temp_input.mp4"
                     if uploaded_video:
                         with open(temp_in, "wb") as f:
@@ -1001,6 +1096,7 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                         api_key=st.session_state.gemini_api_key,
                         model_name=model_choice,
                         video_path=temp_in if os.path.exists(temp_in) else None,
+                        target_lang_name=target_lang,
                         custom_instructions=instructions
                     )
                     st.session_state.recap_script_text = script_res
@@ -1009,7 +1105,7 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                         import google.generativeai as genai
                         genai.configure(api_key=st.session_state.gemini_api_key)
                         hook_m = genai.GenerativeModel("gemini-1.5-flash")
-                        hook_prompt = f"ဒီဗီဒီယိုဇာတ်ညွှန်းအတွက် TikTok/Reels ပေါ်မှာ လူစိတ်ဝင်စားစေမယ့် စာကြောင်းတို ၂ ကြောင်းပါ ထိပ်စီး Hook Title (ဥပမာ Line 1: တိရစ္ဆာန်တွေကို တရားစွဲ, Line 2: ကြိုးပေးကွပ်မျက်ခဲ့) ကို ၂ ကြောင်းတည်း ရေးပေးပါ။ စာသားသက်သက်သာ ပေးပါ:\n{script_res[:300]}"
+                        hook_prompt = f"ဒီဗီဒီယိုအတွက် {target_lang} ဖြင့် ရေးထားသော စာကြောင်းတို ၂ ကြောင်းပါ ထိပ်စီး Hook Title (Line 1, Line 2) ကို ၂ ကြောင်းတည်း ရေးပေးပါ:\n{script_res[:300]}"
                         h_res = hook_m.generate_content(hook_prompt).text.strip().split("\n")
                         h_lines = [hl.strip() for hl in h_res if hl.strip() and not hl.startswith("#") and not hl.startswith("Line")]
                         if len(h_lines) >= 2:
@@ -1018,9 +1114,9 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                     except Exception:
                         pass
                         
-                    st.success("✅ သဘာဝကျသော AI ဇာတ်ညွှန်းနှင့် Hook ခေါင်းစဉ် ထွက်ရှိပါပြီ!")
+                    st.success(f"✅ {target_lang} ဇာတ်ညွှန်းနှင့် Hook ခေါင်းစဉ် ထွက်ရှိပါပြီ!")
 
-    st.markdown("##### 📝 မြန်မာ Recap ဇာတ်ညွှန်း (အချိန်မှတ်နှင့် နံပါတ်စဉ်များ လုံးဝဖယ်ရှားထားပြီး ဖြစ်ပါသည်):")
+    st.markdown("##### 📝 Recap ဇာတ်ညွှန်း (အချိန်မှတ်နှင့် နံပါတ်စဉ်များ လုံးဝဖယ်ရှားထားပြီး ဖြစ်ပါသည်):")
     edited_script = st.text_area(
         "ဇာတ်ညွှန်းတည်းဖြတ်ရန်",
         value=st.session_state.recap_script_text,
@@ -1068,22 +1164,30 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
 
                 update_neon_phase("Uploading your video...", "Securing and uploading your video...")
                 time.sleep(1.0)
-                update_neon_phase("သင့် Recap ဖန်တီးနေသည်...", "Analyzing your video...")
+                update_neon_phase(f"{target_lang} Recap ဖန်တီးနေသည်...", "Analyzing your video...")
                 time.sleep(1.2)
-                update_neon_phase("သင့် Recap ဖန်တီးနေသည်...", "Creating your recap script...")
+                update_neon_phase(f"{target_lang} Recap ဖန်တီးနေသည်...", "Creating recap script...")
                 time.sleep(1.0)
-                update_neon_phase("သင့် Recap ဖန်တီးနေသည်...", "Generating Myanmar Narration Voice...")
+                update_neon_phase(f"{target_lang} အသံသွင်းယူနေသည်...", f"Generating {voice_choice} Voice...")
 
                 clean_for_tts = clean_script_for_narration(st.session_state.recap_script_text)
                 pron_dict = load_replacements("pronunciation.txt")
                 final_script_for_tts = apply_pronunciation(clean_for_tts, pron_dict)
                 
                 temp_audio_out = "temp_voice.mp3"
-                generate_voice_file(final_script_for_tts, voice_choice, temp_audio_out, speed_multiplier=st.session_state.saved_voice_speed)
+                generate_voice_file(
+                    final_script_for_tts,
+                    available_voices[voice_choice],
+                    temp_audio_out,
+                    speed_multiplier=st.session_state.saved_voice_speed,
+                    lang_code=current_lang_info["code"]
+                )
                 audio_dur = get_media_duration(temp_audio_out)
                 st.session_state.last_voice_file = temp_audio_out
 
                 update_neon_phase("Rendering Final Video...", "Applying Subtitle Masking & Hook Overlay...")
+                
+                calc_margin_v = int(1280 * (st.session_state.sub_v_pos_percent / 100.0))
                 
                 temp_ass_path = "temp_render.ass"
                 create_ass_with_hook_and_subtitles(
@@ -1094,12 +1198,12 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                     ass_path=temp_ass_path,
                     font_name="Padauk",
                     sub_font_size=38,
-                    sub_margin_v=240,
+                    sub_margin_v=calc_margin_v,
                     sub_color="Yellow (ရွှေဝါရောင်)",
                     sub_bg="Box (အမည်းနောက်ခံ ဘား)",
                     hook_color="Yellow (ရွှေဝါရောင်)",
                     enable_hook=True,
-                    max_chars=28
+                    max_chars=int(round(st.session_state.sub_width_percent * 0.32))
                 )
 
                 final_video_output = "recap_output.mp4"
@@ -1123,7 +1227,7 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                     mask_opacity=0.90,
                     enable_bgm=(st.session_state.saved_bgm_vol > 0.01),
                     bgm_volume=st.session_state.saved_bgm_vol,
-                    original_audio_volume=0.0, # 100% English audio silenced!
+                    original_audio_volume=0.0,
                     logo_path=watermark_to_use,
                     logo_pos=st.session_state.saved_logo_pos,
                     logo_size=120,
@@ -1134,33 +1238,67 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                 st.session_state.last_generated_video = final_video_output
                 st.session_state.last_polished_video = final_video_output
                 neon_container.empty()
-                st.success("🎉 Recap ဗီဒီယို အောင်မြင်စွာ ထွက်ရှိပါပြီ! အောက်ရှိ Editor တွင် စိတ်ကြိုက် ပြင်ဆင်နိုင်ပါသည်။")
+                st.success("🎉 Recap ဗီဒီယို အောင်မြင်စွာ ထွက်ရှိပါပြီ! အောက်ရှိ Editor တွင် စာတန်းထိုး နေရာကို Live View ဖြင့် စိတ်ကြိုက် ချိန်ညှိနိုင်ပါသည်။")
 
             except Exception as e:
                 neon_container.empty()
                 st.error(f"❌ Error ဖြစ်ပေါ်ပါသည်: {str(e)}")
 
-    # ----------------- PRO RECAP EDITOR TABS (MATCHING VIDEO) -----------------
+    # ----------------- PRO RECAP EDITOR WITH LIVE SUBTITLE DRAG VIEW -----------------
     if os.path.exists("recap_output.mp4"):
         st.markdown("---")
-        st.markdown("### 🎬 **Recap Pro Editor (Live Preview & Settings)**")
+        st.markdown("### 🎬 **Recap Pro Editor (Live Subtitle Drag & Settings)**")
         
         vid_to_show = st.session_state.last_polished_video if (st.session_state.last_polished_video and os.path.exists(st.session_state.last_polished_video)) else "recap_output.mp4"
         
         col_preview, col_editor_tabs = st.columns((1.1, 1.4))
         
         with col_preview:
-            st.markdown("##### 📱 9:16 Video Preview")
+            st.markdown("##### 📱 9:16 Video Player")
             st.video(vid_to_show)
             if st.session_state.last_voice_file and os.path.exists(st.session_state.last_voice_file):
                 with open(st.session_state.last_voice_file, "rb") as vf:
                     st.download_button(
-                        "📥 Voice အသံ ဒေါင်းလုဒ် (Download MP3)",
+                        f"📥 {target_lang} Voice အသံ ဒေါင်းလုဒ် (Download MP3)",
                         data=vf.read(),
                         file_name="recap_voice_narration.mp3",
                         mime="audio/mp3",
                         use_container_width=True
                     )
+            
+            # --- LIVE SUBTITLE POSITION VISUALIZER OVERLAY ---
+            st.markdown("<br>", unsafe_allow_html=True)
+            preview_txt = clean_script_for_narration(st.session_state.recap_script_text)[:70] if st.session_state.recap_script_text else "စာတန်းထိုး နမူနာ စာသား ပေါ်လာမည့် နေရာ"
+            cur_bottom = st.session_state.sub_v_pos_percent
+            cur_width = st.session_state.sub_width_percent
+            
+            st.markdown(f"""
+            <div style="background:#04090d; border: 2px solid #0284c7; border-radius:12px; padding:12px; text-align:center;">
+                <div style="font-size:11px; color:#38bdf8; font-weight:700; margin-bottom:8px;">
+                    👁️ LIVE VIEW: SUBTITLE အမြင့်နှင့် အကျယ် နေရာစစ်ဆေးရန်
+                </div>
+                <div style="position:relative; width:100%; height:260px; background:#0a1722; border-radius:8px; border:1px solid #1c3548; overflow:hidden;">
+                    <!-- AI Hook at top -->
+                    <div style="position:absolute; top:12px; left:0; width:100%; text-align:center;">
+                        <span style="background:rgba(0,0,0,0.8); color:#FFDF00; font-size:13px; font-weight:800; padding:2px 8px; border-radius:4px;">
+                            {st.session_state.top_hook_text} {st.session_state.bottom_hook_text}
+                        </span>
+                    </div>
+                    <!-- Live Moving Subtitle Box -->
+                    <div style="position:absolute; bottom:{cur_bottom}%; left:{(100-cur_width)/2}%; width:{cur_width}%; transition: bottom 0.2s ease, width 0.2s ease;">
+                        <div style="border: 2px dashed #06b6d4; background: rgba(0,0,0,0.85); padding: 6px 10px; border-radius: 6px; box-shadow:0 0 12px rgba(6,182,212,0.5);">
+                            <div style="font-size:9px; color:#06b6d4; font-weight:800;">[ ✥ SUBTITLE DRAG: {cur_bottom}% ]</div>
+                            <div style="color:#FFFF00; font-size:12px; font-weight:bold; line-height:1.2; margin-top:2px;">
+                                {preview_txt}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div style="font-size:11px; color:#64748b; margin-top:6px;">
+                    ညာဘက်ရှိ Slider ကို ရွှေ့ပါက အပေါ်ရှိ Subtitle Box ၏ အနိမ့်အမြင့်နှင့် အကျယ်ကို တိုက်ရိုက် မြင်တွေ့ရမည်ဖြစ်ပါသည်
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
                     
         with col_editor_tabs:
             tab_sub, tab_hook, tab_aud, tab_blur, tab_logo = st.tabs([
@@ -1173,7 +1311,7 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
             
             # --- TAB 1: SUBTITLES ---
             with tab_sub:
-                st.markdown("##### စာတန်းထိုး ချိန်ညှိချက် (Subtitles)")
+                st.markdown("##### စာတန်းထိုး ချိန်ညှိချက် (Subtitles & Live Placement)")
                 show_subs = st.checkbox("Show Subtitles (စာတန်းထိုး ပြသမည်)", value=True)
                 
                 col_ts1, col_ts2 = st.columns(2)
@@ -1184,8 +1322,20 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                     sub_bg_style = st.selectbox("Subtitle Background", ["Box (အမည်းနောက်ခံ ဘား)", "Outline & Shadow (အနားကွပ်နှင့် အရိပ်)", "Semi-Box (မှန်ကြည် အမည်းနောက်ခံ)"], index=0)
                     sub_font_size_sl = st.slider("Font Size (စာလုံး အရွယ်အစား)", 24, 56, 38, step=2)
                     
-                sub_v_pos = st.slider("စာတန်းထိုး အမြင့်နေရာ (Height Position)", 40, 450, 240, step=10, help="Drag or slide to place subtitle over the mask")
-                sub_width_sl = st.slider("Subtitle Width (အကျယ် - အများဆုံး စာလုံးရေ)", 20, 40, 28, step=2)
+                # LIVE SUBTITLE SLIDERS
+                sub_v_pos_slider = st.slider(
+                    "📐 စာတန်းထိုး အမြင့်နေရာ (Height Position % from bottom)",
+                    5, 85, int(st.session_state.sub_v_pos_percent), step=1,
+                    help="ဤ Slider ကို ရွှေ့လိုက်ပါက ဘယ်ဘက် Preview တွင် စာတန်းထိုး Box တိုက်ရိုက် ရွေ့လျားသွားပါမည်"
+                )
+                st.session_state.sub_v_pos_percent = sub_v_pos_slider
+                
+                sub_w_slider = st.slider(
+                    "↔️ Subtitle Width (စာတန်းထိုး အကျယ် %)",
+                    40, 100, int(st.session_state.sub_width_percent), step=5,
+                    help="ကျဉ်းမြောင်းပါက စာကြောင်းစောစောဆင်းမည်ဖြစ်သည်"
+                )
+                st.session_state.sub_width_percent = sub_w_slider
 
             # --- TAB 2: AI HOOK ---
             with tab_hook:
@@ -1262,11 +1412,13 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                     lg_op_sl = st.slider("Logo Opacity", 0.3, 1.0, 0.90, step=0.05)
 
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("⚡ ပြင်ဆင်ချက်များဖြင့် Final Video အချော ထုတ်ယူမည် (Re-Export MP4)", type="primary", use_container_width=True):
-                with st.spinner("ရွေးချယ်ထားသော စတိုင်သစ်များဖြင့် Final Video အချော ထုတ်ယူနေပါသည်..."):
+            if st.button("⚡ Subtitle နေရာနှင့် ပြင်ဆင်ချက်များဖြင့် Final Video အချော ထုတ်ယူမည် (Re-Export MP4)", type="primary", use_container_width=True):
+                with st.spinner("ရွေးချယ်ထားသော Subtitle နေရာသစ်ဖြင့် Final Video အချော ထုတ်ယူနေပါသည်..."):
                     tweak_ass = "tweak_editor.ass"
                     audio_f = st.session_state.last_voice_file if (st.session_state.last_voice_file and os.path.exists(st.session_state.last_voice_file)) else "temp_voice.mp3"
                     audio_len = get_media_duration(audio_f) if os.path.exists(audio_f) else 10.0
+                    
+                    calc_final_margin = int(1280 * (st.session_state.sub_v_pos_percent / 100.0))
                     
                     clean_for_tts = clean_script_for_narration(st.session_state.recap_script_text)
                     create_ass_with_hook_and_subtitles(
@@ -1277,12 +1429,12 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                         ass_path=tweak_ass,
                         font_name="Padauk",
                         sub_font_size=sub_font_size_sl,
-                        sub_margin_v=sub_v_pos,
+                        sub_margin_v=calc_final_margin,
                         sub_color=sub_col_pick,
                         sub_bg=sub_bg_style,
                         hook_color=hook_col_sel,
                         enable_hook=enable_hook_chk,
-                        max_chars=sub_width_sl
+                        max_chars=int(round(st.session_state.sub_width_percent * 0.32))
                     )
                     
                     final_reexport_mp4 = "recap_polished_final.mp4"
@@ -1575,7 +1727,7 @@ elif st.session_state.nav_menu == "🍿 ဇာတ်လမ်းရှည် Rec
                 model = genai.GenerativeModel("gemini-1.5-flash")
                 
                 long_prompt = f"""
-သင်သည် ထိပ်တန်း မြန်မာ Movie Recap Storyteller ဖြစ်သည်။
+သင်သည် ထိပ်တန်း Movie Recap Storyteller ဖြစ်သည်။
 ရုပ်ရှင်အမည်: {movie_title}
 အမျိုးအစား: {movie_genre}
 ခန့်မှန်းကြာချိန်: {target_minutes} မိနစ်စာ ဖတ်ကြားနိုင်မည့် အရှည်။
@@ -1584,7 +1736,7 @@ elif st.session_state.nav_menu == "🍿 ဇာတ်လမ်းရှည် Rec
 စည်းမျဉ်းများ:
 ၁။ အချိန်မှတ် (Timestamps) နှင့် နံပါတ်စဉ်များ လုံးဝမပါရ။
 ၂။ ဇာတ်လမ်းကို အစ၊ အလယ်၊ အဆုံး ရင်ထဲထိအောင် ဆွဲဆောင်မှုရှိသော စကားပြောဟန်ဖြင့် ပြည့်ပြည့်စုံစုံ ရေးပေးပါ။
-၃။ အသံဖတ်ရန် သီးသန့် မြန်မာစကားပြော စာပိုဒ်များသာ ထုတ်ပေးပါ။
+၃။ အသံဖတ်ရန် သီးသန့် စကားပြော စာပိုဒ်များသာ ထုတ်ပေးပါ။
 """
                 resp = model.generate_content(long_prompt)
                 clean_long = clean_script_for_narration(resp.text)
@@ -1636,22 +1788,24 @@ elif st.session_state.nav_menu == "📥 ဗီဒီယို ဒေါင်း
 
 # ----------------- PAGE 9: AI အသံ စတူဒီယို -----------------
 elif st.session_state.nav_menu == "🎙️ AI အသံ စတူဒီယို":
-    st.markdown("## 🎙️ **AI အသံ စတူဒီယို (Standalone Voice Studio)**")
-    st.caption("မြန်မာစကားပြော အသံဩဇာ ၇ မျိုးဖြင့် စိတ်ကြိုက် စာသားများကို သဘာဝကျကျ အသံသွင်းယူနိုင်ပါသည်။")
+    st.markdown("## 🎙️ **AI အသံ စတူဒီယို (Standalone Multilingual Studio)**")
+    st.caption("မြန်မာ၊ အင်္ဂလိပ်၊ ထိုင်း၊ တရုတ် အသံပေါင်းစုံဖြင့် စိတ်ကြိုက် စာသားများကို သဘာဝကျကျ အသံသွင်းယူနိုင်ပါသည်။")
     
     voice_text = st.text_area(
-        "အသံထွက်ဖတ်ခိုင်းမည့် မြန်မာစာသား ရိုက်ထည့်ပါ",
+        "အသံထွက်ဖတ်ခိုင်းမည့် စာသား ရိုက်ထည့်ပါ",
         value="လူတွေတင်မကဘဲ တိရစ္ဆာန်တွေကိုပါ တရားရုံးတင်ပြီး ကြိုးပေးသတ်ခဲ့တဲ့ သမိုင်းထဲက ထူးဆန်းတဲ့ အဖြစ်အပျက်တွေကို သင်တို့ ကြားဖူးကြရဲ့လားဗျာ။",
         height=140
     )
     
-    col_vs1, col_vs2 = st.columns(2)
+    col_vs_l, col_vs1, col_vs2 = st.columns(3)
+    with col_vs_l:
+        studio_lang = st.selectbox("ဘာသာစကား ရွေးချယ်ပါ", list(LANGUAGE_OPTIONS.keys()), index=0)
     with col_vs1:
-        sel_voice = st.selectbox("အသံရွေးချယ်ပါ", list(VOICE_PROFILES.keys()), index=0)
-        st.info(f"💡 {VOICE_PROFILES[sel_voice]['desc']}")
+        studio_voice_dict = LANGUAGE_OPTIONS[studio_lang]["voices"]
+        sel_voice = st.selectbox("အသံရွေးချယ်ပါ", list(studio_voice_dict.keys()), index=0)
+        st.info(f"💡 {studio_voice_dict[sel_voice]['desc']}")
     with col_vs2:
         sel_speed = st.slider("အသံ Speed", 0.8, 2.0, 1.15, step=0.05)
-        sel_pitch = st.select_slider("Pitch (အသံ အနိမ့်အမြင့်)", options=["-12Hz", "-8Hz", "-4Hz", "+0Hz", "+4Hz", "+8Hz"], value=VOICE_PROFILES[sel_voice]["pitch"])
 
     if st.button("🎙️ အသံဖိုင် ဖန်တီးမည် (Generate MP3)", type="primary", use_container_width=True):
         if not voice_text.strip():
@@ -1662,11 +1816,17 @@ elif st.session_state.nav_menu == "🎙️ AI အသံ စတူဒီယို
                 cleaned = clean_script_for_narration(voice_text)
                 applied = apply_pronunciation(cleaned, pron_dict)
                 out_aud = "standalone_voice.mp3"
-                generate_voice_file(applied, sel_voice, out_aud, speed_multiplier=sel_speed, custom_pitch=sel_pitch)
+                generate_voice_file(
+                    applied,
+                    studio_voice_dict[sel_voice],
+                    out_aud,
+                    speed_multiplier=sel_speed,
+                    lang_code=LANGUAGE_OPTIONS[studio_lang]["code"]
+                )
                 st.success("✅ အသံဖိုင် အောင်မြင်စွာ ဖန်တီးပြီးပါပြီ!")
                 st.audio(out_aud)
                 with open(out_aud, "rb") as af:
-                    st.download_button("📥 MP3 အသံဖိုင် ဒေါင်းလုဒ်ဆွဲရန်", data=af.read(), file_name="ai_burmese_voice.mp3", mime="audio/mp3")
+                    st.download_button("📥 MP3 အသံဖိုင် ဒေါင်းလုဒ်ဆွဲရန်", data=af.read(), file_name="ai_voice_output.mp3", mime="audio/mp3")
 
 # ----------------- PAGE 10: အသံ ပြောင်းစနစ် -----------------
 elif st.session_state.nav_menu == "🔄 အသံ ပြောင်းစနစ်":
