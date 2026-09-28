@@ -218,7 +218,6 @@ if "redirect_page" not in st.session_state:
 if "nav_menu" not in st.session_state:
     st.session_state.nav_menu = "🏠 ပင်မစာမျက်နှာ"
 
-# Handle redirect BEFORE any widgets are created (Fixes StreamlitWidgetAlreadyInstantiatedError)
 if st.session_state.redirect_page:
     st.session_state.nav_menu = st.session_state.redirect_page
     st.session_state.redirect_page = None
@@ -271,7 +270,7 @@ if "saved_voice" not in st.session_state:
     st.session_state.saved_voice = defaults_init["default_voice"]
 
 if "saved_model" not in st.session_state:
-    st.session_state.saved_model = "gemini-1.5-flash"
+    st.session_state.saved_model = "gemini-2.0-flash"
 
 if "saved_bgm_vol" not in st.session_state:
     st.session_state.saved_bgm_vol = 0.12
@@ -306,7 +305,6 @@ def sync_language_defaults(new_lang):
     st.session_state.active_lang_key = new_lang
 
 def navigate_to(page_name):
-    # Safe redirection without triggering StreamlitWidgetAlreadyInstantiatedError
     st.session_state.redirect_page = page_name
 
 # ----------------- USER WATERMARK LOGO PROCESSOR -----------------
@@ -317,7 +315,7 @@ def process_user_logo(input_img_path, output_img_path, make_circle=True, remove_
         new_data = []
         for item in data:
             r = item[0]
-            g = item[1]
+            g = item
             b = item[2]
             a = item[3] if len(item) > 3 else 255
             if remove_white_bg and r > 215 and g > 215 and b > 215:
@@ -361,25 +359,6 @@ def get_overlay_coords(pos_name, margin=20):
     else:
         return f"main_w-overlay_w-{margin}:{margin}"
 
-def get_logo_css_pos(pos_name):
-    if "Top-Left" in pos_name or "အပေါ် ဘယ်" in pos_name:
-        return "top: 15px; left: 15px;"
-    elif "Bottom-Right" in pos_name or "အောက် ညာ" in pos_name:
-        return "bottom: 25px; right: 15px;"
-    elif "Bottom-Left" in pos_name or "အောက် ဘယ်" in pos_name:
-        return "bottom: 25px; left: 15px;"
-    else:
-        return "top: 15px; right: 15px;"
-
-def get_file_base64(filepath):
-    if filepath and os.path.exists(filepath):
-        try:
-            with open(filepath, "rb") as f:
-                return base64.b64encode(f.read()).decode("utf-8")
-        except Exception:
-            pass
-    return ""
-
 def clean_script_for_narration(text):
     if not text:
         return ""
@@ -414,7 +393,7 @@ def load_replacements(filepath):
                         sep = "=" if "=" in line else ":"
                         parts = line.split(sep, 1)
                         if len(parts) == 2:
-                            data[parts[0].strip()] = parts[1].strip()
+                            data[parts[0].strip()] = parts.strip()
         except Exception:
             pass
     return data
@@ -437,19 +416,14 @@ def parse_hook_titles(raw_text, default_line1, default_line2):
             if clean_l:
                 lines.append(clean_l)
     l1 = lines[0] if len(lines) > 0 else default_line1
-    l2 = lines[1] if len(lines) > 1 else default_line2
+    l2 = lines if len(lines) > 1 else default_line2
     return l1, l2
 
-# ----------------- EXACT DURATION MULTILINGUAL SCRIPT GENERATOR -----------------
+# ----------------- EXACT DURATION MULTILINGUAL SCRIPT GENERATOR (WITH AUTO MODEL FALLBACK) -----------------
 def generate_multilingual_recap(api_key, model_name, video_path, target_lang_name, custom_instructions, target_duration_sec=60.0):
     import google.generativeai as genai
     genai.configure(api_key=api_key)
     
-    try:
-        model = genai.GenerativeModel(model_name)
-    except Exception:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        
     lang_info = LANGUAGE_CONFIGS.get(target_lang_name, LANGUAGE_CONFIGS["🇲🇲 မြန်မာ (Myanmar / Burmese)"])
     lang_code = lang_info["code"]
     
@@ -492,27 +466,67 @@ NO timestamps (0:00), NO numbers (1, 2, 3), NO scene labels.
 {pacing_rule}
 Additional instructions: {custom_instructions}
 """
+    video_file = None
     if video_path and os.path.exists(video_path):
-        video_file = genai.upload_file(path=video_path)
-        while video_file.state.name == "PROCESSING":
-            time.sleep(2)
-            video_file = genai.get_file(video_file.name)
-        response = model.generate_content([video_file, prompt])
-    else:
-        response = model.generate_content(prompt)
+        try:
+            video_file = genai.upload_file(path=video_path)
+            wait_count = 0
+            while video_file.state.name == "PROCESSING" and wait_count < 25:
+                time.sleep(2)
+                wait_count += 1
+                video_file = genai.get_file(video_file.name)
+            if video_file.state.name != "ACTIVE":
+                video_file = None
+        except Exception:
+            video_file = None
+
+    # Model candidates with automatic fallback if 404 occurs
+    model_candidates = [
+        model_name,
+        "gemini-2.0-flash",
+        "gemini-2.5-flash",
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-flash",
+        "gemini-2.0-flash-exp",
+        "gemini-1.5-pro"
+    ]
+    seen = set()
+    unique_candidates = [c for c in model_candidates if c and not (c in seen or seen.add(c))]
+    
+    response = None
+    last_err = None
+    successful_model_name = "gemini-2.0-flash"
+    
+    for cand in unique_candidates:
+        try:
+            m = genai.GenerativeModel(cand)
+            if video_file:
+                response = m.generate_content([video_file, prompt])
+            else:
+                response = m.generate_content(prompt)
+            if response and response.text:
+                successful_model_name = cand
+                break
+        except Exception as ex:
+            last_err = ex
+            continue
+            
+    if not response or not response.text:
+        raise Exception(f"Gemini API Error: {last_err}")
     
     script_text = clean_script_for_narration(response.text)
     
+    # Strictly Language-Matched AI Hook Generator using the successful model
     try:
-        hook_m = genai.GenerativeModel("gemini-1.5-flash")
+        hook_m = genai.GenerativeModel(successful_model_name)
         if lang_code == "en":
-            hook_prompt = f"Based on this script, create a viral 2-line video Hook title in ENGLISH ONLY. Format strictly as:\nLINE 1: <2-4 words in English>\nLINE 2: <2-4 words in English>\n\nScript:\n{script_text[:400]}"
+            hook_prompt = f"""Based on this script, create a viral 2-line video Hook title in ENGLISH ONLY. Format strictly as:\nLINE 1: <2-4 words in English>\nLINE 2: <2-4 words in English>\n\nScript:\n{script_text[:400]}"""
         elif lang_code == "th":
-            hook_prompt = f"สร้างหัวข้อ Hook สั้นๆ 2 บรรทัดสำหรับวิดีโอเป็นภาษาไทยเท่านั้น:\nLINE 1: <2-4 คำ>\nLINE 2: <2-4 คำ>\n\nScript:\n{script_text[:400]}"
+            hook_prompt = f"""สร้างหัวข้อ Hook สั้นๆ 2 บรรทัดสำหรับวิดีโอเป็นภาษาไทยเท่านั้น:\nLINE 1: <2-4 คำ>\nLINE 2: <2-4 คำ>\n\nScript:\n{script_text[:400]}"""
         elif lang_code == "zh":
-            hook_prompt = f"请为该视频生成两行纯中文爆款标题：\nLINE 1: <2-4字>\nLINE 2: <2-4字>\n\n文案：\n{script_text[:400]}"
+            hook_prompt = f"""请为该视频生成两行纯中文爆款标题：\nLINE 1: <2-4字>\nLINE 2: <2-4字>\n\n文案：\n{script_text[:400]}"""
         else:
-            hook_prompt = f"ဒီ script အတွက် မြန်မာဘာသာစကား သီးသန့်ဖြင့် ဆွဲဆောင်မှုရှိသော Hook Title စာကြောင်းတို ၂ ကြောင်း ရေးပေးပါ:\nLINE 1: <စကားလုံး ၃-၄ လုံး>\nLINE 2: <စကားလုံး ၃-၄ လုံး>\n\nScript:\n{script_text[:400]}"
+            hook_prompt = f"""ဒီ script အတွက် မြန်မာဘာသာစကား သီးသန့်ဖြင့် ဆွဲဆောင်မှုရှိသော Hook Title စာကြောင်းတို ၂ ကြောင်း ရေးပေးပါ:\nLINE 1: <စကားလုံး ၃-၄ လုံး>\nLINE 2: <စကားလုံး ၃-၄ လုံး>\n\nScript:\n{script_text[:400]}"""
             
         h_resp = hook_m.generate_content(hook_prompt).text
         hook1, hook2 = parse_hook_titles(h_resp, lang_info["default_hook1"], lang_info["default_hook2"])
@@ -903,7 +917,7 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
         st.session_state.saved_voice = voice_choice
 
     with col_l3:
-        model_choice = st.selectbox("🤖 Gemini Model", ["gemini-1.5-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"])
+        model_choice = st.selectbox("🤖 Gemini Model", ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-flash", "gemini-1.5-pro"], index=0)
         st.session_state.saved_model = model_choice
 
     tab_up, tab_yt = st.tabs(["📤 ဗီဒီယို တင်ရန်", "🔗 YouTube / TikTok Link"])
@@ -924,7 +938,7 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
 
     instructions = st.text_area(
         "ညွှန်ကြားချက် (Custom Instructions)",
-        value=f"ဒီဗီဒီယိုကို {target_lang.split(' ')[1]} ဘာသာစကား သီးသန့်ဖြင့် စကားပြောဟန် ရေးပေးပါ။ အချိန်မှတ် (0:00) နှင့် နံပါတ်စဉ်များ လုံးဝမထည့်ပါနှင့်။",
+        value=f"ဒီဗီဒီယိုကို {target_lang.split(' ')} ဘာသာစကား သီးသန့်ဖြင့် စကားပြောဟန် ရေးပေးပါ။ အချိန်မှတ် (0:00) နှင့် နံပါတ်စဉ်များ လုံးဝမထည့်ပါနှင့်။",
         height=65
     )
 
@@ -938,7 +952,7 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
             elif not st.session_state.gemini_api_key:
                 st.error("Gemini API Key ထည့်သွင်းပေးပါ။")
             else:
-                with st.spinner(f"ဗီဒီယိုကြာချိန် ({round(current_video_dur)}s) နှင့် ကိုက်ညီသော {target_lang.split(' ')[1]} Recap ဇာတ်ညွှန်း ထုတ်ယူနေပါသည်..."):
+                with st.spinner(f"ဗီဒီယိုကြာချိန် ({round(current_video_dur)}s) နှင့် ကိုက်ညီသော {target_lang.split(' ')} Recap ဇာတ်ညွှန်း ထုတ်ယူနေပါသည်..."):
                     temp_in = "temp_input.mp4"
                     if video_url:
                         clean_u = video_url.split("?")[0]
@@ -966,7 +980,7 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                     st.session_state.recap_script_text = script_res
                     st.session_state.top_hook_text = h1
                     st.session_state.bottom_hook_text = h2
-                    st.success(f"✅ {target_lang.split(' ')[1]} သီးသန့် ဇာတ်ညွှန်းနှင့် Hook ခေါင်းစဉ် ထွက်ရှိပါပြီ!")
+                    st.success(f"✅ {target_lang.split(' ')} သီးသန့် ဇာတ်ညွှန်းနှင့် Hook ခေါင်းစဉ် ထွက်ရှိပါပြီ!")
 
     st.markdown("##### 📝 Recap ဇာတ်ညွှန်း (တည်းဖြတ်ရန်):")
     st.session_state.recap_script_text = st.text_area(
@@ -1006,7 +1020,6 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                 )
                 st.session_state.last_voice_file = temp_voice_out
 
-                # 1. RENDER CLEAN BASE PREVIEW VIDEO
                 clean_preview = "clean_preview_video.mp4"
                 render_pro_video(
                     input_video_path=temp_in,
@@ -1028,7 +1041,6 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                 )
                 st.session_state.clean_preview_video = clean_preview
 
-                # 2. RENDER FINAL MP4 WITH BURNED SUBTITLES
                 v_dur = get_media_duration(temp_in)
                 final_ass = "temp_render.ass"
                 calc_margin_v = int(1280 * (st.session_state.sub_v_pos_percent / 100.0))
@@ -1080,10 +1092,12 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
     st.markdown("### 🎬 **Interactive Video Subtitle Canvas (ဗီဒီယိုပေါ်တွင် Subtitle နေရာ တိုက်ရိုက်ချိန်ညှိခြင်း)**")
     
     active_vid = ""
-    if st.session_state.clean_preview_video and os.path.exists(st.session_state.clean_preview_video):
-        active_vid = st.session_state.clean_preview_video
+    if st.session_state.last_polished_video and os.path.exists(st.session_state.last_polished_video):
+        active_vid = st.session_state.last_polished_video
     elif os.path.exists("recap_output.mp4"):
         active_vid = "recap_output.mp4"
+    elif st.session_state.clean_preview_video and os.path.exists(st.session_state.clean_preview_video):
+        active_vid = st.session_state.clean_preview_video
     elif os.path.exists("temp_input.mp4"):
         active_vid = "temp_input.mp4"
 
@@ -1206,8 +1220,15 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
                 )
 
     with col_canvas:
-        st.markdown("#### 📱 **Live Video Screen Preview**")
+        st.markdown("#### 📱 **Live Video Player & Subtitle Preview**")
         
+        # 1. Native Streamlit Video Player (Fast, instant, never freezes, never shows code!)
+        if active_vid and os.path.exists(active_vid):
+            st.video(active_vid)
+        else:
+            st.info("🎬 အဆင့် (၂) တွင် Render ပြုလုပ်ပြီးပါက ဤနေရာတွင် ဗီဒီယို တိုက်ရိုက် ကြည့်ရှုနိုင်ပါမည်။")
+
+        # 2. Visual Subtitle & Hook Placement Card
         hex_color_map = {
             "Yellow (ရွှေဝါရောင်)": "#FFFF00",
             "White (အဖြူရောင်)": "#FFFFFF",
@@ -1226,62 +1247,36 @@ elif st.session_state.nav_menu == "🎬 ဗီဒီယို ပြုလုပ
 
         display_sub_sample = clean_script_for_narration(st.session_state.recap_script_text)[:75] if st.session_state.recap_script_text else cur_lang_cfg["default_sub_preview"]
 
-        video_b64 = get_file_base64(active_vid) if active_vid else ""
-        logo_b64 = get_file_base64(st.session_state.user_watermark_path) if (st.session_state.user_watermark_path and os.path.exists(st.session_state.user_watermark_path)) else ""
-        
-        logo_css_pos = get_logo_css_pos(st.session_state.saved_logo_pos)
-        logo_tag = f'<div style="position:absolute; {logo_css_pos} pointer-events:none; z-index:15;"><img src="data:image/png;base64,{logo_b64}" style="width:45px; height:45px; border-radius:50%; border:1.5px solid #fff; box-shadow:0 2px 6px rgba(0,0,0,0.6);" /></div>' if logo_b64 else ''
-
-        if video_b64:
-            video_inner_html = f'''
-            <video controls autoplay loop muted playsinline style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover;">
-                <source src="data:video/mp4;base64,{video_b64}" type="video/mp4">
-            </video>
-            '''
-        else:
-            video_inner_html = '''
-            <div style="position:absolute; top:0; left:0; width:100%; height:100%; background:radial-gradient(circle, #0f2536, #04090d); display:flex; align-items:center; justify-content:center; color:#38bdf8;">
-                <div style="text-align:center;">
-                    <div style="font-size:48px;">🎬</div>
-                    <div style="font-size:13px; font-weight:bold; margin-top:8px;">ဗီဒီယို Render ပြုလုပ်ပါက ဤနေရာတွင် တိုက်ရိုက်ပြသပါမည်</div>
-                </div>
+        preview_card_html = f'''<div style="background:#09141e; border:2px solid #0284c7; border-radius:14px; padding:14px; margin-top:12px; text-align:center;">
+<div style="font-size:11px; color:#38bdf8; font-weight:bold; letter-spacing:1px; margin-bottom:8px;">
+    👁️ SUBTITLE & HOOK PLACEMENT PREVIEW
+</div>
+<div style="position:relative; height:180px; background:radial-gradient(circle, #0e2030, #04090d); border-radius:10px; border:1px solid #1c3548; overflow:hidden;">
+    <div style="position:absolute; top:{st.session_state.hook_top_percent}%; left:0; width:100%; text-align:center;">
+        <span style="display:inline-block; background:rgba(0,0,0,0.85); color:#FFDF00; font-size:13px; font-weight:800; padding:2px 10px; border-radius:4px; border:1px solid rgba(255,255,255,0.2);">
+            {st.session_state.top_hook_text} | {st.session_state.bottom_hook_text}
+        </span>
+    </div>
+    <div style="position:absolute; bottom:{st.session_state.sub_v_pos_percent}%; left:{(100 - st.session_state.sub_width_percent)/2}%; width:{st.session_state.sub_width_percent}%; text-align:center; transition:all 0.2s ease;">
+        <div style="border:2px dashed #00e5ff; {sub_box_css}">
+            <div style="font-size:9px; color:#00e5ff; font-weight:800;">[ ✥ SUBTITLE: {st.session_state.sub_v_pos_percent}% ]</div>
+            <div style="color:{sub_hex}; font-size:{max(12, int(font_size_val * 0.36))}px; font-weight:bold; line-height:1.2;">
+                {display_sub_sample}
             </div>
-            '''
-
-        phone_screen_html = f'''
-        <div style="position:relative; width:340px; height:604px; margin:0 auto; border-radius:24px; overflow:hidden; background:#000; border:3px solid #0284c7; box-shadow:0 0 35px rgba(2,132,199,0.3);">
-            {video_inner_html}
-            
-            <!-- TOP AI HOOK OVERLAY -->
-            <div style="position:absolute; top:{st.session_state.hook_top_percent}%; left:0; width:100%; text-align:center; pointer-events:none; z-index:12;">
-                <span style="display:inline-block; background:rgba(0,0,0,0.85); color:#FFDF00; font-size:14px; font-weight:900; padding:4px 14px; border-radius:6px; border:1px solid rgba(255,255,255,0.25); text-shadow:0 2px 4px #000; letter-spacing:0.5px;">
-                    {st.session_state.top_hook_text}<br>{st.session_state.bottom_hook_text}
-                </span>
-            </div>
-
-            <!-- DYNAMIC MOVING SUBTITLE OVERLAY -->
-            <div style="position:absolute; bottom:{st.session_state.sub_v_pos_percent}%; left:{(100 - st.session_state.sub_width_percent)/2}%; width:{st.session_state.sub_width_percent}%; text-align:center; pointer-events:none; z-index:14; transition:bottom 0.15s ease, width 0.15s ease;">
-                <div style="border: 2px dashed #00e5ff; {sub_box_css}">
-                    <div style="font-size:9px; color:#00e5ff; font-weight:800; margin-bottom:2px; text-transform:uppercase;">
-                        ✥ SUBTITLE POSITION: {st.session_state.sub_v_pos_percent}%
-                    </div>
-                    <div style="color:{sub_hex}; font-size:{font_size_val * 0.38:.0f}px; font-weight:bold; line-height:1.25;">
-                        {display_sub_sample}
-                    </div>
-                </div>
-            </div>
-
-            {logo_tag}
         </div>
-        '''
-        st.markdown(phone_screen_html, unsafe_allow_html=True)
+    </div>
+</div>
+<div style="font-size:11px; color:#94a3b8; margin-top:8px;">
+    ဘေးရှိ Slider များ ရွှေ့လိုက်ပါက Subtitle အမြင့်နေရာ ({st.session_state.sub_v_pos_percent}%) ကို အချိန်နှင့်တပြေးညီ မြင်တွေ့ရမည်ဖြစ်ပါသည်
+</div>
+</div>'''
+        st.markdown(preview_card_html, unsafe_allow_html=True)
 
 # ----------------- PAGE 3: AUTO CLIPS (INTERCONNECTED VIDEO SPLITTER) -----------------
 elif st.session_state.nav_menu == "✂️ Auto Clips (ဗီဒီယိုခွဲထုတ်ခြင်း)":
     st.markdown("## ✂️ **Auto Clips Splitter (ဗီဒီယိုကလစ် ခွဲထုတ်ခြင်း စတူဒီယို)**")
     st.caption("မူရင်းဗီဒီယိုရှည်များမှ မိမိနှစ်သက်ရာ အပိုင်းတို (Shorts/Reels) များကို မျက်မြင်ဗီဒီယိုဖွင့်ကြည့်၍ ဖြတ်ထုတ်နိုင်ပြီး စတူဒီယိုနှင့် တိုက်ရိုက်ချိတ်ဆက်ထားပါသည်။")
 
-    # 1. DETECT & SELECT VIDEO SOURCE
     source_options = []
     if os.path.exists("temp_input.mp4"):
         source_options.append("📥 'ဗီဒီယို ပြုလုပ်ရန်' မှ မူရင်းဗီဒီယို (temp_input.mp4)")
