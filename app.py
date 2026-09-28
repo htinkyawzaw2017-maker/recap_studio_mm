@@ -12,13 +12,13 @@ from PIL import Image, ImageDraw, ImageFont
 
 # ----------------- PAGE CONFIG -----------------
 st.set_page_config(
-    page_title="Recap Studio MM Pro - Vision AI Edition",
+    page_title="Recap Studio MM Pro - Master Suite",
     page_icon="🎬",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# ----------------- NEON CYBERPUNK CSS -----------------
+# ----------------- CYBERPUNK NEON GLOW CSS -----------------
 st.markdown("""
 <style>
     .stApp {
@@ -27,7 +27,7 @@ st.markdown("""
     }
     @keyframes neonGlow {
         0% { box-shadow: 0 0 5px #00f2fe, 0 0 10px #00f2fe; }
-        50% { box-shadow: 0 0 18px #00f2fe, 0 0 25px #38bdf8; }
+        50% { box-shadow: 0 0 20px #00f2fe, 0 0 30px #38bdf8; }
         100% { box-shadow: 0 0 5px #00f2fe, 0 0 10px #00f2fe; }
     }
     .neon-panel {
@@ -251,6 +251,9 @@ if "last_rendered_video" not in st.session_state:
 if "saved_bgm_vol" not in st.session_state:
     st.session_state.saved_bgm_vol = 0.08
 
+if "active_nav_tab" not in st.session_state:
+    st.session_state.active_nav_tab = "🎬 Movie Recap Studio"
+
 VOICE_CONFIGS = {
     "မင်းသန့် (Agency - Confident Narrator)": {"voice": "my-MM-ThihaNeural", "pitch": "-2Hz", "rate": "+3%"},
     "ကိုမင်း (Deep Cinematic Specialist)": {"voice": "my-MM-ThihaNeural", "pitch": "-6Hz", "rate": "+2%"},
@@ -258,38 +261,34 @@ VOICE_CONFIGS = {
     "မေသူ (Drama & Mystery Female)": {"voice": "my-MM-NilarNeural", "pitch": "+2Hz", "rate": "+2%"}
 }
 
-RECAP_MODES = {
-    "🔍 Auto-Detect (ဗီဒီယိုထဲပါသည့်အတိုင်း အလိုအလျောက် သုံးသပ်မည်)": "auto",
-    "🔬 Science, Test & Experiment (စမ်းသပ်မှုနှင့် သိပ္ပံ / ဗဟုသုတ)": "experiment",
-    "🛠️ Silent Craft & DIY (အသံမဲ့ လက်မှုပညာနှင့် ပြုပြင်ရေး)": "craft",
-    "🎬 Movie & Fiction Recap (ရုပ်ရှင်နှင့် ဇာတ်လမ်းတွဲများ)": "movie"
-}
-
 # ----------------- TRUE MULTIMODAL VISION AI SCRIPT ENGINE -----------------
-def generate_vision_matched_script(raw_api_keys, video_path, target_duration, mode_key="auto"):
+def generate_vision_matched_script(raw_api_keys, video_path, target_duration, mode_prompt_type="movie"):
     import google.generativeai as genai
 
     keys = [k.strip() for k in re.split(r"[,;\n]+", raw_api_keys) if k.strip()]
     if not keys:
         raise ValueError("Gemini API Key ထည့်သွင်းပေးပါ ခင်ဗျာ။")
 
-    # Strict Formula: 1.65 spoken words per second
+    # Strict Formula: 1.65 spoken words per second for 1:1 duration lock
     exact_words = max(18, int(target_duration * 1.65))
 
-    mode_prompts = {
-        "auto": "တင်ထားသော ဗီဒီယိုဖိုင်ကို သေချာကြည့်ပါ။ ဤဗီဒီယိုသည် စမ်းသပ်မှု (Experiment) ဖြစ်စေ၊ လက်မှုပညာ ဖြစ်စေ၊ ရုပ်ရှင် ဖြစ်စေ မျက်မြင်အစစ်အမှန် ဖြစ်ပျက်နေသော အကြောင်းအရာကိုသာ အတိအကျ ရှင်းပြပေးပါ။",
-        "experiment": "တင်ထားသော ဗီဒီယိုဖိုင်ကို သေချာကြည့်ပါ။ ဤဗီဒီယိုသည် သိပ္ပံ/လက်တွေ့ စမ်းသပ်မှု (Experiment) ဗီဒီယို ဖြစ်သည်။ စမ်းသပ်မှု လုပ်ဆောင်ပုံ၊ အဆင့်ဆင့် ဖြစ်ပျက်ပုံနှင့် နောက်ဆုံး ရလဒ်ထွက်ပေါ်လာပုံကို မျက်မြင်အစစ်အမှန်အတိုင်း အချက်အလက်တိကျစွာ ရှင်းပြပေးပါ။ စိတ်ကူးယဉ် ဇာတ်လမ်းများ လုံးဝမထည့်ပါနှင့်။",
-        "craft": "တင်ထားသော ဗီဒီယိုဖိုင်ကို သေချာကြည့်ပါ။ ဤဗီဒီယိုသည် အသံမပါသော လက်မှုပညာ/DIY ဗီဒီယို ဖြစ်သည်။ လက်ဖြင့် အဆင့်ဆင့် ပြုလုပ်နေပုံများကို အနီးကပ် လိုက်လံရှင်းပြပေးပါ။",
-        "movie": "တင်ထားသော ရုပ်ရှင်ဗီဒီယိုကို ကြည့်ပြီး ဇာတ်ကွက်အလိုက် စိတ်လှုပ်ရှားဖွယ် Movie Recap အဖြစ် ပြန်လည်ပြောပြပေးပါ။"
-    }
+    if mode_prompt_type == "craft":
+        mode_instruction = """
+တင်ထားသော ဗီဒီယိုဖိုင်ကို မျက်စိဖြင့် သေချာကြည့်ပါ။ ဤဗီဒီယိုသည် အသံမပါသော လက်မှုပညာ (Woodworking/DIY/Restoration/စမ်းသပ်မှု) ဗီဒီယို ဖြစ်သည်။
+လက်ဖြင့် အဆင့်ဆင့် ပြုလုပ်နေပုံများကို မျက်မြင်အစစ်အမှန်အတိုင်း "ပထမဦးဆုံးအနေနဲ့...", "ဒီနေရာမှာတော့...", "သေသပ်သွားအောင် အချောကိုင်ပေးနေတာ ဖြစ်ပါတယ်..." စသည်ဖြင့် ပရိသတ် စွဲဆောင်သွားအောင် အနီးကပ် ရှင်းပြပေးပါ။ စိတ်ကူးယဉ် ဇာတ်လမ်းများ လုံးဝမထည့်ပါနှင့်။
+"""
+    else:
+        mode_instruction = """
+တင်ထားသော ရုပ်ရှင်/ဇာတ်လမ်း ဗီဒီယိုဖိုင်ကို မျက်စိဖြင့် သေချာကြည့်ပါ။ ဗီဒီယိုထဲတွင် အမှန်တကယ် ပါဝင်သော ဇာတ်ကွက်များနှင့် အဖြစ်အပျက်ကို အခြေခံပြီး "ဒီအချိန်မှာပဲ...", "ရုတ်တရက်...", "တကယ်တော့ သူဟာ..." စသည့် အချိတ်အဆက်များ ထည့်သွင်းကာ စိတ်လှုပ်ရှားဖွယ် Movie Recap အဖြစ် ပြန်လည်ပြောပြပေးပါ။
+"""
 
     prompt = f"""
-{mode_prompts.get(mode_key, mode_prompts['auto'])}
+{mode_instruction}
 
 🛑 အလွန်အရေးကြီးသော စည်းကမ်းချက်များ:
 ၁။ ပေးပို့ထားသော ဗီဒီယိုကို မျက်စိဖြင့် သေချာကြည့်ရှုပါ။ ဗီဒီယိုထဲတွင် အမှန်တကယ် ပါဝင်သော ပုံရိပ်များနှင့် အကြောင်းအရာကိုသာ အတိအကျ ရေးသားရပါမည်။ ဗီဒီယိုထဲမပါသော အခြားစိတ်ကူးယဉ် ဇာတ်လမ်းများကို လုံးဝ (လုံးဝ) မထည့်ရပါ။
 ၂။ ဗီဒီယို ကြာချိန်သည် အတိအကျ {target_duration:.1f} စက္ကန့် ဖြစ်သည်။
-၃။ စကားပြောနှုန်း ၁:၁ ကွက်တိကျစေရန် စကားလုံး အရေအတွက်ကို အတိအကျ {exact_words} လုံးခန့် ({exact_words-3} မှ {exact_words+3} လုံးအတွင်း) ရေးပေးရပါမည်။
+၃။ စကားပြောနှုန်း ၁:၁ ကွက်တိကျစေရန် စကားလုံး အရေအတွက်ကို အတိအကျ {exact_words} လုံးခန့် ({exact_words-3} မှ {exact_words+3} လုံးအတွင်းသာ) ရေးပေးရပါမည်။
 ၄။ မြန်မာစကားပြော သီးသန့် ဖြစ်ရပါမည်။ အင်္ဂလိပ်စာလုံး လုံးဝမထည့်ပါနှင့်။
 ၅။ အောက်ပါ JSON Format သီးသန့်ဖြင့်သာ ပြန်ဖြေပါ:
 {{
@@ -315,14 +314,13 @@ def generate_vision_matched_script(raw_api_keys, video_path, target_duration, mo
                         video_file_obj = genai.get_file(video_file_obj.name)
                     if video_file_obj.state.name != "ACTIVE":
                         video_file_obj = None
-            except Exception as e:
+            except Exception:
                 video_file_obj = None
 
         # 2. Query Gemini with the actual Video File
         for m_name in ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash"]:
             try:
                 model = genai.GenerativeModel(m_name)
-                # Pass BOTH video_file_obj and prompt!
                 if video_file_obj:
                     res = model.generate_content([video_file_obj, prompt])
                 else:
@@ -541,15 +539,25 @@ def render_strict_sync_video(input_video, narration_audio, ass_path, output_vide
 
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-# ----------------- SIDEBAR -----------------
+# ----------------- SIDEBAR NAVIGATION -----------------
 with st.sidebar:
     st.markdown("""
     <div style="text-align: center; margin-bottom: 12px;">
-        <h2 style="color: #00f2fe; margin-bottom: 0px;">⚡ RECAP STUDIO MM</h2>
-        <span class="badge-sync">AI VISION & EXACT SYNC</span>
+        <h2 style="color: #00f2fe; margin-bottom: 0px;">⚡ RECAP MASTER</h2>
+        <span class="badge-sync">PRO SUITE EDITION</span>
     </div>
     """, unsafe_allow_html=True)
 
+    menu_tabs = [
+        "🎬 Movie Recap Studio",
+        "🛠️ Silent Craft & DIY Studio",
+        "🍿 Multi-Part Auto Splitter",
+        "🎨 CapCut Subtitle Studio",
+        "⚙️ API & Global Settings"
+    ]
+    st.session_state.active_nav_tab = st.radio("Navigation Menu", menu_tabs, label_visibility="collapsed")
+
+    st.markdown("---")
     st.markdown("#### 🔑 **Gemini API Key**")
     current_key_val = st.text_area(
         "API Key (ကော်မာခံ၍ အပိုထည့်နိုင်သည်)",
@@ -568,102 +576,93 @@ with st.sidebar:
     bgm_val = st.slider("🎵 BGM Volume", 0.0, 0.25, float(st.session_state.saved_bgm_vol), 0.02)
     st.session_state.saved_bgm_vol = bgm_val
 
-# ----------------- MAIN UI -----------------
-st.markdown("""
-<div class="neon-panel">
-    <div style="display: flex; justify-content: space-between; align-items: center;">
-        <div>
-            <h2 style="color: #ffffff; margin: 0; font-size: 22px;">🎬 Recap Studio MM Pro (Vision AI Edition)</h2>
-            <p style="color: #94a3b8; font-size: 13px; margin-top: 4px; margin-bottom: 0;">
-                တင်ထားသော ဗီဒီယိုကို AI က မျက်စိဖြင့် သေချာလေ့လာပြီး ရုပ်နှင့်အသံ ၁:၁ အတိအကျ ကွက်တိကျစေမည့် စနစ်
-            </p>
+# ==============================================================================
+# TAB 1: MOVIE RECAP STUDIO
+# ==============================================================================
+if st.session_state.active_nav_tab == "🎬 Movie Recap Studio":
+    st.markdown("""
+    <div class="neon-panel">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <h2 style="color: #ffffff; margin: 0; font-size: 22px;">🎬 Movie & Series Recap Studio</h2>
+                <p style="color: #94a3b8; font-size: 13px; margin-top: 4px; margin-bottom: 0;">
+                    ရုပ်ရှင်၊ Series နှင့် Anime များကို AI Vision ဖြင့် ကြည့်ပြီး စက္ကန့်မလွဲ ၁:၁ ရုပ်သံကွက်တိကျ အသံသွင်းပေးမည့် စနစ်
+                </p>
+            </div>
+            <div class="badge-sync">1:1 EXACT DURATION LOCKED</div>
         </div>
-        <div class="badge-sync">MULTIMODAL VISION</div>
     </div>
-</div>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
-col_left, col_right = st.columns([1.2, 1.0])
+    col1, col2 = st.columns([1.2, 1.0])
+    with col1:
+        st.markdown("#### 1. 📤 ဗီဒီယို ဖိုင်တင်ပါ (သို့မဟုတ် YouTube Link)")
+        up_file = st.file_uploader("ဗီဒီယို ရွေးချယ်ပါ (MP4, MOV)", type=["mp4", "mov", "webm"], key="movie_uploader")
+        yt_url = st.text_input("သို့မဟုတ် Link ထည့်ပါ", placeholder="[https://www.youtube.com/watch?v=](https://www.youtube.com/watch?v=)...", key="movie_yt")
 
-with col_left:
-    st.markdown("#### 1. 📤 ဗီဒီယို ဖိုင်တင်ပါ (သို့မဟုတ် YouTube Link)")
-    up_file = st.file_uploader("ဗီဒီယို ရွေးချယ်ပါ (MP4, MOV)", type=["mp4", "mov", "webm"])
-    yt_url = st.text_input("သို့မဟုတ် Video Link ထည့်ပါ", placeholder="[https://www.youtube.com/watch?v=](https://www.youtube.com/watch?v=)...")
+        if up_file:
+            with open("temp_input.mp4", "wb") as f:
+                f.write(up_file.getbuffer())
 
-    if up_file:
-        with open("temp_input.mp4", "wb") as f:
-            f.write(up_file.getbuffer())
+        vid_len = get_media_duration("temp_input.mp4") if os.path.exists("temp_input.mp4") else 0.0
+        if vid_len > 0:
+            st.success(f"⏱️ ဗီဒီယိုကြာချိန်: **{format_time_str(vid_len)} ({vid_len:.2f} စက္ကန့် အတိအကျ)**")
 
-    vid_len = get_media_duration("temp_input.mp4") if os.path.exists("temp_input.mp4") else 0.0
-    if vid_len > 0:
-        st.success(f"⏱️ ဗီဒီယိုကြာချိန်: **{format_time_str(vid_len)} ({vid_len:.2f} စက္ကန့် အတိအကျ)**")
+    with col2:
+        st.markdown("#### 2. 🏷️ Channel Logo (Auto Background Remover)")
+        logo_file = st.file_uploader("Logo ပုံတင်ပါ", type=["png", "jpg", "jpeg", "webp"], key="movie_logo")
+        if logo_file:
+            raw_logo = "raw_user_logo.png"
+            clean_logo = "processed_user_logo.png"
+            with open(raw_logo, "wb") as f:
+                f.write(logo_file.getbuffer())
+            if process_user_logo(raw_logo, clean_logo):
+                st.session_state.user_watermark_file = clean_logo
+                st.success("✅ Logo Background ဖျက်ပြီး နီယွန်ကွင်း ထည့်သွင်းပြီးပါပြီ!")
+                st.image(clean_logo, width=70)
 
-    # Mode Selector
-    selected_mode_label = st.selectbox(
-        "🎯 Recap အမျိုးအစား (Category)",
-        list(RECAP_MODES.keys()),
-        index=0
-    )
+        logo_pos_choice = st.selectbox("📍 Logo နေရာ", ["top_right (အပေါ် ညာဘက်)", "top_left (အပေါ် ဘယ်ဘက်)", "bottom_right (အောက် ညာဘက်)"], index=0, key="movie_logo_pos")
+        logo_pos_key = logo_pos_choice.split(" ")[0]
 
-with col_right:
-    st.markdown("#### 2. 🏷️ Channel Logo (Auto Background Remover)")
-    logo_file = st.file_uploader("Logo ပုံတင်ပါ", type=["png", "jpg", "jpeg", "webp"])
-    if logo_file:
-        raw_logo = "raw_user_logo.png"
-        clean_logo = "processed_user_logo.png"
-        with open(raw_logo, "wb") as f:
-            f.write(logo_file.getbuffer())
-        if process_user_logo(raw_logo, clean_logo):
-            st.session_state.user_watermark_file = clean_logo
-            st.success("✅ Logo Background ဖျက်ပြီး နီယွန်ကွင်း ထည့်သွင်းပြီးပါပြီ!")
-            st.image(clean_logo, width=70)
+    st.markdown("---")
+    col_b1, col_b2 = st.columns([1.5, 1.0])
+    with col_b1:
+        one_click_btn = st.button("⚡ ONE-CLICK MOVIE RECAP (ဇာတ်ညွှန်း၊ အသံနှင့် ဗီဒီယို ၁:၁ ထုတ်လုပ်မည်)", type="primary", use_container_width=True)
+    with col_b2:
+        script_only_btn = st.button("📝 Script သာ အရင်ထုတ်ယူမည်", use_container_width=True)
 
-    logo_pos_choice = st.selectbox("📍 Logo နေရာ", ["top_right (အပေါ် ညာဘက်)", "top_left (အပေါ် ဘယ်ဘက်)", "bottom_right (အောက် ညာဘက်)"], index=0)
-    logo_pos_key = logo_pos_choice.split(" ")[0]
+    if one_click_btn or script_only_btn:
+        if not os.path.exists("temp_input.mp4") and not yt_url:
+            st.error("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် အရင်တင်ပေးပါ သို့မဟုတ် Link ထည့်ပေးပါ ခင်ဗျာ။")
+        elif not st.session_state.gemini_api_key.strip():
+            st.error("Gemini API Key ထည့်သွင်းပေးပါ ခင်ဗျာ (Sidebar တွင် ထည့်နိုင်ပါသည်)။")
+        else:
+            if yt_url and not up_file:
+                with st.spinner("ဗီဒီယို ဒေါင်းလုဒ်ဆွဲနေပါသည်..."):
+                    subprocess.run(["yt-dlp", "-f", "best[ext=mp4]/best", "-o", "temp_input.mp4", yt_url.split("?")[0]], capture_output=True)
 
-st.markdown("---")
+            v_duration = get_media_duration("temp_input.mp4")
+            if v_duration <= 0.0: v_duration = 33.0
 
-# ----------------- ONE CLICK EXECUTION BUTTON -----------------
-col_b1, col_b2 = st.columns([1.5, 1.0])
-with col_b1:
-    one_click_btn = st.button("⚡ ONE-CLICK MAGIC RECAP (ဗီဒီယိုကို AI ဖြင့် ကြည့်ရှုပြီး ၁:၁ ထုတ်လုပ်မည်)", type="primary", use_container_width=True)
-with col_b2:
-    script_only_btn = st.button("📝 Script သာ အရင်ထုတ်ယူမည်", use_container_width=True)
+            try:
+                with st.spinner(f"👁️ AI က ဗီဒီယိုကို မျက်စိဖြင့် လေ့လာပြီး {v_duration:.1f}s Movie Recap ရေးသားနေပါသည်..."):
+                    s_text, h1, h2 = generate_vision_matched_script(
+                        raw_api_keys=st.session_state.gemini_api_key,
+                        video_path="temp_input.mp4" if os.path.exists("temp_input.mp4") else None,
+                        target_duration=v_duration,
+                        mode_prompt_type="movie"
+                    )
+                    st.session_state.recap_script_text = s_text
+                    st.session_state.top_hook_text = h1
+                    st.session_state.bottom_hook_text = h2
 
-if one_click_btn or script_only_btn:
-    if not os.path.exists("temp_input.mp4") and not yt_url:
-        st.error("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် အရင်တင်ပေးပါ သို့မဟုတ် Link ထည့်ပေးပါ ခင်ဗျာ။")
-    elif not st.session_state.gemini_api_key.strip():
-        st.error("Gemini API Key ထည့်သွင်းပေးပါ ခင်ဗျာ (Sidebar တွင် ထည့်နိုင်ပါသည်)။")
-    else:
-        if yt_url and not up_file:
-            with st.spinner("ဗီဒီယို ဒေါင်းလုဒ်ဆွဲနေပါသည်..."):
-                subprocess.run(["yt-dlp", "-f", "best[ext=mp4]/best", "-o", "temp_input.mp4", yt_url.split("?")[0]], capture_output=True)
+                if one_click_btn:
+                    with st.spinner(f"🎙️ အသံအား {v_duration:.2f}s သို့ မီလီစက္ကန့်မလွဲ Conforming ညှိယူနေပါသည်..."):
+                        voice_cfg = VOICE_CONFIGS[voice_sel]
+                        synced_audio = "final_synced_voice.mp3"
+                        generate_and_conform_voice(s_text, voice_cfg, v_duration, synced_audio)
 
-        v_duration = get_media_duration("temp_input.mp4")
-        if v_duration <= 0.0:
-            v_duration = 33.0
-
-        try:
-            with st.spinner(f"👁️ AI က ဗီဒီယိုကို မျက်စိဖြင့် လေ့လာပြီး {v_duration:.1f}s ကွက်တိကျမည့် Script ရေးသားနေပါသည်..."):
-                s_text, h1, h2 = generate_vision_matched_script(
-                    raw_api_keys=st.session_state.gemini_api_key,
-                    video_path="temp_input.mp4" if os.path.exists("temp_input.mp4") else None,
-                    target_duration=v_duration,
-                    mode_key=RECAP_MODES[selected_mode_label]
-                )
-                st.session_state.recap_script_text = s_text
-                st.session_state.top_hook_text = h1
-                st.session_state.bottom_hook_text = h2
-
-            if one_click_btn:
-                with st.spinner(f"🎙️ အသံအား {v_duration:.2f}s သို့ မီလီစက္ကန့်မလွဲ ညှိယူနေပါသည်..."):
-                    voice_cfg = VOICE_CONFIGS[voice_sel]
-                    synced_audio = "final_synced_voice.mp3"
-                    generate_and_conform_voice(s_text, voice_cfg, v_duration, synced_audio)
-
-                ass_file = "final_subtitles.ass"
-                if st.session_state.enable_subtitles:
+                    ass_file = "final_subtitles.ass"
                     calc_vm = int(1280 * (st.session_state.sub_v_pos_percent / 100.0))
                     create_capcut_animated_subtitles(
                         h1=st.session_state.top_hook_text,
@@ -678,69 +677,240 @@ if one_click_btn or script_only_btn:
                         cta_text=st.session_state.cta_type,
                         is_capcut_animated=True
                     )
-                else:
-                    ass_file = None
 
-                with st.spinner("🎬 ဗီဒီယိုနှင့် အသံအား ၁:၁ ကွက်တိကျအောင် Render ပြုလုပ်နေပါသည်..."):
-                    final_out = "recap_output.mp4"
-                    render_strict_sync_video(
-                        input_video="temp_input.mp4",
-                        narration_audio=synced_audio,
-                        ass_path=ass_file,
-                        output_video=final_out,
-                        logo_path=st.session_state.user_watermark_file if os.path.exists(st.session_state.user_watermark_file) else None,
-                        logo_pos=logo_pos_key,
-                        bgm_vol=st.session_state.saved_bgm_vol
-                    )
-                    st.session_state.last_rendered_video = final_out
-                    st.success(f"🎉 အောင်မြင်ပါပြီ! ဗီဒီယိုပါ အကြောင်းအရာ အစစ်အမှန်အတိုင်း {v_duration:.2f}s ကွက်တိကျစွာ ထွက်ရှိပါပြီ ခင်ဗျာ!")
-        except Exception as ex:
-            st.error(f"❌ {ex}")
+                    with st.spinner("🎬 Final MP4 ဗီဒီယို Render ပြုလုပ်နေပါသည်..."):
+                        final_out = "recap_output.mp4"
+                        render_strict_sync_video(
+                            input_video="temp_input.mp4",
+                            narration_audio=synced_audio,
+                            ass_path=ass_file,
+                            output_video=final_out,
+                            logo_path=st.session_state.user_watermark_file if os.path.exists(st.session_state.user_watermark_file) else None,
+                            logo_pos=logo_pos_key,
+                            bgm_vol=st.session_state.saved_bgm_vol
+                        )
+                        st.session_state.last_rendered_video = final_out
+                        st.success(f"🎉 အောင်မြင်ပါပြီ! ဗီဒီယိုနှင့် အသံ {v_duration:.2f}s အတိအကျ ကွက်တိကျစွာ ထွက်ရှိပါပြီ ခင်ဗျာ!")
+            except Exception as ex:
+                st.error(f"❌ {ex}")
 
-st.markdown("---")
+    st.markdown("---")
+    st.markdown("#### 📱 Video Player & Live Placement")
+    if st.session_state.last_rendered_video and os.path.exists(st.session_state.last_rendered_video):
+        col_v1, col_v2 = st.columns([1.2, 1.0])
+        with col_v1:
+            st.video(st.session_state.last_rendered_video)
+        with col_v2:
+            with open(st.session_state.last_rendered_video, "rb") as vf:
+                st.download_button(
+                    label="📥 Final 1:1 Synced MP4 ဒေါင်းလုဒ်ဆွဲရန်",
+                    data=vf.read(),
+                    file_name="movie_recap_final.mp4",
+                    mime="video/mp4",
+                    type="primary",
+                    use_container_width=True
+                )
 
-# ----------------- LIVE ADJUSTER & PLAYER -----------------
-st.markdown("### 🎬 **Video Preview & Subtitle Live Adjuster**")
+# ==============================================================================
+# TAB 2: SILENT CRAFT & DIY EXPLAINER STUDIO
+# ==============================================================================
+elif st.session_state.active_nav_tab == "🛠️ Silent Craft & DIY Studio":
+    st.markdown("""
+    <div class="neon-panel">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <h2 style="color: #ffffff; margin: 0; font-size: 22px;">🛠️ Silent Craft & DIY Visual Explainer</h2>
+                <p style="color: #94a3b8; font-size: 13px; margin-top: 4px; margin-bottom: 0;">
+                    အသံမဲ့ လက်မှုပညာ၊ DIY၊ ဟင်းချက်နည်းနှင့် သန့်ရှင်းရေး/စမ်းသပ်မှု ဗီဒီယိုများကို AI က လိုက်ကြည့်ပြီး Step-by-Step အသံသွင်းပေးသည့် စနစ်
+                </p>
+            </div>
+            <div class="badge-sync">AI MULTIMODAL VISION</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-col_pv, col_pc = st.columns([1.2, 1.2])
-
-with col_pc:
-    st.markdown("#### ⚙️ **Subtitle Controls**")
-    st.session_state.enable_subtitles = st.checkbox("📝 စာတန်းထိုး (Subtitles) ထည့်သွင်းမည်", value=st.session_state.enable_subtitles)
-
-    col_c1, col_c2 = st.columns(2)
+    col_c1, col_c2 = st.columns([1.2, 1.0])
     with col_c1:
-        st.session_state.sub_color_hex = st.color_picker("🎨 စာတန်းထိုး အရောင်", st.session_state.sub_color_hex)
+        st.markdown("#### 📤 အသံမပါသော လက်မှုပညာ/စမ်းသပ်မှု ဗီဒီယို တင်ပါ")
+        craft_file = st.file_uploader("လက်မှုပညာ ဗီဒီယို ရွေးချယ်ပါ (MP4, MOV)", type=["mp4", "mov"], key="craft_uploader")
+        craft_url = st.text_input("သို့မဟုတ် YouTube Link", placeholder="[https://www.youtube.com/watch?v=](https://www.youtube.com/watch?v=)...", key="craft_yt")
+
+        if craft_file:
+            with open("temp_craft.mp4", "wb") as f:
+                f.write(craft_file.getbuffer())
+
+        c_dur = get_media_duration("temp_craft.mp4") if os.path.exists("temp_craft.mp4") else 0.0
+        if c_dur > 0:
+            st.info(f"⏱️ လက်မှုပညာ ဗီဒီယို ကြာချိန်: **{format_time_str(c_dur)} ({c_dur:.2f} စက္ကန့်)**")
+
     with col_c2:
-        st.session_state.sub_bg_style = st.selectbox("📦 နောက်ခံစတိုင်", ["Solid Box (အမည်းနောက်ခံ)", "Semi-Transparent (မှန်ကြည်)", "Outline Only (အနားကွပ် သီးသန့်)"], index=0)
+        craft_category = st.selectbox(
+            "📌 ပညာရပ် အမျိုးအစား",
+            ["သစ်သားပရိဘောဂ & သစ်ထွင်း (Woodworking/Carpentry)", "ပစ္စည်းဟောင်း ပြန်လည်ပြုပြင်ခြင်း (Restoration)", "သိပ္ပံနှင့် လက်တွေ့စမ်းသပ်မှု (Science & Experiment)", "အိမ်သုံး DIY & လက်မှုပစ္စည်း (DIY Crafting)", "ဟင်းချက်နည်း & မုန့်လုပ်နည်း (Cooking/Baking)"]
+        )
+        st.caption("AI သည် မျက်စိရှေ့တွင် လက်ဖြင့် အဆင့်ဆင့် လုပ်ဆောင်ပြသနေသည့် လှုပ်ရှားမှုများကို အနီးကပ် လိုက်လံရှင်းပြပေးမည် ဖြစ်ပါသည်။")
 
-    st.session_state.sub_v_pos_percent = st.slider("↕️ စာတန်းထိုး အမြင့်နေရာ %", 5, 80, int(st.session_state.sub_v_pos_percent))
-    st.session_state.hook_top_percent = st.slider("↕️ Hook ခေါင်းစဉ် အမြင့်နေရာ %", 2, 25, int(st.session_state.hook_top_percent))
-    st.session_state.sub_font_size = st.slider("🔤 စာလုံး အရွယ်အစား", 28, 56, int(st.session_state.sub_font_size))
-
-    st.session_state.cta_type = st.selectbox(
-        "🔘 Call-to-Action ခလုတ်",
-        ["👍 Like & 🔔 Subscribe လုပ်ထားပါ ခင်ဗျာ", "🔔 Subscribe လုပ်ထားပေးပါ ခင်ဗျာ", "စာရင်းသွင်းပါ (Formal Burmese)"],
-        index=0
-    )
-
-    ch1, ch2 = st.columns(2)
-    with ch1:
-        st.session_state.top_hook_text = st.text_input("Line 1 Hook", value=st.session_state.top_hook_text)
-    with ch2:
-        st.session_state.bottom_hook_text = st.text_input("Line 2 Hook", value=st.session_state.bottom_hook_text)
-
-    st.markdown("##### 📄 ဇာတ်ညွှန်း စာသား (Script):")
-    st.session_state.recap_script_text = st.text_area("Script", value=st.session_state.recap_script_text, height=90, label_visibility="collapsed")
-
-    if st.button("🚀 Final Video အသစ် ပြန်ထုတ်မည် (Re-Export MP4)", type="primary", use_container_width=True):
-        if not os.path.exists("temp_input.mp4"):
-            st.error("ဗီဒီယိုဖိုင် မရှိသေးပါ ခင်ဗျာ။")
+    if st.button("⚡ ONE-CLICK CRAFT EXPLAINER (လက်မှုပညာ သီးသန့် အသံသွင်းမည်)", type="primary", use_container_width=True):
+        if not os.path.exists("temp_craft.mp4") and not craft_url:
+            st.error("ဗီဒီယို အရင်တင်ပေးပါ ခင်ဗျာ။")
         else:
-            with st.spinner("Final Video အသစ် ပြန်လည်ထုတ်ယူနေပါသည်..."):
-                t_dur = get_media_duration("temp_input.mp4")
-                ass_f = "final_subtitles.ass"
-                if st.session_state.enable_subtitles:
+            if craft_url and not craft_file:
+                with st.spinner("ဗီဒီယို ဒေါင်းလုဒ်ဆွဲနေပါသည်..."):
+                    subprocess.run(["yt-dlp", "-f", "best[ext=mp4]/best", "-o", "temp_craft.mp4", craft_url.split("?")[0]], capture_output=True)
+
+            c_dur = get_media_duration("temp_craft.mp4")
+            with st.spinner(f"👁️ ဗီဒီယို လက်လှုပ်ရှားမှုများကို AI ဖြင့် လေ့လာပြီး {c_dur:.1f}s အသံသွင်း ဇာတ်ညွှန်း ရေးသားနေပါသည်..."):
+                s_text, h1, h2 = generate_vision_matched_script(
+                    raw_api_keys=st.session_state.gemini_api_key,
+                    video_path="temp_craft.mp4" if os.path.exists("temp_craft.mp4") else None,
+                    target_duration=c_dur,
+                    mode_prompt_type="craft"
+                )
+
+            with st.spinner("🎙️ ရှင်းလင်းချက် အသံအား စက္ကန့်မလွဲ Conforming ညှိယူနေပါသည်..."):
+                voice_cfg = VOICE_CONFIGS[voice_sel]
+                synced_audio = "craft_synced_voice.mp3"
+                generate_and_conform_voice(s_text, voice_cfg, c_dur, synced_audio)
+
+            with st.spinner("🎬 Final Craft Explainer ဗီဒီယို Render ပြုလုပ်နေပါသည်..."):
+                ass_file = "craft_subtitles.ass"
+                create_capcut_animated_subtitles(h1, h2, s_text, c_dur, ass_file, 38, 240, "#00f2fe", "Solid Box", "🔔 Follow လုပ်ထားပါ ခင်ဗျာ", True)
+                final_craft_out = "craft_recap_output.mp4"
+                render_strict_sync_video("temp_craft.mp4", synced_audio, ass_file, final_craft_out, None, "top_right", 0.08)
+                st.success("🎉 အသံမဲ့ လက်မှုပညာ Explainer ဗီဒီယို အောင်မြင်စွာ ထွက်ရှိပါပြီ ခင်ဗျာ!")
+                st.video(final_craft_out)
+
+# ==============================================================================
+# TAB 3: MULTI-PART AUTO SPLITTER
+# ==============================================================================
+elif st.session_state.active_nav_tab == "🍿 Multi-Part Auto Splitter":
+    st.markdown("""
+    <div class="neon-panel">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <h2 style="color: #ffffff; margin: 0; font-size: 22px;">🍿 ဇာတ်လမ်းရှည် Multi-Part Auto Splitter</h2>
+                <p style="color: #94a3b8; font-size: 13px; margin-top: 4px; margin-bottom: 0;">
+                    မိနစ် ၃၀ ဗီဒီယိုရှည်ကြီးများကို ၆၀ စက္ကန့် Shorts အပိုင်း ၁၊ ၂၊ ၃ အဖြစ် Part တပ်ပြီး အလိုအလျောက် ခွဲပေးသည့် စနစ်
+                </p>
+            </div>
+            <div class="badge-sync">BATCH VIRAL CUTTER</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    long_file = st.file_uploader("ဗီဒီယိုရှည် တင်ပါ (MP4, MOV)", type=["mp4", "mov"], key="splitter_upload")
+    if long_file:
+        with open("temp_long_video.mp4", "wb") as f:
+            f.write(long_file.getbuffer())
+
+    long_dur = get_media_duration("temp_long_video.mp4") if os.path.exists("temp_long_video.mp4") else 0.0
+
+    if long_dur > 0:
+        st.info(f"⏱️ ဗီဒီယိုရှည် ကြာချိန်: **{format_time_str(long_dur)} ({long_dur:.1f} စက္ကန့်)**")
+        col_s1, col_s2, col_s3 = st.columns(3)
+        with col_s1:
+            split_slice = st.selectbox("အပိုင်းတစ်ခုစီ၏ ကြာချိန်", [30, 60, 90, 180], index=1)
+        with col_s2:
+            split_aspect = st.selectbox("ဗီဒီယိုပုံစံ", ["9:16 ဒေါင်လိုက် (TikTok/Reels)", "မူရင်း 16:9"])
+        with col_s3:
+            total_parts = max(1, int(long_dur // split_slice))
+            st.markdown(f"<div style='margin-top:28px; color:#00f2fe; font-weight:bold;'>ထွက်ရှိမည့် အပိုင်း အရေအတွက်: {total_parts} ပိုင်း</div>", unsafe_allow_html=True)
+
+        if st.button("✂️ အပိုင်းတိုများ အလိုအလျောက် ခွဲထုတ်မည် (Generate All Parts)", type="primary"):
+            with st.spinner(f"ဗီဒီယိုအား {total_parts} ပိုင်း အလိုအလျောက် ဖြတ်တောက်နေပါသည်..."):
+                part_files = []
+                for p_idx in range(total_parts):
+                    st_sec = p_idx * split_slice
+                    out_part = f"part_{p_idx+1}.mp4"
+                    
+                    vf_part = "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280" if "9:16" in split_aspect else "scale=1280:720"
+                    badge_filter = f"{vf_part},drawtext=text='PART {p_idx+1}':fontfile=Pyidaungsu.ttf:fontsize=48:fontcolor=yellow:x=(w-text_w)/2:y=100:box=1:boxcolor=black@0.8:boxborderw=10"
+
+                    cmd_split = [
+                        "ffmpeg", "-y",
+                        "-ss", str(st_sec),
+                        "-t", str(split_slice),
+                        "-i", "temp_long_video.mp4",
+                        "-vf", badge_filter,
+                        "-c:v", "libx264", "-preset", "ultrafast",
+                        "-c:a", "aac",
+                        out_part
+                    ]
+                    subprocess.run(cmd_split, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    if os.path.exists(out_part):
+                        part_files.append((out_part, p_idx+1))
+
+                st.session_state.split_parts_list = part_files
+                st.success(f"🎉 အပိုင်းတို {len(part_files)} ပိုင်း အောင်မြင်စွာ ခွဲထုတ်ပြီးပါပြီ ခင်ဗျာ!")
+
+        if "split_parts_list" in st.session_state and st.session_state.split_parts_list:
+            cols = st.columns(2)
+            for file_name, p_num in st.session_state.split_parts_list:
+                col_target = cols[(p_num - 1) % 2]
+                with col_target:
+                    st.markdown(f"**📌 Part {p_num} ({split_slice} စက္ကန့်)**")
+                    st.video(file_name)
+                    c_b1, c_b2 = st.columns(2)
+                    with c_b1:
+                        with open(file_name, "rb") as pf:
+                            st.download_button(f"📥 Download Part {p_num}", data=pf.read(), file_name=file_name, mime="video/mp4", key=f"dl_p_{p_num}")
+                    with c_b2:
+                        if st.button(f"🚀 Recap လုပ်မည် (Part {p_num})", key=f"send_recap_{p_num}"):
+                            import shutil
+                            shutil.copyfile(file_name, "temp_input.mp4")
+                            st.session_state.active_nav_tab = "🎬 Movie Recap Studio"
+                            st.rerun()
+
+# ==============================================================================
+# TAB 4: CAPCUT STYLE ANIMATED SUBTITLES STUDIO
+# ==============================================================================
+elif st.session_state.active_nav_tab == "🎨 CapCut Subtitle Studio":
+    st.markdown("""
+    <div class="neon-panel">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <h2 style="color: #ffffff; margin: 0; font-size: 22px;">🎨 CapCut Style Animated Subtitles Studio</h2>
+                <p style="color: #94a3b8; font-size: 13px; margin-top: 4px; margin-bottom: 0;">
+                    စကားလုံးထွက်လာတိုင်း စာလုံးလေးများ အဝါရောင် လင်းလက်ခုန်တက်လာစေမည့် Kinetic ASS Engine
+                </p>
+            </div>
+            <div class="badge-sync">ACTIVE WORD POP HIGHLIGHT</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_sub_v, col_sub_c = st.columns([1.2, 1.2])
+
+    with col_sub_c:
+        st.markdown("#### ⚙️ Typography & Highlight Controls")
+        st.session_state.enable_subtitles = st.checkbox("📝 စာတန်းထိုး ဖွင့်မည်", value=st.session_state.enable_subtitles)
+        st.session_state.sub_custom_anim = st.checkbox("✨ CapCut Active Word Pop Highlight ဖွင့်မည်", value=True)
+
+        col_sc1, col_sc2 = st.columns(2)
+        with col_sc1:
+            st.session_state.sub_color_hex = st.color_picker("🎨 အခြေခံ စာတန်းထိုး အရောင်", st.session_state.sub_color_hex)
+        with col_sc2:
+            st.session_state.sub_bg_style = st.selectbox("📦 နောက်ခံစတိုင်", ["Solid Box (အမည်းနောက်ခံ)", "Semi-Transparent (မှန်ကြည်)", "Outline Only (အနားကွပ် သီးသန့်)"], index=0)
+
+        st.session_state.sub_v_pos_percent = st.slider("↕️ စာတန်းထိုး အမြင့်နေရာ %", 5, 80, int(st.session_state.sub_v_pos_percent))
+        st.session_state.hook_top_percent = st.slider("↕️ Hook ခေါင်းစဉ် အမြင့်နေရာ %", 2, 25, int(st.session_state.hook_top_percent))
+        st.session_state.sub_font_size = st.slider("🔤 စာလုံး အရွယ်အစား", 28, 56, int(st.session_state.sub_font_size))
+
+        ch1, ch2 = st.columns(2)
+        with ch1:
+            st.session_state.top_hook_text = st.text_input("Line 1 Hook", value=st.session_state.top_hook_text, key="cap_h1")
+        with ch2:
+            st.session_state.bottom_hook_text = st.text_input("Line 2 Hook", value=st.session_state.bottom_hook_text, key="cap_h2")
+
+        st.session_state.recap_script_text = st.text_area("Script Preview Editor", value=st.session_state.recap_script_text, height=90, key="cap_script")
+
+        if st.button("🚀 CapCut စာတန်းထိုးဖြင့် Final Video ပြန်ထုတ်မည်", type="primary", use_container_width=True):
+            if not os.path.exists("temp_input.mp4"):
+                st.error("ဗီဒီယိုဖိုင် မရှိသေးပါ ခင်ဗျာ။")
+            else:
+                with st.spinner("CapCut Animated Subtitles တပ်ဆင်နေပါသည်..."):
+                    t_dur = get_media_duration("temp_input.mp4")
+                    ass_f = "final_subtitles.ass"
                     calc_vm = int(1280 * (st.session_state.sub_v_pos_percent / 100.0))
                     create_capcut_animated_subtitles(
                         h1=st.session_state.top_hook_text,
@@ -753,44 +923,53 @@ with col_pc:
                         hex_color=st.session_state.sub_color_hex,
                         bg_style=st.session_state.sub_bg_style,
                         cta_text=st.session_state.cta_type,
-                        is_capcut_animated=True
+                        is_capcut_animated=st.session_state.sub_custom_anim
                     )
-                else:
-                    ass_f = None
+                    audio_to_use = "final_synced_voice.mp3" if os.path.exists("final_synced_voice.mp3") else "temp_raw_unconformed.mp3"
+                    final_out = "recap_output.mp4"
+                    render_strict_sync_video(
+                        input_video="temp_input.mp4",
+                        narration_audio=audio_to_use,
+                        ass_path=ass_f,
+                        output_video=final_out,
+                        logo_path=st.session_state.user_watermark_file if os.path.exists(st.session_state.user_watermark_file) else None,
+                        logo_pos="top_right",
+                        bgm_vol=st.session_state.saved_bgm_vol
+                    )
+                    st.session_state.last_rendered_video = final_out
+                    st.success("✨ CapCut စတိုင် စာတန်းထိုး တပ်ဆင်ပြီးပါပြီ ခင်ဗျာ!")
+                    st.rerun()
 
-                audio_to_use = "final_synced_voice.mp3" if os.path.exists("final_synced_voice.mp3") else "temp_raw_unconformed.mp3"
-                final_out = "recap_output.mp4"
-                render_strict_sync_video(
-                    input_video="temp_input.mp4",
-                    narration_audio=audio_to_use,
-                    ass_path=ass_f,
-                    output_video=final_out,
-                    logo_path=st.session_state.user_watermark_file if os.path.exists(st.session_state.user_watermark_file) else None,
-                    logo_pos=logo_pos_key,
-                    bgm_vol=st.session_state.saved_bgm_vol
-                )
-                st.session_state.last_rendered_video = final_out
-                st.success("✨ Render ပြီးပါပြီ ခင်ဗျာ!")
-                st.rerun()
+    with col_sub_v:
+        st.markdown("#### 📱 Live Subtitle Mockup")
+        box_css = "background: rgba(0,0,0,0.85); border-radius: 6px; padding: 4px 10px;" if "Solid" in st.session_state.sub_bg_style else "background: rgba(0,0,0,0.45); border-radius: 6px; padding: 4px 10px;"
+        phone_mockup_html = textwrap.dedent(f"""
+        <div style="width: 100%; max-width: 310px; height: 490px; margin: 10px auto; background: radial-gradient(circle, #0e1e2d, #04090e); border: 2.5px solid #00f2fe; border-radius: 20px; position: relative; overflow: hidden; box-shadow: 0 10px 25px rgba(0,242,254,0.3);">
+            <div style="position: absolute; top: {st.session_state.hook_top_percent}%; left: 0; width: 100%; text-align: center; padding: 0 10px;">
+                <span style="display: inline-block; background: rgba(0,0,0,0.9); border: 1.5px solid #FFD700; color: #FFDF00; font-size: 12px; font-weight: 800; padding: 3px 8px; border-radius: 5px;">
+                    {st.session_state.top_hook_text}<br>{st.session_state.bottom_hook_text}
+                </span>
+            </div>
+            <div style="position: absolute; bottom: {st.session_state.sub_v_pos_percent}%; left: 8%; width: 84%; text-align: center;">
+                <div style="border: 1.5px dashed #00f2fe; {box_css}">
+                    <span style="color: #ffffff; font-size: {int(st.session_state.sub_font_size * 0.32)}px; font-weight: bold;">
+                        လူတွေတင်မကဘဲ <span style="color:#00f2fe; font-size:{int(st.session_state.sub_font_size * 0.36)}px; text-shadow:0 0 8px #00f2fe;">တိရစ္ဆာန်တွေကိုပါ</span> တရားရုံးတင်ခဲ့တဲ့...
+                    </span>
+                </div>
+            </div>
+        </div>
+        """)
+        st.markdown(phone_mockup_html, unsafe_allow_html=True)
 
-with col_pv:
-    st.markdown("#### 📱 **Live Video Player**")
-    if st.session_state.last_rendered_video and os.path.exists(st.session_state.last_rendered_video):
-        st.video(st.session_state.last_rendered_video)
-    elif os.path.exists("temp_input.mp4"):
-        st.video("temp_input.mp4")
-    else:
-        st.info("ဗီဒီယို ဖိုင်တင်ပြီးပါက ဤနေရာတွင် တိုက်ရိုက် ကြည့်ရှုနိုင်မည် ဖြစ်ပါသည် ခင်ဗျာ။")
+# ==============================================================================
+# TAB 5: API & GLOBAL SETTINGS
+# ==============================================================================
+elif st.session_state.active_nav_tab == "⚙️ API & Global Settings":
+    st.markdown("## ⚙️ **API & Global Settings Manager**")
+    st.caption("စနစ်တစ်ခုလုံး၏ အရေးကြီး Config များနှင့် Gemini API Key Backup များကို စီမံခန့်ခွဲနိုင်ပါသည် ခင်ဗျာ။")
 
-# ----------------- DOWNLOAD BUTTON -----------------
-if st.session_state.last_rendered_video and os.path.exists(st.session_state.last_rendered_video):
-    st.markdown("---")
-    with open(st.session_state.last_rendered_video, "rb") as vf:
-        st.download_button(
-            label="📥 Final 1:1 Synced MP4 ဗီဒီယို ဒေါင်းလုဒ်ရယူရန်",
-            data=vf.read(),
-            file_name="recap_studio_master.mp4",
-            mime="video/mp4",
-            type="primary",
-            use_container_width=True
-        )
+    key_input = st.text_area("Gemini API Key List (ကော်မာခံ၍ Key ၃ ခုထိ ထည့်နိုင်သည်)", value=st.session_state.gemini_api_key, height=100)
+    if st.button("💾 သိမ်းဆည်းမည်", type="primary"):
+        save_config("gemini_api_key", key_input)
+        st.session_state.gemini_api_key = key_input
+        st.success("Config သိမ်းဆည်းပြီးပါပြီ ခင်ဗျာ!")
