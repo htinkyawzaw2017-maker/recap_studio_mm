@@ -211,9 +211,17 @@ LANGUAGE_CONFIGS = {
     }
 }
 
-# ----------------- SESSION STATE -----------------
+# ----------------- SESSION STATE & SAFE NAVIGATION REDIRECT -----------------
+if "redirect_page" not in st.session_state:
+    st.session_state.redirect_page = None
+
 if "nav_menu" not in st.session_state:
     st.session_state.nav_menu = "🏠 ပင်မစာမျက်နှာ"
+
+# Handle redirect BEFORE any widgets are created (Fixes StreamlitWidgetAlreadyInstantiatedError)
+if st.session_state.redirect_page:
+    st.session_state.nav_menu = st.session_state.redirect_page
+    st.session_state.redirect_page = None
 
 if "gemini_api_key" not in st.session_state:
     saved_key = load_config("gemini_api_key", os.getenv("GEMINI_API_KEY", ""))
@@ -298,7 +306,8 @@ def sync_language_defaults(new_lang):
     st.session_state.active_lang_key = new_lang
 
 def navigate_to(page_name):
-    st.session_state.nav_menu = page_name
+    # Safe redirection without triggering StreamlitWidgetAlreadyInstantiatedError
+    st.session_state.redirect_page = page_name
 
 # ----------------- USER WATERMARK LOGO PROCESSOR -----------------
 def process_user_logo(input_img_path, output_img_path, make_circle=True, remove_white_bg=True, remove_black_bg=False, add_border=True, border_color=(255, 255, 255, 230)):
