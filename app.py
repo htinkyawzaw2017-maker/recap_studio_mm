@@ -483,14 +483,16 @@ def render_timeline_locked_narration(dialogues, voice_cfg, total_video_duration,
             if raw_dur > 0:
                 tempo = raw_dur / allowed_duration
                 
-                # Dynamic speed matching: if gap is small, speed up. If gap is long, slow down.
-                # Clamp tempo safely between 0.5 (half speed) and 2.0 (double speed) to avoid audio distortion
-                if tempo < 0.5:
-                    tempo_filter = f"atempo=0.5,atempo={tempo/0.5:.3f}"
-                elif tempo > 2.0:
-                    tempo_filter = f"atempo=2.0,atempo={tempo/2.0:.3f}"
+                # Clamping tempo to avoid FFmpeg errors (atempo < 0.5 is invalid) and robotic distortion
+                if tempo < 0.85:
+                    actual_tempo = 0.85
+                elif tempo > 2.5:
+                    actual_tempo = 2.5
                 else:
-                    tempo_filter = f"atempo={tempo:.3f}"
+                    actual_tempo = tempo
+
+                # Use apad to fill any remaining silence if the voice finishes early
+                tempo_filter = f"atempo={actual_tempo:.3f},apad"
 
                 cmd_conf = [
                     "ffmpeg", "-y", "-i", raw_seg,
