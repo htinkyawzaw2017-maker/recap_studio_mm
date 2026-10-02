@@ -320,6 +320,8 @@ if "video_reframe_style" not in st.session_state:
     st.session_state.video_reframe_style = "Smart Blur Background (မူရင်းအပြည့် + ဘေးဘက်ဝါး)"
 if "last_uploaded_file_id" not in st.session_state:
     st.session_state.last_uploaded_file_id = None
+if "selected_ai_model" not in st.session_state:
+    st.session_state.selected_ai_model = "gemini-2.5-flash"
 
 VOICE_CATALOG = {
     "🇲🇲 Burmese (မြန်မာစကားပြောသံ)": {
@@ -339,7 +341,7 @@ RECAP_MODES = {
     "🎬 Movie & Fiction Recap (ရုပ်ရှင်နှင့် ဇာတ်လမ်းတွဲများ)": "movie"
 }
 
-def extract_timeline_dialogues(raw_api_keys, video_path, target_language="my", mode_key="auto"):
+def extract_timeline_dialogues(raw_api_keys, video_path, target_language="my", mode_key="auto", selected_model="gemini-2.5-flash"):
     keys = [k.strip() for k in re.split(r"[,;\n]+", raw_api_keys) if k.strip()]
     if not keys:
         raise ValueError("Gemini API Key ထည့်သွင်းပေးပါ ခင်ဗျာ။")
@@ -381,13 +383,15 @@ Return STRICTLY JSON format:
   ]
 }}
 """
+    models_to_try = [selected_model]
     last_err = None
+    
     for k_idx, current_key in enumerate(keys):
         try:
-            raw_resp = ""
+            # ဗီဒီယိုဖိုင်အား Google Server သို့ (၁) ခါသာ ပို့ရန် (Upload Once)
+            uploaded_file_ref = None
             if use_new_sdk:
                 client = genai.Client(api_key=current_key)
-                contents = []
                 if video_path and os.path.exists(video_path):
                     with st.spinner("📤 ဗီဒီယိုကို AI မျက်စိဖြင့် လေ့လာရန် ပေးပို့နေပါသည်..."):
                         video_file = client.files.upload(file=video_path)
@@ -396,15 +400,10 @@ Return STRICTLY JSON format:
                             time.sleep(2)
                             waits += 1
                             video_file = client.files.get(name=video_file.name)
-                        contents.append(video_file)
-
-                contents.append(prompt)
-                res = client.models.generate_content(model="gemini-2.5-flash", contents=contents)
-                raw_resp = res.text.strip()
+                        uploaded_file_ref = video_file
             else:
                 import google.generativeai as legacy_genai
                 legacy_genai.configure(api_key=current_key)
-                video_file_obj = None
                 if video_path and os.path.exists(video_path):
                     with st.spinner("📤 ဗီဒီယိုကို AI မျက်စိဖြင့် လေ့လာရန် ပေးပို့နေပါသည်..."):
                         video_file_obj = legacy_genai.upload_file(path=video_path)
@@ -413,25 +412,55 @@ Return STRICTLY JSON format:
                             time.sleep(2)
                             waits += 1
                             video_file_obj = legacy_genai.get_file(video_file_obj.name)
-                        if video_file_obj.state.name != "ACTIVE":
-                            video_file_obj = None
+                        if video_file_obj.state.name == "ACTIVE":
+                            uploaded_file_ref = video_file_obj
 
-                model = legacy_genai.GenerativeModel("gemini-2.5-flash")
-                contents = [video_file_obj, prompt] if video_file_obj else prompt
-                res = model.generate_content(contents)
-                raw_resp = res.text.strip()
+            # 503 Server Error အတွက် Model များပြောင်းလဲခြင်း နှင့် Retry လုပ်ခြင်း
+            for model_name in models_to_try:
+                for attempt in range(2):
+                    try:
+                        raw_resp = ""
+                        if use_new_sdk:
+                            contents = [uploaded_file_ref, prompt] if uploaded_file_ref else [prompt]
+                            with st.spinner(f"🧠 AI စဉ်းစားနေပါသည် ({model_name})..."):
+                                res = client.models.generate_content(model=model_name, contents=contents)
+                            raw_resp = res.text.strip()
+                        else:
+                            model = legacy_genai.GenerativeModel(model_name)
+                            contents = [uploaded_file_ref, prompt] if uploaded_file_ref else prompt
+                            with st.spinner(f"🧠 AI စဉ်းစားနေပါသည် ({model_name})..."):
+                                res = model.generate_content(contents)
+                            raw_resp = res.text.strip()
 
-            match = re.search(r"\{.*\}", raw_resp, re.DOTALL)
-            if match:
-                data = json.loads(match.group(0))
-                return data
-            raise ValueError("AI JSON ပြန်ကြားချက် မမှန်ကန်ပါ။")
+                        match = re.search(r"\{.*\}", raw_resp, re.DOTALL)
+                        if match:
+                            data = json.loads(match.group(0))
+                            return data
+                        raise ValueError("AI JSON ပြန်ကြားချက် မမှန်ကန်ပါ။")
+                        
+                    except Exception as e:
+                        last_err = e
+                        err_str = str(e).lower()
+                        if "503" in err_str or "unavailable" in err_str or "overloaded" in err_str:
+                            if attempt == 0:
+                                st.warning(f"⚠️ Google Server ယာယီ ကြပ်နေပါသည် (503 Error)။ ၅ စက္ကန့်စောင့်ပြီး အလိုအလျောက် ထပ်မံကြိုးစားပါမည်...")
+                                time.sleep(5)
+                                continue 
+                            else:
+                                st.warning(f"⚠️ {model_name} ဆက်တိုက် ကြပ်နေသဖြင့် အခြား Model သို့ ပြောင်းလဲနေပါသည်...")
+                                break
+                        elif "429" in err_str or "quota" in err_str:
+                            raise e 
+                        else:
+                            raise e
+                            
         except Exception as e:
             last_err = e
             if "429" in str(e).lower() or "quota" in str(e).lower():
                 st.warning(f"⚠️ API Key (#{k_idx+1}) Limit ပြည့်သွားသဖြင့် နောက် Key သို့ ကူးပြောင်းနေပါသည်...")
                 continue
             continue
+            
     raise Exception(f"AI Extraction Error: {last_err}")
 
 def render_strict_1x_timeline_narration(dialogues, voice_cfg, total_video_duration, final_audio_path):
@@ -696,6 +725,14 @@ with st.sidebar:
         st.success("✅ API Key သိမ်းဆည်းပြီးပါပြီ!")
 
     st.markdown("---")
+    st.markdown("#### 🤖 **AI Model Selection**")
+    st.session_state.selected_ai_model = st.selectbox(
+        "Gemini Model ရွေးချယ်ပါ (503 Error တက်ပါက ပြောင်းသုံးရန်)",
+        ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"],
+        index=["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"].index(st.session_state.selected_ai_model) if st.session_state.selected_ai_model in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"] else 0
+    )
+
+    st.markdown("---")
     st.markdown("#### 🌐 **Language & Narrator**")
     st.session_state.target_language = st.selectbox(
         "ဘာသာစကား ရွေးချယ်ပါ (Dub Language)",
@@ -815,7 +852,8 @@ with tab_dub:
                         raw_api_keys=st.session_state.gemini_api_key,
                         video_path="temp_input.mp4",
                         target_language=lang_code,
-                        mode_key=mode_key
+                        mode_key=mode_key,
+                        selected_model=st.session_state.selected_ai_model
                     )
                     st.session_state.dialogues_timeline = res_data.get("dialogues", [])
                     st.session_state.top_hook_text = res_data.get("hook_line1", "စိတ်လှုပ်ရှားဖွယ်ရာ")
