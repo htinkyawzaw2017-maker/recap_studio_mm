@@ -10,7 +10,6 @@ import asyncio
 import shutil
 from PIL import Image, ImageDraw, ImageFont
 
-# ----------------- 1 GB FILE UPLOAD CONFIG AUTOMATION -----------------
 os.makedirs(".streamlit", exist_ok=True)
 config_toml_path = os.path.join(".streamlit", "config.toml")
 try:
@@ -19,7 +18,6 @@ try:
 except Exception:
     pass
 
-# ----------------- PAGE CONFIG -----------------
 st.set_page_config(
     page_title="Recap Studio MM Pro - Master Sync",
     page_icon="🎬",
@@ -27,7 +25,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ----------------- NEON CYBERPUNK STYLING -----------------
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Plus+Jakarta+Sans:wght@400;600;700&display=swap');
@@ -109,7 +106,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------- SDK AUTO-DETECTOR (Hybrid Fallback) -----------------
 use_new_sdk = False
 try:
     from google import genai
@@ -121,7 +117,6 @@ except ImportError:
     except ImportError:
         pass
 
-# ----------------- MYANMAR FONT CONFIG -----------------
 FONTS_CONF = "fonts.conf"
 if not os.path.exists(FONTS_CONF):
     try:
@@ -157,7 +152,6 @@ def ensure_myanmar_fonts():
 
 ensure_myanmar_fonts()
 
-# ----------------- CONFIG & CLEANUP -----------------
 CONFIG_FILE = ".recap_config.json"
 
 def load_config(key, default=""):
@@ -186,7 +180,7 @@ def save_config(key, value):
 
 def cleanup_workspace():
     """SAFE CLEANUP: Only removes intermediate audio/subtitle files."""
-    patterns = ["raw_seg_*.mp3", "*.ass", "temp_bgm.mp3", "raw_frame.png"]
+    patterns = ["raw_seg_*.mp3", "*.ass", "temp_bgm.mp3", "raw_frame.png", "base_silence.mp3", "final_dialogue_absolute.mp3"]
     count = 0
     for p in patterns:
         for f in glob.glob(p):
@@ -217,7 +211,6 @@ def format_time_str(seconds):
     secs = int(seconds % 60)
     return f"{mins:02d}:{secs:02d}"
 
-# ----------------- SCRIPT CLEANER & LOGO ENGINE -----------------
 PHONETICS_MM = {
     r"\bAI\b": "အေအိုင်", r"\bFBI\b": "အက်ဖ်ဘီအိုင်", r"\bCIA\b": "စီအိုင်အေ",
     r"\bVIP\b": "ဗွီအိုင်ပီ", r"\bDoctor\b": "ဒေါက်တာ", r"\bPolice\b": "ရဲတွေ",
@@ -279,7 +272,6 @@ def process_user_logo(input_path, output_path):
     except Exception:
         return False
 
-# ----------------- SESSION STATES -----------------
 if "gemini_api_key" not in st.session_state:
     st.session_state.gemini_api_key = load_config("gemini_api_key", os.getenv("GEMINI_API_KEY", ""))
 if "top_hook_text" not in st.session_state:
@@ -352,17 +344,13 @@ def extract_timeline_dialogues(raw_api_keys, video_path, video_duration, target_
 {context}
 
 CRITICAL TIMELINE RULES FOR STRICT DUBBING:
-1. VIDEO DURATION: {video_duration} seconds. You MUST process the ENTIRE video from 0.0s up to {video_duration}s. DO NOT stop halfway. Keep extracting until the video ends.
-2. ONLY identify timestamps where characters or narrators are ACTUALLY SPEAKING.
-3. If there is NO speech (e.g., fighting, walking, background music), DO NOT create a dialogue entry. Leave it empty!
-4. Make sure the translated text is CONCISE enough to fit the time gap at normal speaking speed.
-5. For each active dialogue segment, output:
-   - "start": exact start timestamp in seconds (float, e.g. 3.2)
-   - "end": exact end timestamp in seconds (float, e.g. 6.8)
-   - "speaker": character name or gender
-   - "text": natural, concise dubbed speech in {lang_instruction}. (CRITICAL: DO NOT use double quotes inside this text. Use single quotes if needed.)
+1. VIDEO DURATION: The video is EXACTLY {video_duration} seconds long.
+2. FULL COVERAGE MANDATE: You MUST process the ENTIRE video from 0.0s up to {video_duration}s. DO NOT stop early. DO NOT summarize. Continue creating timeline entries until the very end of the video.
+3. SILENCE HANDLING: Only identify timestamps where characters/narrators are ACTUALLY SPEAKING. If there is NO speech, leave a gap.
+4. TEXT FORMATTING: Write natural, concise dubbed speech in {lang_instruction}. CRITICAL: DO NOT use double quotes inside the text value. Use single quotes if needed.
+5. JSON OUTPUT: Return STRICTLY JSON format. DO NOT wrap the JSON in markdown code blocks.
 
-Return STRICTLY JSON format ONLY. Do not include markdown formatting like ```json:
+Example Output:
 {{
   "hook_line1": "Catchy Hook Line 1",
   "hook_line2": "Catchy Hook Line 2",
@@ -376,7 +364,6 @@ Return STRICTLY JSON format ONLY. Do not include markdown formatting like ```jso
   ]
 }}
 """
-    models_to_try = [selected_model, "gemini-1.5-flash", "gemini-1.5-pro"]
     last_err = None
     
     for k_idx, current_key in enumerate(keys):
@@ -385,78 +372,88 @@ Return STRICTLY JSON format ONLY. Do not include markdown formatting like ```jso
             if use_new_sdk:
                 client = genai.Client(api_key=current_key)
                 if video_path and os.path.exists(video_path):
-                    with st.spinner("📤 ဗီဒီယိုကို AI မျက်စိဖြင့် လေ့လာရန် ပေးပို့နေပါသည်..."):
+                    with st.spinner("📤 ဗီဒီယိုကို Google Server သို့ ပေးပို့နေပါသည် (ACTIVE ဖြစ်သည်အထိ စောင့်ဆိုင်းပါမည်)..."):
                         video_file = client.files.upload(file=video_path)
-                        waits = 0
-                        while getattr(video_file, "state", None) == "PROCESSING" and waits < 35:
-                            time.sleep(2)
-                            waits += 1
+                        # RIGOROUS POLLING TO AVOID TIMEOUT ERRORS
+                        while True:
                             video_file = client.files.get(name=video_file.name)
-                        uploaded_file_ref = video_file
+                            state_str = str(video_file.state).upper()
+                            if "PROCESSING" in state_str:
+                                time.sleep(3)
+                            elif "ACTIVE" in state_str:
+                                uploaded_file_ref = video_file
+                                break
+                            else:
+                                raise ValueError(f"Video Processing Failed. State: {state_str}")
             else:
                 legacy_genai.configure(api_key=current_key)
                 if video_path and os.path.exists(video_path):
-                    with st.spinner("📤 ဗီဒီယိုကို AI မျက်စိဖြင့် လေ့လာရန် ပေးပို့နေပါသည်..."):
+                    with st.spinner("📤 ဗီဒီယိုကို Google Server သို့ ပေးပို့နေပါသည် (ACTIVE ဖြစ်သည်အထိ စောင့်ဆိုင်းပါမည်)..."):
                         video_file_obj = legacy_genai.upload_file(path=video_path)
-                        waits = 0
-                        while video_file_obj.state.name == "PROCESSING" and waits < 35:
-                            time.sleep(2)
-                            waits += 1
+                        while True:
                             video_file_obj = legacy_genai.get_file(video_file_obj.name)
-                        if video_file_obj.state.name == "ACTIVE":
-                            uploaded_file_ref = video_file_obj
-
-            for model_name in models_to_try:
-                for attempt in range(2):
-                    try:
-                        raw_resp = ""
-                        if use_new_sdk:
-                            contents = [uploaded_file_ref, prompt] if uploaded_file_ref else [prompt]
-                            with st.spinner(f"🧠 AI စဉ်းစားနေပါသည် ({model_name})..."):
-                                res = client.models.generate_content(model=model_name, contents=contents)
-                            raw_resp = res.text.strip()
-                        else:
-                            model = legacy_genai.GenerativeModel(model_name)
-                            contents = [uploaded_file_ref, prompt] if uploaded_file_ref else prompt
-                            with st.spinner(f"🧠 AI စဉ်းစားနေပါသည် ({model_name})..."):
-                                res = model.generate_content(contents)
-                            raw_resp = res.text.strip()
-
-                        # Clean markdown and parse JSON safely
-                        raw_resp = raw_resp.replace("```json", "").replace("```", "").strip()
-                        start_idx = raw_resp.find('{')
-                        end_idx = raw_resp.rfind('}')
-                        
-                        if start_idx != -1 and end_idx != -1:
-                            json_str = raw_resp[start_idx:end_idx+1]
-                            try:
-                                data = json.loads(json_str, strict=False)
-                                return data
-                            except json.JSONDecodeError as je:
-                                raise ValueError(f"JSON Parse Error: {je}")
-                                
-                        raise ValueError("AI JSON ပြန်ကြားချက် မမှန်ကန်ပါ။")
-                        
-                    except Exception as e:
-                        last_err = e
-                        err_str = str(e).lower()
-                        if "503" in err_str or "unavailable" in err_str or "overloaded" in err_str:
-                            if attempt == 0:
-                                time.sleep(4)
-                                continue 
-                            else:
+                            state_str = str(video_file_obj.state.name).upper()
+                            if "PROCESSING" in state_str:
+                                time.sleep(3)
+                            elif "ACTIVE" in state_str:
+                                uploaded_file_ref = video_file_obj
                                 break
-                        elif "429" in err_str or "quota" in err_str:
-                            raise e 
-                        else:
-                            raise e
-                            
+                            else:
+                                raise ValueError(f"Video Processing Failed. State: {state_str}")
+
+            try:
+                raw_resp = ""
+                if use_new_sdk:
+                    contents = [uploaded_file_ref, prompt] if uploaded_file_ref else [prompt]
+                    with st.spinner(f"🧠 AI စဉ်းစားနေပါသည် ({selected_model}) - ဗီဒီယိုအဆုံးထိ ဖတ်ရှုနေသဖြင့် အချိန်အနည်းငယ် ယူပါမည်..."):
+                        # MAX OUTPUT TOKENS TO PREVENT TRUNCATION
+                        res = client.models.generate_content(
+                            model=selected_model, 
+                            contents=contents,
+                            config={"max_output_tokens": 8192, "temperature": 0.2}
+                        )
+                    raw_resp = res.text.strip()
+                else:
+                    model = legacy_genai.GenerativeModel(selected_model)
+                    contents = [uploaded_file_ref, prompt] if uploaded_file_ref else prompt
+                    with st.spinner(f"🧠 AI စဉ်းစားနေပါသည် ({selected_model}) - ဗီဒီယိုအဆုံးထိ ဖတ်ရှုနေသဖြင့် အချိန်အနည်းငယ် ယူပါမည်..."):
+                        # MAX OUTPUT TOKENS TO PREVENT TRUNCATION
+                        res = model.generate_content(
+                            contents,
+                            generation_config=legacy_genai.types.GenerationConfig(max_output_tokens=8192, temperature=0.2)
+                        )
+                    raw_resp = res.text.strip()
+
+                # Clean markdown and parse JSON safely (Forgiving Parser)
+                raw_resp = raw_resp.replace("```json", "").replace("```", "").strip()
+                start_idx = raw_resp.find('{')
+                end_idx = raw_resp.rfind('}')
+                
+                if start_idx != -1 and end_idx != -1:
+                    json_str = raw_resp[start_idx:end_idx+1]
+                    try:
+                        data = json.loads(json_str, strict=False)
+                        return data
+                    except json.JSONDecodeError as je:
+                        raise ValueError(f"JSON Parse Error (AI ၏ အဖြေပုံစံမှားယွင်းနေပါသည်): {je}\nResponse: {json_str[:100]}...")
+                        
+                raise ValueError("AI JSON ပြန်ကြားချက် မမှန်ကန်ပါ။")
+                
+            except Exception as e:
+                last_err = e
+                err_str = str(e).lower()
+                if "429" in err_str or "quota" in err_str:
+                    raise e 
+                else:
+                    raise e
+                    
         except Exception as e:
             last_err = e
             if "429" in str(e).lower() or "quota" in str(e).lower():
                 st.warning(f"⚠️ API Key (#{k_idx+1}) Limit ပြည့်သွားသဖြင့် နောက် Key သို့ ကူးပြောင်းနေပါသည်...")
                 continue
-            continue
+            # Note: We do NOT fallback to a different model. We respect the user's choice!
+            break
             
     raise Exception(f"AI Extraction Error: {last_err}")
 
@@ -464,7 +461,6 @@ def render_strict_1x_absolute_mixer(dialogues, voice_cfg, total_video_duration, 
     """
     ABSOLUTE TIMELINE MIXER: 
     - No atempo (Pure 1x Speed)
-    - No concat cummulative drift!
     - Uses FFmpeg `adelay` to nail the audio exactly at the given start timestamp!
     """
     import edge_tts
@@ -510,8 +506,7 @@ def render_strict_1x_absolute_mixer(dialogues, voice_cfg, total_video_duration, 
         shutil.copy(base_silence, final_audio_path)
         return
 
-    # Mix segments using adelay
-    # Example FFmpeg: ffmpeg -i base_silence.mp3 -i seg0.mp3 -i seg1.mp3 -filter_complex "[1:a]adelay=2500|2500[a1];[2:a]adelay=6800|6800[a2];[0:a][a1][a2]amix=inputs=3:duration=first:dropout_transition=0[aout]" ...
+    # Mix segments using adelay on top of the base silence
     cmd_mix = ["ffmpeg", "-y", "-threads", "2", "-i", base_silence]
     filter_complex = []
     amix_inputs = ["[0:a]"]
@@ -524,6 +519,7 @@ def render_strict_1x_absolute_mixer(dialogues, voice_cfg, total_video_duration, 
 
     amix_str = "".join(amix_inputs)
     total_inputs = len(segment_files) + 1
+    # normalize=0 PREVENTS the phasing/echoing issue!
     filter_complex.append(f"{amix_str}amix=inputs={total_inputs}:duration=first:dropout_transition=0:normalize=0[aout]")
 
     cmd_mix.extend([
@@ -631,13 +627,13 @@ def render_dialogue_synced_video(input_video, narration_audio, ass_path, output_
     if not has_orig_audio or mute_original:
         audio_filter = "[1:a]volume=1.3[afinal]"
     else:
-        # Sidechain compress to lower original volume only when AI speaks
+        # Aggressive Sidechain compress to lower original volume only when AI speaks
         audio_filter = (
             "[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.8[orig_sfx];"
-            "[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.3[ai_dub];"
+            "[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.5[ai_dub];"
             "[ai_dub]asplit[ai_final][ai_sc];"
             "[orig_sfx][ai_sc]sidechaincompress=threshold=0.015:ratio=20.0:attack=5:release=1000[ducked_sfx];"
-            "[ducked_sfx][ai_final]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[afinal]"
+            "[ducked_sfx][ai_final]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[afinal]"
         )
 
     if logo_path and os.path.exists(logo_path):
@@ -686,7 +682,6 @@ def render_dialogue_synced_video(input_video, narration_audio, ass_path, output_
 
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-# ----------------- UI: SIDEBAR -----------------
 with st.sidebar:
     st.markdown("""
     <div style="text-align: center; padding: 10px 0 16px 0;">
@@ -714,7 +709,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("#### 🤖 **AI Model Selection**")
     st.session_state.selected_ai_model = st.selectbox(
-        "Gemini Model ရွေးချယ်ပါ (503 Error တက်ပါက ပြောင်းသုံးရန်)",
+        "Gemini Model ရွေးချယ်ပါ (2.5-flash အကြံပြုသည်)",
         ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"],
         index=["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"].index(st.session_state.selected_ai_model) if st.session_state.selected_ai_model in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"] else 0
     )
