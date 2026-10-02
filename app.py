@@ -487,7 +487,7 @@ def render_strict_1x_timeline_narration(dialogues, voice_cfg, total_video_durati
             if gap > 0.05:
                 silence_gap = f"silence_gap_{idx}.mp3"
                 cmd_sil = [
-                    "ffmpeg", "-y", "-f", "lavfi",
+                    "ffmpeg", "-y", "-threads", "1", "-f", "lavfi",
                     "-i", "anullsrc=r=44100:cl=stereo",
                     "-t", f"{gap:.3f}",
                     "-c:a", "libmp3lame", "-b:a", "192k",
@@ -520,7 +520,7 @@ def render_strict_1x_timeline_narration(dialogues, voice_cfg, total_video_durati
             tail_gap = total_video_duration - current_time
             tail_file = "silence_tail.mp3"
             cmd_tail = [
-                "ffmpeg", "-y", "-f", "lavfi",
+                "ffmpeg", "-y", "-threads", "1", "-f", "lavfi",
                 "-i", "anullsrc=r=44100:cl=stereo",
                 "-t", f"{tail_gap:.3f}",
                 "-c:a", "libmp3lame", "-b:a", "192k",
@@ -533,7 +533,7 @@ def render_strict_1x_timeline_narration(dialogues, voice_cfg, total_video_durati
     if not segment_files:
         # Fallback empty audio if no dialogues found
         cmd_empty = [
-            "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+            "ffmpeg", "-y", "-threads", "1", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
             "-t", f"{total_video_duration:.3f}", "-c:a", "libmp3lame", "-b:a", "192k", final_audio_path
         ]
         subprocess.run(cmd_empty, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -544,7 +544,7 @@ def render_strict_1x_timeline_narration(dialogues, voice_cfg, total_video_durati
             cf.write(f"file '{sf}'\n")
 
     cmd_concat = [
-        "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+        "ffmpeg", "-y", "-threads", "2", "-f", "concat", "-safe", "0",
         "-i", concat_list_file,
         "-c:a", "libmp3lame", "-b:a", "192k",
         final_audio_path
@@ -664,7 +664,7 @@ def render_dialogue_synced_video(input_video, narration_audio, ass_path, output_
             f"{audio_filter}"
         )
         cmd = [
-            "ffmpeg", "-y",
+            "ffmpeg", "-y", "-threads", "2",
             "-i", input_video,
             "-i", narration_audio,
             "-i", logo_path,
@@ -673,7 +673,7 @@ def render_dialogue_synced_video(input_video, narration_audio, ass_path, output_
             "-map", "[vfinal]",
             "-map", "[afinal]",
             "-r", "30",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+            "-c:v", "libx264", "-preset", "superfast", "-crf", "24",
             "-c:a", "aac", "-b:a", "192k",
             output_video
         ]
@@ -685,7 +685,7 @@ def render_dialogue_synced_video(input_video, narration_audio, ass_path, output_
             f"{audio_filter}"
         )
         cmd = [
-            "ffmpeg", "-y",
+            "ffmpeg", "-y", "-threads", "2",
             "-i", input_video,
             "-i", narration_audio,
             "-t", f"{exact_duration:.3f}",
@@ -693,7 +693,7 @@ def render_dialogue_synced_video(input_video, narration_audio, ass_path, output_
             "-map", "[vfinal]",
             "-map", "[afinal]",
             "-r", "30",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+            "-c:v", "libx264", "-preset", "superfast", "-crf", "24",
             "-c:a", "aac", "-b:a", "192k",
             output_video
         ]
@@ -1022,7 +1022,7 @@ with tab_thumb:
                 st.error("ဗီဒီယိုဖိုင် မရှိသေးပါ ခင်ဗျာ။")
             else:
                 temp_frame = "raw_frame.png"
-                subprocess.run(["ffmpeg", "-y", "-ss", str(thumb_sec), "-i", "temp_input.mp4", "-vframes", "1", "-vf", "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280", temp_frame], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                subprocess.run(["ffmpeg", "-y", "-threads", "1", "-ss", str(thumb_sec), "-i", "temp_input.mp4", "-vframes", "1", "-vf", "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280", temp_frame], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 if os.path.exists(temp_frame):
                     try:
                         base = Image.open(temp_frame).convert("RGBA")
@@ -1077,7 +1077,7 @@ with tab_splitter:
                     out_part = f"part_{p_idx+1}.mp4"
                     vf_part = "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280" if "9:16" in split_aspect else "scale=1280:720"
                     cmd_split = [
-                        "ffmpeg", "-y", "-ss", str(st_sec), "-t", str(split_slice),
+                        "ffmpeg", "-y", "-threads", "2", "-ss", str(st_sec), "-t", str(split_slice),
                         "-i", "temp_long_video.mp4", "-vf", vf_part,
                         "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", out_part
                     ]
