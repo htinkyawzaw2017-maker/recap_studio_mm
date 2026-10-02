@@ -303,7 +303,7 @@ if "sub_bg_style" not in st.session_state:
 if "enable_subtitles" not in st.session_state:
     st.session_state.enable_subtitles = True
 if "mute_original_audio" not in st.session_state:
-    st.session_state.mute_original_audio = False
+    st.session_state.mute_original_audio = True
 if "user_watermark_file" not in st.session_state:
     st.session_state.user_watermark_file = ""
 if "last_rendered_video" not in st.session_state:
@@ -333,7 +333,7 @@ RECAP_MODES = {
     "🎬 Movie & Fiction Recap (ရုပ်ရှင်ဇာတ်လမ်း)": "movie"
 }
 
-def extract_timeline_dialogues(raw_api_keys, video_path, target_language="my", mode_key="auto", selected_model="gemini-2.5-flash"):
+def extract_timeline_dialogues(raw_api_keys, video_path, video_duration, target_language="my", mode_key="auto", selected_model="gemini-2.5-flash"):
     keys = [k.strip() for k in re.split(r"[,;\n]+", raw_api_keys) if k.strip()]
     if not keys:
         raise ValueError("Gemini API Key ထည့်သွင်းပေးပါ ခင်ဗျာ။")
@@ -352,10 +352,11 @@ def extract_timeline_dialogues(raw_api_keys, video_path, target_language="my", m
 {context}
 
 CRITICAL TIMELINE RULES FOR STRICT DUBBING:
-1. ONLY identify timestamps where characters or narrators are ACTUALLY SPEAKING.
-2. If there is NO speech (e.g., fighting, walking, background music), DO NOT create a dialogue entry. Leave it empty!
-3. Make sure the translated text is CONCISE enough to fit the time gap at normal speaking speed.
-4. For each active dialogue segment, output:
+1. VIDEO DURATION: {video_duration} seconds. You MUST process the ENTIRE video from 0.0s up to {video_duration}s. DO NOT stop halfway. Keep extracting until the video ends.
+2. ONLY identify timestamps where characters or narrators are ACTUALLY SPEAKING.
+3. If there is NO speech (e.g., fighting, walking, background music), DO NOT create a dialogue entry. Leave it empty!
+4. Make sure the translated text is CONCISE enough to fit the time gap at normal speaking speed.
+5. For each active dialogue segment, output:
    - "start": exact start timestamp in seconds (float, e.g. 3.2)
    - "end": exact end timestamp in seconds (float, e.g. 6.8)
    - "speaker": character name or gender
@@ -523,7 +524,7 @@ def render_strict_1x_absolute_mixer(dialogues, voice_cfg, total_video_duration, 
 
     amix_str = "".join(amix_inputs)
     total_inputs = len(segment_files) + 1
-    filter_complex.append(f"{amix_str}amix=inputs={total_inputs}:duration=first:dropout_transition=0[aout]")
+    filter_complex.append(f"{amix_str}amix=inputs={total_inputs}:duration=first:dropout_transition=0:normalize=0[aout]")
 
     cmd_mix.extend([
         "-filter_complex", ";".join(filter_complex),
@@ -635,8 +636,8 @@ def render_dialogue_synced_video(input_video, narration_audio, ass_path, output_
             "[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.8[orig_sfx];"
             "[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.3[ai_dub];"
             "[ai_dub]asplit[ai_final][ai_sc];"
-            "[orig_sfx][ai_sc]sidechaincompress=threshold=0.03:ratio=10.0:attack=10:release=500[ducked_sfx];"
-            "[ducked_sfx][ai_final]amix=inputs=2:duration=longest:dropout_transition=0[afinal]"
+            "[orig_sfx][ai_sc]sidechaincompress=threshold=0.015:ratio=20.0:attack=5:release=1000[ducked_sfx];"
+            "[ducked_sfx][ai_final]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[afinal]"
         )
 
     if logo_path and os.path.exists(logo_path):
@@ -833,10 +834,11 @@ with tab_dub:
 
             try:
                 lang_code = "my" if "Burmese" in st.session_state.target_language else "en"
-                with st.spinner(f"👁️ AI ဖြင့် ဇာတ်ကောင် စကားပြောချိန်ကို စက္ကန့်မလွဲ ရှာဖွေနေပါသည်..."):
+                with st.spinner(f"👁️ AI ဖြင့် ဇာတ်ကောင် စကားပြောချိန်ကို စက္ကန့်မလွဲ ရှာဖွေနေပါသည် (အဆုံးထိ)..."):
                     res_data = extract_timeline_dialogues(
                         raw_api_keys=st.session_state.gemini_api_key,
                         video_path="temp_input.mp4",
+                        video_duration=v_duration,
                         target_language=lang_code,
                         mode_key=mode_key,
                         selected_model=st.session_state.selected_ai_model
