@@ -21,7 +21,7 @@ except Exception:
 
 # ----------------- PAGE CONFIG -----------------
 st.set_page_config(
-    page_title="Recap Studio MM Pro - Strict Sync",
+    page_title="Recap Studio MM Pro - Master Sync",
     page_icon="🎬",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -109,11 +109,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------- SDK AUTO-DETECTOR -----------------
+# ----------------- SDK AUTO-DETECTOR (Hybrid Fallback) -----------------
 use_new_sdk = False
 try:
     from google import genai
-    from google.genai import types
     use_new_sdk = True
 except ImportError:
     try:
@@ -187,7 +186,7 @@ def save_config(key, value):
 
 def cleanup_workspace():
     """SAFE CLEANUP: Only removes intermediate audio/subtitle files."""
-    patterns = ["silence_*.mp3", "raw_seg_*.mp3", "*.ass", "temp_bgm.mp3", "concat_segments.txt", "raw_frame.png"]
+    patterns = ["raw_seg_*.mp3", "*.ass", "temp_bgm.mp3", "raw_frame.png"]
     count = 0
     for p in patterns:
         for f in glob.glob(p):
@@ -218,19 +217,12 @@ def format_time_str(seconds):
     secs = int(seconds % 60)
     return f"{mins:02d}:{secs:02d}"
 
-# ----------------- SCRIPT CLEANER -----------------
+# ----------------- SCRIPT CLEANER & LOGO ENGINE -----------------
 PHONETICS_MM = {
-    r"\bAI\b": "အေအိုင်",
-    r"\bFBI\b": "အက်ဖ်ဘီအိုင်",
-    r"\bCIA\b": "စီအိုင်အေ",
-    r"\bVIP\b": "ဗွီအိုင်ပီ",
-    r"\bDoctor\b": "ဒေါက်တာ",
-    r"\bPolice\b": "ရဲတွေ",
-    r"\bTikTok\b": "တစ်တော့ခ်",
-    r"\bFacebook\b": "ဖေ့စ်ဘွတ်ခ်",
-    r"\bYouTube\b": "ယူကျုဘ်",
-    r"\bSubscribe\b": "စဘ်စခရိုက်ဘ်",
-    r"\bLike\b": "လိုက်ခ်"
+    r"\bAI\b": "အေအိုင်", r"\bFBI\b": "အက်ဖ်ဘီအိုင်", r"\bCIA\b": "စီအိုင်အေ",
+    r"\bVIP\b": "ဗွီအိုင်ပီ", r"\bDoctor\b": "ဒေါက်တာ", r"\bPolice\b": "ရဲတွေ",
+    r"\bTikTok\b": "တစ်တော့ခ်", r"\bFacebook\b": "ဖေ့စ်ဘွတ်ခ်", r"\bYouTube\b": "ယူကျုဘ်",
+    r"\bSubscribe\b": "စဘ်စခရိုက်ဘ်", r"\bLike\b": "လိုက်ခ်"
 }
 
 def clean_script_line(text, lang="my"):
@@ -336,9 +328,9 @@ VOICE_CATALOG = {
 
 RECAP_MODES = {
     "🔍 Auto-Detect (အလိုအလျောက် သုံးသပ်မည်)": "auto",
-    "🔬 Science, Test & Experiment (စမ်းသပ်မှုနှင့် သိပ္ပံ)": "experiment",
+    "🔬 Science, Test & Experiment (စမ်းသပ်မှု)": "experiment",
     "🛠️ Silent Craft & DIY (အသံမဲ့ လက်မှုပညာ)": "craft",
-    "🎬 Movie & Fiction Recap (ရုပ်ရှင်နှင့် ဇာတ်လမ်းတွဲများ)": "movie"
+    "🎬 Movie & Fiction Recap (ရုပ်ရှင်ဇာတ်လမ်း)": "movie"
 }
 
 def extract_timeline_dialogues(raw_api_keys, video_path, target_language="my", mode_key="auto", selected_model="gemini-2.5-flash"):
@@ -349,10 +341,10 @@ def extract_timeline_dialogues(raw_api_keys, video_path, target_language="my", m
     lang_instruction = "Burmese language (မြန်မာစကားပြော အသုံးအနှုန်းသီးသန့်)" if target_language == "my" else "English language"
 
     mode_prompts = {
-        "auto": "Observe this video very carefully. Focus ONLY on exact speaking moments.",
+        "auto": "Observe this video carefully. Focus ONLY on moments where someone is speaking or explaining.",
         "experiment": "This is an Experiment video. Only dub exactly when someone is actively explaining.",
         "craft": "This is a DIY video. If silent, only dub briefly during prominent actions.",
-        "movie": "This is a Movie/Animation. Act as an expert dubbing director."
+        "movie": "This is a Movie/Animation. Translate and dub ONLY the exact dialogues spoken by characters."
     }
     context = mode_prompts.get(mode_key, mode_prompts["auto"])
 
@@ -360,9 +352,9 @@ def extract_timeline_dialogues(raw_api_keys, video_path, target_language="my", m
 {context}
 
 CRITICAL TIMELINE RULES FOR STRICT DUBBING:
-1. ONLY identify timestamps where characters or narrators are ACTUALLY SPEAKING in the video.
-2. If there is NO speech (e.g. background music, silent walking, fighting), DO NOT create any dialogue entry for that gap.
-3. Make sure the translated text is VERY CONCISE. It must fit within the given start/end timeframe at normal speaking speed.
+1. ONLY identify timestamps where characters or narrators are ACTUALLY SPEAKING.
+2. If there is NO speech (e.g., fighting, walking, background music), DO NOT create a dialogue entry. Leave it empty!
+3. Make sure the translated text is CONCISE enough to fit the time gap at normal speaking speed.
 4. For each active dialogue segment, output:
    - "start": exact start timestamp in seconds (float, e.g. 3.2)
    - "end": exact end timestamp in seconds (float, e.g. 6.8)
@@ -388,7 +380,6 @@ Return STRICTLY JSON format:
     
     for k_idx, current_key in enumerate(keys):
         try:
-            # ဗီဒီယိုဖိုင်အား Google Server သို့ (၁) ခါသာ ပို့ရန် (Upload Once)
             uploaded_file_ref = None
             if use_new_sdk:
                 client = genai.Client(api_key=current_key)
@@ -402,7 +393,6 @@ Return STRICTLY JSON format:
                             video_file = client.files.get(name=video_file.name)
                         uploaded_file_ref = video_file
             else:
-                import google.generativeai as legacy_genai
                 legacy_genai.configure(api_key=current_key)
                 if video_path and os.path.exists(video_path):
                     with st.spinner("📤 ဗီဒီယိုကို AI မျက်စိဖြင့် လေ့လာရန် ပေးပို့နေပါသည်..."):
@@ -415,7 +405,6 @@ Return STRICTLY JSON format:
                         if video_file_obj.state.name == "ACTIVE":
                             uploaded_file_ref = video_file_obj
 
-            # 503 Server Error အတွက် Model များပြောင်းလဲခြင်း နှင့် Retry လုပ်ခြင်း
             for model_name in models_to_try:
                 for attempt in range(2):
                     try:
@@ -443,11 +432,9 @@ Return STRICTLY JSON format:
                         err_str = str(e).lower()
                         if "503" in err_str or "unavailable" in err_str or "overloaded" in err_str:
                             if attempt == 0:
-                                st.warning(f"⚠️ Google Server ယာယီ ကြပ်နေပါသည် (503 Error)။ ၅ စက္ကန့်စောင့်ပြီး အလိုအလျောက် ထပ်မံကြိုးစားပါမည်...")
-                                time.sleep(5)
+                                time.sleep(4)
                                 continue 
                             else:
-                                st.warning(f"⚠️ {model_name} ဆက်တိုက် ကြပ်နေသဖြင့် အခြား Model သို့ ပြောင်းလဲနေပါသည်...")
                                 break
                         elif "429" in err_str or "quota" in err_str:
                             raise e 
@@ -463,44 +450,38 @@ Return STRICTLY JSON format:
             
     raise Exception(f"AI Extraction Error: {last_err}")
 
-def render_strict_1x_timeline_narration(dialogues, voice_cfg, total_video_duration, final_audio_path):
+def render_strict_1x_absolute_mixer(dialogues, voice_cfg, total_video_duration, final_audio_path):
     """
-    CRITICAL FIX: NO ATEMPO USED. Audio runs at pure 1x normal speed.
-    Places audio strictly at the start timestamp by padding with silence before it.
+    ABSOLUTE TIMELINE MIXER: 
+    - No atempo (Pure 1x Speed)
+    - No concat cummulative drift!
+    - Uses FFmpeg `adelay` to nail the audio exactly at the given start timestamp!
     """
     import edge_tts
-    sorted_dialogues = sorted(dialogues, key=lambda d: float(d.get("start", 0)))
-    concat_list_file = "concat_segments.txt"
+    
+    # 1. Create a pure silence base track matching the exact video length
+    base_silence = "base_silence.mp3"
+    cmd_base = [
+        "ffmpeg", "-y", "-threads", "2", "-f", "lavfi",
+        "-i", f"anullsrc=r=44100:cl=stereo:d={total_video_duration}",
+        "-c:a", "libmp3lame", "-b:a", "192k",
+        base_silence
+    ]
+    subprocess.run(cmd_base, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    if not dialogues:
+        shutil.copy(base_silence, final_audio_path)
+        return
+
     segment_files = []
-    current_time = 0.0
-
-    with st.spinner("🎙️ အမြန်နှုန်းကို လုံးဝမပြောင်းလဲဘဲ Normal 1x အတိုင်း အချိန်ဇယားတိတိကျကျ ချထားနေပါသည်..."):
-        for idx, item in enumerate(sorted_dialogues):
-            d_start = max(0.0, float(item.get("start", 0.0)))
+    
+    with st.spinner("🎙️ အမြန်နှုန်းကို လုံးဝမပြောင်းလဲဘဲ သတ်မှတ်ထားသော အချိန်တိတိကျကျတွင် အသံနေရာချထားနေပါသည် (Absolute Sync)..."):
+        # Generate TTS segments
+        for idx, item in enumerate(dialogues):
             d_text = clean_script_line(item.get("text", ""), voice_cfg.get("lang", "my"))
-
             if not d_text:
                 continue
 
-            # 1. Fill exact silence gap before this dialogue begins
-            gap = d_start - current_time
-            if gap > 0.05:
-                silence_gap = f"silence_gap_{idx}.mp3"
-                cmd_sil = [
-                    "ffmpeg", "-y", "-threads", "1", "-f", "lavfi",
-                    "-i", "anullsrc=r=44100:cl=stereo",
-                    "-t", f"{gap:.3f}",
-                    "-c:a", "libmp3lame", "-b:a", "192k",
-                    silence_gap
-                ]
-                subprocess.run(cmd_sil, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                segment_files.append(silence_gap)
-                current_time += gap
-            elif gap < 0:
-                # If previous audio was slightly longer, we just start immediately without silence gap.
-                pass 
-
-            # 2. Render normal 1x speed dialogue TTS
             raw_seg = f"raw_seg_{idx}.mp3"
             comm = edge_tts.Communicate(
                 text=d_text,
@@ -510,46 +491,39 @@ def render_strict_1x_timeline_narration(dialogues, voice_cfg, total_video_durati
             )
             asyncio.run(comm.save(raw_seg))
 
-            raw_dur = get_media_duration(raw_seg)
-            if raw_dur > 0:
-                segment_files.append(raw_seg)
-                current_time += raw_dur
+            # Store the valid segment and its start time in MS
+            d_start_ms = int(max(0.0, float(item.get("start", 0.0))) * 1000)
+            if os.path.exists(raw_seg) and get_media_duration(raw_seg) > 0.1:
+                segment_files.append((raw_seg, d_start_ms))
 
-        # 3. Final silence tail to guarantee audio length perfectly matches video length
-        if total_video_duration > current_time + 0.05:
-            tail_gap = total_video_duration - current_time
-            tail_file = "silence_tail.mp3"
-            cmd_tail = [
-                "ffmpeg", "-y", "-threads", "1", "-f", "lavfi",
-                "-i", "anullsrc=r=44100:cl=stereo",
-                "-t", f"{tail_gap:.3f}",
-                "-c:a", "libmp3lame", "-b:a", "192k",
-                tail_file
-            ]
-            subprocess.run(cmd_tail, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            segment_files.append(tail_file)
-
-    # 4. Concatenate all segments into a master track
     if not segment_files:
-        # Fallback empty audio if no dialogues found
-        cmd_empty = [
-            "ffmpeg", "-y", "-threads", "1", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-            "-t", f"{total_video_duration:.3f}", "-c:a", "libmp3lame", "-b:a", "192k", final_audio_path
-        ]
-        subprocess.run(cmd_empty, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        shutil.copy(base_silence, final_audio_path)
         return
 
-    with open(concat_list_file, "w", encoding="utf-8") as cf:
-        for sf in segment_files:
-            cf.write(f"file '{sf}'\n")
+    # Mix segments using adelay
+    # Example FFmpeg: ffmpeg -i base_silence.mp3 -i seg0.mp3 -i seg1.mp3 -filter_complex "[1:a]adelay=2500|2500[a1];[2:a]adelay=6800|6800[a2];[0:a][a1][a2]amix=inputs=3:duration=first:dropout_transition=0[aout]" ...
+    cmd_mix = ["ffmpeg", "-y", "-threads", "2", "-i", base_silence]
+    filter_complex = []
+    amix_inputs = ["[0:a]"]
 
-    cmd_concat = [
-        "ffmpeg", "-y", "-threads", "2", "-f", "concat", "-safe", "0",
-        "-i", concat_list_file,
+    for i, (seg_file, start_ms) in enumerate(segment_files):
+        cmd_mix.extend(["-i", seg_file])
+        input_idx = i + 1
+        filter_complex.append(f"[{input_idx}:a]adelay={start_ms}|{start_ms}[a{input_idx}]")
+        amix_inputs.append(f"[a{input_idx}]")
+
+    amix_str = "".join(amix_inputs)
+    total_inputs = len(segment_files) + 1
+    filter_complex.append(f"{amix_str}amix=inputs={total_inputs}:duration=first:dropout_transition=0[aout]")
+
+    cmd_mix.extend([
+        "-filter_complex", ";".join(filter_complex),
+        "-map", "[aout]",
         "-c:a", "libmp3lame", "-b:a", "192k",
         final_audio_path
-    ]
-    subprocess.run(cmd_concat, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    ])
+
+    subprocess.run(cmd_mix, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 def hex_to_ass(hex_code):
     h = hex_code.lstrip("#")
@@ -595,8 +569,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     for d in dialogues:
         st_sec = max(0.0, float(d.get("start", 0.0)))
-        # Show subtitle purely for original gap + max 3s logic for safety
-        en_sec = min(duration, float(d.get("end", st_sec + 3.0)))
+        en_sec = float(d.get("end", st_sec + 2.5)) # Fallback end time if not given
+        if en_sec <= st_sec:
+            en_sec = st_sec + 2.5
+            
         line = d.get("text", "").strip()
         if line:
             # CapCut Style pop-in subtitle effect
@@ -619,7 +595,7 @@ def render_dialogue_synced_video(input_video, narration_audio, ass_path, output_
     if exact_duration <= 0.0:
         exact_duration = 30.0
 
-    # Smart Auto-Reframe (Blur Background vs Center Crop)
+    # Smart Auto-Reframe
     if "Blur" in reframe_mode:
         base_vfilter = (
             "[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=25:10,eq=brightness=-0.15[bg];"
@@ -639,17 +615,16 @@ def render_dialogue_synced_video(input_video, narration_audio, ass_path, output_
         "bottom_right": "main_w-overlay_w-24:main_h-overlay_h-24"
     }
 
-    # Audio Logic: Mute or Ducking
     has_orig_audio = has_audio_stream(input_video)
     
+    # Audio Ducking vs Mute Original Audio
     if not has_orig_audio or mute_original:
-        # Strictly muted or silent video
-        audio_filter = "[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.2,apad[afinal]"
+        audio_filter = "[1:a]volume=1.3[afinal]"
     else:
-        # Advanced Audio Ducking (Original volume lowered when AI speaks)
+        # Sidechain compress to lower original volume only when AI speaks
         audio_filter = (
-            "[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.9[orig_sfx];"
-            "[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.2,apad[ai_dub];"
+            "[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.8[orig_sfx];"
+            "[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.3[ai_dub];"
             "[ai_dub]asplit[ai_final][ai_sc];"
             "[orig_sfx][ai_sc]sidechaincompress=threshold=0.03:ratio=10.0:attack=10:release=500[ducked_sfx];"
             "[ducked_sfx][ai_final]amix=inputs=2:duration=longest:dropout_transition=0[afinal]"
@@ -701,11 +676,12 @@ def render_dialogue_synced_video(input_video, narration_audio, ass_path, output_
 
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
+# ----------------- UI: SIDEBAR -----------------
 with st.sidebar:
     st.markdown("""
     <div style="text-align: center; padding: 10px 0 16px 0;">
         <h2 style="font-family: 'Orbitron', sans-serif; color: #00f2fe; margin-bottom: 4px; font-weight: 800;">⚡ RECAP STUDIO PRO</h2>
-        <span class="badge-sync">STRICT 1:1 TIMELINE</span>
+        <span class="badge-sync">ABSOLUTE SYNC 1:1</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -714,7 +690,7 @@ with st.sidebar:
 
     st.markdown("#### 🔑 **Gemini API Key**")
     current_key_val = st.text_area(
-        "API Key",
+        "API Key (ကော်မာခံ၍ အပိုထည့်နိုင်သည်)",
         value=st.session_state.gemini_api_key,
         placeholder="AIzaSy...",
         height=70,
@@ -750,7 +726,7 @@ with st.sidebar:
         st.success(f"🧹 ယာယီအသံဖိုင်ပေါင်း {cleaned_cnt} ခုအား ရှင်းလင်းပြီးပါပြီ!")
 
 tab_dub, tab_thumb, tab_splitter, tab_settings = st.tabs([
-    "🎬 Master Studio (Strict Sync)",
+    "🎬 Master Sync Studio",
     "🖼️ Viral Thumbnail",
     "🍿 1 GB Shorts Splitter",
     "⚙️ System Settings"
@@ -763,7 +739,7 @@ with tab_dub:
             <div>
                 <h2 class="hero-title" style="font-size: 24px;">🎬 Normal 1x Speed Locked Dubbing</h2>
                 <p style="color: #94a3b8; font-size: 13px; margin-top: 6px; margin-bottom: 0;">
-                    ဇာတ်ကောင် စကားပြောချိန်တွင်သာ AI မှ အမြန်နှုန်းမပြောင်းဘဲ (1x အတိုင်း) အတိအကျဝင်ရောက်ပြောဆိုပေးမည့်စနစ်
+                    ဇာတ်ကောင် စကားပြောချိန်တွင်သာ AI မှ အမြန်နှုန်းမပြောင်းဘဲ အတိအကျ ဝင်ရောက်ပြောဆိုပေးမည့်စနစ် (1x Strict Sync)
                 </p>
             </div>
             <div>
@@ -778,7 +754,7 @@ with tab_dub:
 
     with col_up1:
         st.markdown("""<div class="neo-card"><h4 style="color: #00f2fe; margin-top: 0;">1. 📤 ဗီဒီယို တင်ပါ</h4>""", unsafe_allow_html=True)
-        up_file = st.file_uploader("ဗီဒီယိုဖိုင် တင်ပါ (MP4, MOV, WebM - Max 1GB)", type=["mp4", "mov", "webm"])
+        up_file = st.file_uploader("ဗီဒီယိုဖိုင် တင်ပါ (MP4, MOV - Max 1GB)", type=["mp4", "mov", "webm"])
         
         if up_file and up_file.file_id != st.session_state.last_uploaded_file_id:
             with open("temp_input.mp4", "wb") as f:
@@ -864,9 +840,9 @@ with tab_dub:
 
                 if start_magic_btn:
                     voice_cfg = available_voices[voice_sel]
-                    synced_audio = "final_dialogue_strict_1x.mp3"
+                    synced_audio = "final_dialogue_absolute.mp3"
                     
-                    render_strict_1x_timeline_narration(
+                    render_strict_1x_absolute_mixer(
                         dialogues=st.session_state.dialogues_timeline,
                         voice_cfg=voice_cfg,
                         total_video_duration=v_duration,
@@ -903,7 +879,7 @@ with tab_dub:
                             mute_original=st.session_state.mute_original_audio
                         )
                         st.session_state.last_rendered_video = final_out
-                        st.success("🎉 အောင်မြင်ပါပြီ! ဗီဒီယိုအမြန်နှုန်း ၁ဆ (1x) အတိုင်း စကားပြောချိန်တွင်သာ ကွက်တိလိုက်ပြောသော ဗီဒီယို ထွက်ရှိပါပြီ!")
+                        st.success("🎉 အောင်မြင်ပါပြီ! ဗီဒီယိုအမြန်နှုန်း ၁ဆ (1x) အတိုင်း စကားပြောချိန်တွင်သာ သံမှိုရိုက်သလို ကွက်တိလိုက်ပြောသော ဗီဒီယို ထွက်ရှိပါပြီ!")
             except Exception as ex:
                 st.error(f"❌ Error: {ex}")
 
@@ -946,8 +922,8 @@ with tab_dub:
                 with st.spinner("Timeline အသစ်ဖြင့် ဗီဒီယို ပြန်လည်ထုတ်ယူနေပါသည်..."):
                     v_dur = get_media_duration("temp_input.mp4")
                     voice_cfg = available_voices[voice_sel]
-                    synced_audio = "final_dialogue_strict_1x.mp3"
-                    render_strict_1x_timeline_narration(
+                    synced_audio = "final_dialogue_absolute.mp3"
+                    render_strict_1x_absolute_mixer(
                         dialogues=st.session_state.dialogues_timeline,
                         voice_cfg=voice_cfg,
                         total_video_duration=v_dur,
@@ -990,7 +966,7 @@ with tab_dub:
                 st.download_button(
                     label="📥 Final Master MP4 ဒေါင်းလုဒ်ရယူရန်",
                     data=vf.read(),
-                    file_name="dialogue_strict_1x_master.mp4",
+                    file_name="dialogue_absolute_1x_master.mp4",
                     mime="video/mp4",
                     type="primary",
                     use_container_width=True
@@ -1104,9 +1080,10 @@ with tab_settings:
     <div class="neo-card">
         <h2 style="color: #00f2fe; margin-top: 0;">⚙️ System Architecture </h2>
         <ul>
-            <li><span class="badge-sync">STRICT 1X SPEED</span> လုံးဝ အသံမပြောင်းလဲဘဲ Normal 1x အတိုင်း အံဝင်ခွင်ကျ အလုပ်လုပ်ပါသည်။ (atempo ကို လုံးဝ ဖြုတ်ပစ်ထားပါသည်)</li>
-            <li><span class="badge-purple">FULL DURATION LOCK</span> အသံကို ဗီဒီယိုအဆုံးထိ တိတိကျကျ Padding ဖြင့် ဖြည့်သွင်းထားပါသည်။</li>
-            <li><span class="badge-sync">MUTE TOGGLE</span> မူရင်းအသံကို အပြည့်အဝ ပိတ်ပစ်နိုင်သည့် Option ကို UI တွင် ထည့်သွင်းထားပါသည်။</li>
+            <li><span class="badge-sync">ABSOLUTE SYNC (adelay)</span> FFmpeg ၏ `adelay` filter ကိုသုံး၍ အသံတစ်ခုချင်းစီကို သတ်မှတ်ထားသော MS အတိအကျတွင် သံမှိုရိုက်သလို နေရာချထားပေးသဖြင့် အချိန်ရွေ့လျားသွားခြင်း လုံးဝ မရှိတော့ပါ။</li>
+            <li><span class="badge-sync">STRICT 1X SPEED</span> `atempo` ကို လုံးဝ ဖြုတ်ပစ်ထားသဖြင့် အသံအရမ်းမြန်ခြင်း၊ နှေးခြင်း၊ စက်ရုပ်သံဖြစ်ခြင်း လုံးဝ မရှိတော့ပါ။ 1x Normal Speed သီးသန့် ဖြစ်သည်။</li>
+            <li><span class="badge-purple">AUDIO DUCKING & MUTE</span> မူရင်းအသံကို အပြည့်အဝ ပိတ်ပစ်နိုင်သည့် Option ကို UI တွင် ထည့်သွင်းထားပါသည်။ မပိတ်ပါကလည်း စကားပြောချိန်တွင် မူရင်းအသံကို တိုးပေးမည့် Sidechain Compress ပါဝင်သည်။</li>
+            <li><span class="badge-purple">HYBRID SDK</span> Google Server 503 error တက်ပါက Models များပြောင်းလဲအသုံးပြုနိုင်ရန် UI ထည့်သွင်းပေးထားပါသည်။</li>
         </ul>
     </div>
     """, unsafe_allow_html=True)
