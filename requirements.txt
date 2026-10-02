@@ -2,3 +2,4 @@ streamlit
 edge-tts
 yt-dlp
 google-genai
+google-generativeai
