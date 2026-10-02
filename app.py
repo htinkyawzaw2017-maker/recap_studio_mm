@@ -383,7 +383,7 @@ Return STRICTLY JSON format:
   ]
 }}
 """
-    models_to_try = [selected_model]
+    models_to_try = [selected_model, "gemini-1.5-flash", "gemini-1.5-pro"]
     last_err = None
     
     for k_idx, current_key in enumerate(keys):
@@ -595,6 +595,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     for d in dialogues:
         st_sec = max(0.0, float(d.get("start", 0.0)))
+        # Show subtitle purely for original gap + max 3s logic for safety
         en_sec = min(duration, float(d.get("end", st_sec + 3.0)))
         line = d.get("text", "").strip()
         if line:
@@ -1069,7 +1070,7 @@ with tab_splitter:
         with col_s3:
             total_parts = max(1, int(long_dur // split_slice))
             
-        if st.button("✂️️ အပိုင်းတိုများ ခွဲထုတ်မည်", type="primary"):
+        if st.button("✂ အပိုင်းတိုများ ခွဲထုတ်မည်", type="primary"):
             with st.spinner(f"ဗီဒီယိုအား {total_parts} ပိုင်း ဖြတ်တောက်နေပါသည်..."):
                 part_files = []
                 for p_idx in range(total_parts):
