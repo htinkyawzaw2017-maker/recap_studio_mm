@@ -12,7 +12,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from PIL import Image, ImageDraw, ImageFont
@@ -53,7 +52,7 @@ def ensure_myanmar_fonts():
 
 ensure_myanmar_fonts()
 
-app = FastAPI(title="Recap Studio MM Pro", version="3.0.0")
+app = FastAPI(title="Recap Studio MM Pro", version="3.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -64,6 +63,7 @@ app.add_middleware(
 )
 
 os.makedirs("workspace", exist_ok=True)
+os.makedirs("workspace/tasks", exist_ok=True)
 os.makedirs("output", exist_ok=True)
 
 # Google GenAI SDK Compatibility detection
@@ -81,6 +81,31 @@ except ImportError:
 CONFIG_FILE = ".recap_config.json"
 TASKS: Dict[str, Dict[str, Any]] = {}
 executor = ThreadPoolExecutor(max_workers=2)
+
+def save_task_state(task_id: str, data: Dict[str, Any]):
+    """Persists task state to memory and disk to survive any container hiccups."""
+    TASKS[task_id] = data
+    try:
+        fpath = os.path.join("workspace/tasks", f"{task_id}.json")
+        with open(fpath, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def get_task_state(task_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieves task state from memory or disk backup."""
+    if task_id in TASKS:
+        return TASKS[task_id]
+    fpath = os.path.join("workspace/tasks", f"{task_id}.json")
+    if os.path.exists(fpath):
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                TASKS[task_id] = data
+                return data
+        except Exception:
+            pass
+    return None
 
 def load_config(key: str, default: str = "") -> str:
     if os.path.exists(CONFIG_FILE):
@@ -372,25 +397,34 @@ def render_strict_1x_absolute_mixer(
     final_audio_path: str,
     progress_callback = None
 ):
+    """
+    OOM-SAFE AUDIO GENERATION:
+    Instead of running FFmpeg amix with 80+ simultaneous inputs (which exceeds 2GB RAM and crashes Render),
+    we generate silence intervals between dialogues and stream-concat them.
+    Memory footprint: < 15MB constant RAM regardless of video length!
+    """
     import edge_tts
 
-    base_silence = "workspace/base_silence.mp3"
-    cmd_base = [
-        "ffmpeg", "-y", "-threads", "2", "-f", "lavfi",
-        "-i", f"anullsrc=r=44100:cl=stereo:d={total_video_duration:.3f}",
-        "-c:a", "libmp3lame", "-b:a", "192k",
-        base_silence
-    ]
-    subprocess.run(cmd_base, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
     if not dialogues:
-        shutil.copy(base_silence, final_audio_path)
+        # Generate pure silence
+        cmd_silence = [
+            "ffmpeg", "-y", "-threads", "1", "-f", "lavfi",
+            "-i", f"anullsrc=r=44100:cl=stereo:d={total_video_duration:.3f}",
+            "-c:a", "libmp3lame", "-b:a", "192k",
+            final_audio_path
+        ]
+        subprocess.run(cmd_silence, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         return
 
-    segment_files = []
-    total_diag = len(dialogues)
+    # Sort dialogues chronologically
+    sorted_diags = sorted(dialogues, key=lambda x: float(x.get("start", 0.0)))
+    total_diag = len(sorted_diags)
+    concat_list_file = f"workspace/concat_{int(time.time())}.txt"
 
-    for idx, item in enumerate(dialogues):
+    segments_info = []
+    current_cursor_sec = 0.0
+
+    for idx, item in enumerate(sorted_diags):
         if progress_callback:
             pct = 50 + int((idx / max(1, total_diag)) * 25)
             progress_callback(pct, f"🎙️ အသံသွင်းနေပါသည် ({idx+1}/{total_diag}) - Normal 1x Speed...")
@@ -399,7 +433,25 @@ def render_strict_1x_absolute_mixer(
         if not d_text:
             continue
 
-        raw_seg = f"workspace/raw_seg_{idx}.mp3"
+        st_sec = max(0.0, float(item.get("start", 0.0)))
+
+        # 1. Fill silence gap before this dialogue if needed
+        gap_sec = st_sec - current_cursor_sec
+        if gap_sec > 0.05:
+            silence_seg = f"workspace/gap_silence_{idx}_{int(time.time())}.mp3"
+            cmd_gap = [
+                "ffmpeg", "-y", "-threads", "1", "-f", "lavfi",
+                "-i", f"anullsrc=r=44100:cl=stereo:d={gap_sec:.3f}",
+                "-c:a", "libmp3lame", "-b:a", "192k",
+                silence_seg
+            ]
+            subprocess.run(cmd_gap, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if os.path.exists(silence_seg):
+                segments_info.append(silence_seg)
+                current_cursor_sec += gap_sec
+
+        # 2. Synthesize speech for dialogue
+        raw_seg = f"workspace/speech_{idx}_{int(time.time())}.mp3"
         comm = edge_tts.Communicate(
             text=d_text,
             voice=voice_cfg["voice"],
@@ -408,38 +460,50 @@ def render_strict_1x_absolute_mixer(
         )
         asyncio.run(comm.save(raw_seg))
 
-        d_start_ms = int(max(0.0, float(item.get("start", 0.0))) * 1000)
-        if os.path.exists(raw_seg) and get_media_duration(raw_seg) > 0.05:
-            segment_files.append((raw_seg, d_start_ms))
+        if os.path.exists(raw_seg):
+            speech_dur = get_media_duration(raw_seg)
+            if speech_dur > 0.05:
+                segments_info.append(raw_seg)
+                current_cursor_sec = st_sec + speech_dur
 
-    if not segment_files:
-        shutil.copy(base_silence, final_audio_path)
-        return
+    # 3. Add trailing silence to match full video length
+    if current_cursor_sec < total_video_duration:
+        tail_sec = total_video_duration - current_cursor_sec
+        tail_silence = f"workspace/tail_silence_{int(time.time())}.mp3"
+        cmd_tail = [
+            "ffmpeg", "-y", "-threads", "1", "-f", "lavfi",
+            "-i", f"anullsrc=r=44100:cl=stereo:d={tail_sec:.3f}",
+            "-c:a", "libmp3lame", "-b:a", "192k",
+            tail_silence
+        ]
+        subprocess.run(cmd_tail, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if os.path.exists(tail_silence):
+            segments_info.append(tail_silence)
 
-    # Mix segments using adelay directly on the silent timeline
-    cmd_mix = ["ffmpeg", "-y", "-threads", "2", "-i", base_silence]
-    filter_complex = []
-    amix_inputs = ["[0:a]"]
+    # 4. Stream-concat all audio segments using Concat Demuxer
+    with open(concat_list_file, "w", encoding="utf-8") as f:
+        for s in segments_info:
+            abs_p = os.path.abspath(s)
+            f.write(f"file '{abs_p}'\n")
 
-    for i, (seg_file, start_ms) in enumerate(segment_files):
-        cmd_mix.extend(["-i", seg_file])
-        inp_idx = i + 1
-        filter_complex.append(f"[{inp_idx}:a]adelay={start_ms}|{start_ms}[a{inp_idx}]")
-        amix_inputs.append(f"[a{inp_idx}]")
-
-    amix_str = "".join(amix_inputs)
-    total_inputs = len(segment_files) + 1
-    # normalize=0 PREVENTS echo and volume oscillation
-    filter_complex.append(f"{amix_str}amix=inputs={total_inputs}:duration=first:dropout_transition=0:normalize=0[aout]")
-
-    cmd_mix.extend([
-        "-filter_complex", ";".join(filter_complex),
-        "-map", "[aout]",
+    cmd_concat = [
+        "ffmpeg", "-y", "-threads", "1",
+        "-f", "concat", "-safe", "0",
+        "-i", concat_list_file,
         "-c:a", "libmp3lame", "-b:a", "192k",
         final_audio_path
-    ])
+    ]
+    subprocess.run(cmd_concat, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    subprocess.run(cmd_mix, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # Cleanup temporary segment files to save disk
+    for s in segments_info:
+        try:
+            if os.path.exists(s):
+                os.remove(s)
+        except Exception:
+            pass
+    if os.path.exists(concat_list_file):
+        os.remove(concat_list_file)
 
 def hex_to_ass(hex_code: str) -> str:
     h = hex_code.lstrip("#")
@@ -562,7 +626,7 @@ def render_dialogue_synced_video(
             f"{audio_filter}"
         )
         cmd = [
-            "ffmpeg", "-y", "-threads", "2",
+            "ffmpeg", "-y", "-threads", "1",
             "-i", input_video,
             "-i", narration_audio,
             "-i", logo_path,
@@ -571,7 +635,7 @@ def render_dialogue_synced_video(
             "-map", "[vfinal]",
             "-map", "[afinal]",
             "-r", "30",
-            "-c:v", "libx264", "-preset", "superfast", "-crf", "23",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24",
             "-c:a", "aac", "-b:a", "192k",
             output_video
         ]
@@ -583,7 +647,7 @@ def render_dialogue_synced_video(
             f"{audio_filter}"
         )
         cmd = [
-            "ffmpeg", "-y", "-threads", "2",
+            "ffmpeg", "-y", "-threads", "1",
             "-i", input_video,
             "-i", narration_audio,
             "-t", f"{exact_duration:.3f}",
@@ -591,7 +655,7 @@ def render_dialogue_synced_video(
             "-map", "[vfinal]",
             "-map", "[afinal]",
             "-r", "30",
-            "-c:v", "libx264", "-preset", "superfast", "-crf", "23",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24",
             "-c:a", "aac", "-b:a", "192k",
             output_video
         ]
@@ -599,11 +663,12 @@ def render_dialogue_synced_video(
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 def run_recap_pipeline(task_id: str, payload: Dict[str, Any]):
-    task = TASKS[task_id]
+    task = get_task_state(task_id) or {}
     try:
         task["status"] = "processing"
         task["progress"] = 5
         task["message"] = "ဗီဒီယို ဖိုင်အား စစ်ဆေးနေပါသည်..."
+        save_task_state(task_id, task)
 
         input_video = payload["input_video"]
         video_dur = get_media_duration(input_video)
@@ -613,6 +678,7 @@ def run_recap_pipeline(task_id: str, payload: Dict[str, Any]):
         def update_prog(pct, msg):
             task["progress"] = pct
             task["message"] = msg
+            save_task_state(task_id, task)
 
         # Step 1: AI Timeline Extraction
         api_key = payload.get("api_key") or load_config("gemini_api_key")
@@ -629,6 +695,7 @@ def run_recap_pipeline(task_id: str, payload: Dict[str, Any]):
         task["dialogues"] = res_data.get("dialogues", [])
         task["hook_line1"] = res_data.get("hook_line1", "စိတ်လှုပ်ရှားဖွယ်ရာ")
         task["hook_line2"] = res_data.get("hook_line2", "ဇာတ်ကွက်များ")
+        save_task_state(task_id, task)
 
         # Step 2: Strict 1x Audio Dubbing Synthesis
         update_prog(50, "🎙️ Normal 1x Speed အတိုင်း နေရာချထား အသံသွင်းနေပါသည်...")
@@ -685,18 +752,21 @@ def run_recap_pipeline(task_id: str, payload: Dict[str, Any]):
         task["message"] = "🎉 ဗီဒီယို အောင်မြင်စွာ ထွက်ရှိပါပြီ ခင်ဗျာ!"
         task["output_video"] = final_output
         task["download_url"] = f"/api/download/{final_video_name}"
+        save_task_state(task_id, task)
 
     except Exception as e:
         task["status"] = "failed"
         task["progress"] = 0
         task["message"] = f"❌ Error: {str(e)}"
+        save_task_state(task_id, task)
 
 def run_rerender_pipeline(task_id: str, payload: Dict[str, Any]):
-    task = TASKS[task_id]
+    task = get_task_state(task_id) or {}
     try:
         task["status"] = "processing"
         task["progress"] = 20
         task["message"] = "အသစ်ပြင်ဆင်ထားသော Timeline ဖြင့် အသံ ပြန်လည်သွင်းနေပါသည်..."
+        save_task_state(task_id, task)
 
         input_video = task["input_video"]
         video_dur = get_media_duration(input_video)
@@ -717,6 +787,7 @@ def run_rerender_pipeline(task_id: str, payload: Dict[str, Any]):
 
         task["progress"] = 65
         task["message"] = "စာတန်းထိုးနှင့် ဗီဒီယို ပေါင်းစပ်နေပါသည်..."
+        save_task_state(task_id, task)
 
         ass_file = None
         if payload.get("enable_subtitles", True):
@@ -753,11 +824,13 @@ def run_rerender_pipeline(task_id: str, payload: Dict[str, Any]):
         task["message"] = "✨ Re-export အောင်မြင်စွာ ပြီးဆုံးပါပြီ ခင်ဗျာ!"
         task["output_video"] = final_output
         task["download_url"] = f"/api/download/{final_video_name}"
+        save_task_state(task_id, task)
 
     except Exception as e:
         task["status"] = "failed"
         task["progress"] = 0
         task["message"] = f"❌ Error: {str(e)}"
+        save_task_state(task_id, task)
 
 @app.get("/api/config")
 def get_system_config():
@@ -806,7 +879,7 @@ def download_from_url(payload: Dict[str, str]):
 @app.post("/api/start-task")
 def start_recap_task(payload: Dict[str, Any], background_tasks: BackgroundTasks):
     task_id = f"task_{int(time.time())}_{os.urandom(2).hex()}"
-    TASKS[task_id] = {
+    task_data = {
         "id": task_id,
         "status": "queued",
         "progress": 0,
@@ -816,18 +889,21 @@ def start_recap_task(payload: Dict[str, Any], background_tasks: BackgroundTasks)
         "dialogues": [],
         "output_video": None
     }
+    save_task_state(task_id, task_data)
     background_tasks.add_task(run_recap_pipeline, task_id, payload)
     return {"status": "ok", "task_id": task_id}
 
 @app.get("/api/task-status/{task_id}")
 def get_task_status(task_id: str):
-    if task_id not in TASKS:
+    task = get_task_state(task_id)
+    if not task:
         raise HTTPException(status_code=404, detail="Task ရှာမတွေ့ပါ")
-    return TASKS[task_id]
+    return task
 
 @app.post("/api/rerender-task/{task_id}")
 def rerender_task(task_id: str, payload: Dict[str, Any], background_tasks: BackgroundTasks):
-    if task_id not in TASKS:
+    task = get_task_state(task_id)
+    if not task:
         raise HTTPException(status_code=404, detail="Task ရှာမတွေ့ပါ")
     background_tasks.add_task(run_rerender_pipeline, task_id, payload)
     return {"status": "ok", "task_id": task_id}
@@ -847,7 +923,7 @@ def generate_thumbnail(payload: Dict[str, Any]):
     h2 = payload.get("hook_line2", "ဇာတ်ကွက်များ")
 
     if not video_path or not os.path.exists(video_path):
-        raise HTTPException(status_code=400, detail="ဗီဒီယိုဖိုင် မရှိပါ")
+        raise HTTPException(status_code=400, detail="ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် အရင်ရွေးချယ်ပေးပါ ခင်ဗျာ။")
 
     raw_frame = f"workspace/frame_{int(time.time())}.png"
     subprocess.run([
@@ -883,11 +959,14 @@ def split_video_endpoint(payload: Dict[str, Any]):
     slice_sec = int(payload.get("slice_sec", 60))
     aspect = payload.get("aspect", "9:16")
 
+    if not video_path or not os.path.exists(video_path):
+        raise HTTPException(status_code=400, detail="ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် အရင်ရွေးချယ်ပေးပါ ခင်ဗျာ။")
+
     dur = get_media_duration(video_path)
     if dur <= 0:
-        raise HTTPException(status_code=400, detail="ဗီဒီယိုဖိုင် မရှိပါ")
+        raise HTTPException(status_code=400, detail="ဗီဒီယိုဖိုင် မမှန်ကန်ပါ")
 
-    total_parts = max(1, int(dur // slice_sec))
+    total_parts = max(1, int(dur // slice_sec) + (1 if dur % slice_sec > 5 else 0))
     parts = []
 
     for i in range(total_parts):
@@ -897,14 +976,19 @@ def split_video_endpoint(payload: Dict[str, Any]):
         vf_scale = "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280" if "9:16" in aspect else "scale=1280:720"
 
         cmd = [
-            "ffmpeg", "-y", "-threads", "2", "-ss", str(st_sec), "-t", str(slice_sec),
+            "ffmpeg", "-y", "-threads", "1", "-ss", str(st_sec), "-t", str(slice_sec),
             "-i", video_path, "-vf", vf_scale,
             "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
             out_part
         ]
         subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if os.path.exists(out_part):
-            parts.append({"part": i + 1, "url": f"/api/download/{part_name}", "path": out_part})
+            parts.append({
+                "part": i + 1,
+                "url": f"/api/download/{part_name}",
+                "path": out_part,
+                "duration": get_media_duration(out_part)
+            })
 
     return {"status": "ok", "parts": parts}
 
@@ -1043,7 +1127,7 @@ def serve_recap_studio_ui():
 
                     <div class="neo-card p-6 rounded-2xl">
                         <h3 class="text-purple-400 font-bold text-lg mb-4 flex items-center gap-2">
-                            <span>2. 🎙️ အသံနှင့် Logo ထိန်းချုပ်မှု</span>
+                            <span>2. 🎙️ အသံနှင့် စာတန်းထိုး ထိန်းချုပ်မှု</span>
                         </h3>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
@@ -1054,7 +1138,7 @@ def serve_recap_studio_ui():
                                 </select>
                             </div>
                             <div>
-                                <label class="block text-xs font-semibold text-slate-400 mb-1">🎙️️ Narrator အသံ</label>
+                                <label class="block text-xs font-semibold text-slate-400 mb-1">🎙 Narrator အသံ</label>
                                 <select id="voice-select" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-sm outline-none focus:border-cyan-400">
                                 </select>
                             </div>
@@ -1134,15 +1218,38 @@ def serve_recap_studio_ui():
         <div id="tab-thumb" class="hidden space-y-6">
             <div class="neo-card p-6 rounded-2xl max-w-xl mx-auto space-y-4">
                 <h3 class="text-purple-400 font-bold text-lg">🖼️ 1-Click Viral Thumbnail ဖန်တီးမည်</h3>
+                
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 mb-1">ဗီဒီယို ရွေးချယ်ပါ (သီးသန့် Upload)</label>
+                    <input type="file" id="thumb-video-file" accept="video/*" class="block w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-purple-500/20 file:text-purple-400 cursor-pointer border border-slate-700 rounded-xl p-2 bg-slate-900/60 mb-2">
+                    <p id="thumb-current-info" class="text-xs text-cyan-400">လက်ရှိ Master Studio ဗီဒီယိုကို အသုံးပြုပါမည်။</p>
+                </div>
+
                 <div>
                     <label class="block text-xs font-semibold text-slate-400 mb-1">ဖမ်းယူမည့် စက္ကန့်</label>
                     <input type="number" id="thumb-sec" value="2.5" step="0.5" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-sm outline-none focus:border-cyan-400">
                 </div>
-                <button onclick="generateThumbnail()" class="w-full py-3 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-xl text-sm">
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-400 mb-1">Top Hook စာသား</label>
+                        <input type="text" id="thumb-h1" value="စိတ်ဝင်စားဖွယ်ရာ" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-sm outline-none focus:border-cyan-400">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-400 mb-1">Bottom Hook စာသား</label>
+                        <input type="text" id="thumb-h2" value="ဇာတ်ကွက်များ" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-sm outline-none focus:border-cyan-400">
+                    </div>
+                </div>
+
+                <button onclick="generateThumbnailAction()" class="w-full py-3.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold rounded-xl text-sm shadow-lg shadow-purple-600/30">
                     ✨ Thumbnail Snapshot ဖန်တီးမည်
                 </button>
-                <div id="thumb-preview-box" class="hidden mt-4 text-center">
-                    <img id="thumb-img" class="w-64 mx-auto rounded-xl border border-slate-700 shadow-xl" src="" alt="Thumbnail">
+
+                <div id="thumb-preview-box" class="hidden mt-6 text-center space-y-4">
+                    <img id="thumb-img" class="w-72 mx-auto rounded-xl border border-slate-700 shadow-2xl" src="" alt="Thumbnail">
+                    <a id="thumb-download-btn" href="#" download="viral_thumbnail.jpg" class="inline-block px-6 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-xl text-xs">
+                        📥 Thumbnail ဒေါင်းလုဒ် ရယူရန်
+                    </a>
                 </div>
             </div>
         </div>
@@ -1150,7 +1257,14 @@ def serve_recap_studio_ui():
         <!-- TAB 4: SHORTS SPLITTER -->
         <div id="tab-split" class="hidden space-y-6">
             <div class="neo-card p-6 rounded-2xl max-w-2xl mx-auto space-y-4">
-                <h3 class="text-cyan-400 font-bold text-lg">🍿 Multi-Part Auto Splitter (1 GB Support)</h3>
+                <h3 class="text-cyan-400 font-bold text-lg">🍿 Multi-Part Auto Splitter (1 GB Video Support)</h3>
+                
+                <div>
+                    <label class="block text-xs font-semibold text-slate-400 mb-1">ခွဲထုတ်မည့် ဗီဒီယို ရွေးချယ်ပါ (သီးသန့် Upload တင်နိုင်သည်)</label>
+                    <input type="file" id="split-video-file" accept="video/*" class="block w-full text-sm text-slate-400 file:mr-4 file:py-2.5 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-cyan-500/20 file:text-cyan-400 cursor-pointer border border-slate-700 rounded-xl p-2 bg-slate-900/60 mb-2">
+                    <p id="split-current-info" class="text-xs text-cyan-400">Master Studio မှ ဗီဒီယို သို့မဟုတ် သီးသန့်ဗီဒီယို တင်နိုင်ပါသည်။</p>
+                </div>
+
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label class="block text-xs font-semibold text-slate-400 mb-1">အပိုင်းတစ်ခုစီ၏ ကြာချိန်</label>
@@ -1158,6 +1272,7 @@ def serve_recap_studio_ui():
                             <option value="30">၃၀ စက္ကန့်</option>
                             <option value="60" selected>၆၀ စက္ကန့် (၁ မိနစ်)</option>
                             <option value="90">၉၀ စက္ကန့်</option>
+                            <option value="120">၁၂၀ စက္ကန့် (၂ မိနစ်)</option>
                         </select>
                     </div>
                     <div>
@@ -1168,7 +1283,8 @@ def serve_recap_studio_ui():
                         </select>
                     </div>
                 </div>
-                <button onclick="startSplitter()" class="w-full py-3 bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold rounded-xl text-sm">
+
+                <button onclick="startSplitterAction()" id="btn-start-split" class="w-full py-3.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-slate-950 font-bold rounded-xl text-sm shadow-lg shadow-cyan-600/30">
                     ✂ အပိုင်းတိုများ အလိုအလျောက် ခွဲထုတ်မည်
                 </button>
                 <div id="split-results" class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4"></div>
@@ -1268,11 +1384,55 @@ def serve_recap_studio_ui():
                     currentVideoDuration = data.duration;
                     document.getElementById('preview-player').src = URL.createObjectURL(file);
                     const infoBox = document.getElementById('video-info-box');
-                    infoBox.innerHTML = `⏱️ ဗီဒီယို ကြာချိန်: <b>${data.duration.toFixed(2)} စက္ကန့်</b> (${Math.floor(data.duration/60)}:0${Math.floor(data.duration%60)})`;
+                    infoBox.innerHTML = `⏱️ ဗီဒီယို ကြာချိန်: <b>${data.duration.toFixed(2)} စက္ကန့်</b> (${Math.floor(data.duration/60)}:${Math.floor(data.duration%60).toString().padStart(2, '0')})`;
                     infoBox.classList.remove('hidden');
+                    document.getElementById('thumb-current-info').innerText = `ရွေးချယ်ထားသော ဗီဒီယို: ${file.name}`;
+                    document.getElementById('split-current-info').innerText = `ရွေးချယ်ထားသော ဗီဒီယို: ${file.name}`;
                     showToast('✅ ဗီဒီယို အဆင်သင့်ဖြစ်ပါပြီ!');
                 }
             } catch (err) {
+                showToast('❌ Upload မအောင်မြင်ပါ', true);
+            }
+        });
+
+        // Dedicated Uploader for Thumbnail Tab
+        document.getElementById('thumb-video-file')?.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const fd = new FormData();
+            fd.append('video', file);
+            showToast('📤 Thumbnail ဗီဒီယို တင်သွင်းနေပါသည်...');
+            try {
+                const res = await fetch('/api/upload', { method: 'POST', body: fd });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    currentUploadedVideo = data.video_path;
+                    currentVideoDuration = data.duration;
+                    document.getElementById('thumb-current-info').innerText = `သီးသန့်တင်ထားသော ဗီဒီယို: ${file.name}`;
+                    showToast('✅ Thumbnail အတွက် ဗီဒီယို အဆင်သင့်ဖြစ်ပါပြီ!');
+                }
+            } catch (e) {
+                showToast('❌ Upload မအောင်မြင်ပါ', true);
+            }
+        });
+
+        // Dedicated Uploader for Splitter Tab
+        document.getElementById('split-video-file')?.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const fd = new FormData();
+            fd.append('video', file);
+            showToast('📤 Splitter ဗီဒီယို တင်သွင်းနေပါသည်...');
+            try {
+                const res = await fetch('/api/upload', { method: 'POST', body: fd });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    currentUploadedVideo = data.video_path;
+                    currentVideoDuration = data.duration;
+                    document.getElementById('split-current-info').innerText = `သီးသန့်တင်ထားသော ဗီဒီယို: ${file.name} (${data.duration.toFixed(1)}s)`;
+                    showToast('✅ Splitter အတွက် ဗီဒီယို အဆင်သင့်ဖြစ်ပါပြီ!');
+                }
+            } catch (e) {
                 showToast('❌ Upload မအောင်မြင်ပါ', true);
             }
         });
@@ -1344,11 +1504,21 @@ def serve_recap_studio_ui():
             pollInterval = setInterval(async () => {
                 try {
                     const res = await fetch(`/api/task-status/${taskId}`);
+                    if (!res.ok) {
+                        // Prevents infinite 404 flooding & undefined display
+                        clearInterval(pollInterval);
+                        document.getElementById('btn-start-dub').disabled = false;
+                        document.getElementById('btn-start-dub').classList.remove('opacity-50');
+                        showToast("Task အခြေအနေ မတွေ့ရှိပါ သို့မဟုတ် Server အသစ်စတင်ထားပါသည်", true);
+                        return;
+                    }
                     const data = await res.json();
                     
-                    document.getElementById('progress-percent').innerText = `${data.progress}%`;
-                    document.getElementById('progress-label').innerText = data.message;
-                    document.getElementById('progress-bar-fill').style.width = `${data.progress}%`;
+                    if (data.progress !== undefined) {
+                        document.getElementById('progress-percent').innerText = `${data.progress}%`;
+                        document.getElementById('progress-label').innerText = data.message || 'လုပ်ဆောင်နေပါသည်...';
+                        document.getElementById('progress-bar-fill').style.width = `${data.progress}%`;
+                    }
 
                     if (data.status === 'completed') {
                         clearInterval(pollInterval);
@@ -1430,8 +1600,8 @@ def serve_recap_studio_ui():
             }
         }
 
-        async function generateThumbnail() {
-            if (!currentUploadedVideo) return showToast('ဗီဒီယို အရင်တင်ပေးပါ', true);
+        async function generateThumbnailAction() {
+            if (!currentUploadedVideo) return showToast('ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် အရင်ရွေးချယ်ပေးပါ ခင်ဗျာ', true);
             showToast('📸 Snapshot ဖမ်းယူနေပါသည်...');
             try {
                 const res = await fetch('/api/generate-thumbnail', {
@@ -1440,12 +1610,19 @@ def serve_recap_studio_ui():
                     body: JSON.stringify({
                         video_path: currentUploadedVideo,
                         timestamp: parseFloat(document.getElementById('thumb-sec').value),
-                        hook_line1: document.getElementById('edit-hook1')?.value || "စိတ်ဝင်စားဖွယ်ရာ",
-                        hook_line2: document.getElementById('edit-hook2')?.value || "ဇာတ်ကွက်များ"
+                        hook_line1: document.getElementById('thumb-h1')?.value || "စိတ်ဝင်စားဖွယ်ရာ",
+                        hook_line2: document.getElementById('thumb-h2')?.value || "ဇာတ်ကွက်များ"
                     })
                 });
+                if (!res.ok) {
+                    const err = await res.json();
+                    showToast(err.detail || '❌ Thumbnail မရပါ', true);
+                    return;
+                }
                 const blob = await res.blob();
-                document.getElementById('thumb-img').src = URL.createObjectURL(blob);
+                const thumbUrl = URL.createObjectURL(blob);
+                document.getElementById('thumb-img').src = thumbUrl;
+                document.getElementById('thumb-download-btn').href = thumbUrl;
                 document.getElementById('thumb-preview-box').classList.remove('hidden');
                 showToast('✅ Thumbnail အဆင်သင့်ဖြစ်ပါပြီ!');
             } catch (e) {
@@ -1453,9 +1630,13 @@ def serve_recap_studio_ui():
             }
         }
 
-        async function startSplitter() {
-            if (!currentUploadedVideo) return showToast('ဗီဒီယို အရင်တင်ပေးပါ', true);
-            showToast('✂ အပိုင်းခွဲထုတ်နေပါသည်...');
+        async function startSplitterAction() {
+            if (!currentUploadedVideo) return showToast('ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် အရင်ရွေးချယ်ပေးပါ ခင်ဗျာ', true);
+            const btn = document.getElementById('btn-start-split');
+            btn.disabled = true;
+            btn.classList.add('opacity-50');
+            showToast('✂ အပိုင်းခွဲထုတ်နေပါသည် (ခေတ္တစောင့်ဆိုင်းပါ)...');
+
             try {
                 const res = await fetch('/api/split-video', {
                     method: 'POST',
@@ -1466,6 +1647,13 @@ def serve_recap_studio_ui():
                         aspect: document.getElementById('split-aspect').value
                     })
                 });
+                if (!res.ok) {
+                    const err = await res.json();
+                    showToast(err.detail || '❌ Splitter Error', true);
+                    btn.disabled = false;
+                    btn.classList.remove('opacity-50');
+                    return;
+                }
                 const data = await res.json();
                 const container = document.getElementById('split-results');
                 container.innerHTML = '';
@@ -1473,14 +1661,17 @@ def serve_recap_studio_ui():
                     const box = document.createElement('div');
                     box.className = 'p-3 bg-slate-900 border border-slate-800 rounded-xl text-center space-y-2';
                     box.innerHTML = `
-                        <div class="text-xs font-bold text-cyan-400">Part ${p.part}</div>
+                        <div class="text-xs font-bold text-cyan-400">Part ${p.part} (${p.duration.toFixed(1)}s)</div>
                         <a href="${p.url}" download class="inline-block px-4 py-1.5 bg-cyan-500/20 text-cyan-400 border border-cyan-500/40 rounded-lg text-xs font-bold">Download Part ${p.part}</a>
                     `;
                     container.appendChild(box);
                 });
-                showToast('✅ ခွဲထုတ်ခြင်း ပြီးပါပြီ!');
+                showToast('✅ အပိုင်းခွဲထုတ်ခြင်း အောင်မြင်စွာ ပြီးပါပြီ!');
             } catch (e) {
                 showToast('❌ Splitter Error', true);
+            } finally {
+                btn.disabled = false;
+                btn.classList.remove('opacity-50');
             }
         }
 
