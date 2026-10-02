@@ -1,5 +1,7 @@
-streamlit
+fastapi
+uvicorn
+python-multipart
 edge-tts
+pillow
 yt-dlp
 google-genai
-google-generativeai
