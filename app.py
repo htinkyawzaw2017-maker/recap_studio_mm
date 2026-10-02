@@ -4,14 +4,13 @@ import re
 import time
 import json
 import glob
-import textwrap
 import subprocess
 import urllib.request
 import asyncio
 import shutil
 from PIL import Image, ImageDraw, ImageFont
 
-# Ensures Streamlit config allows up to 1024 MB (1 GB) upload limit
+# ----------------- 1 GB FILE UPLOAD CONFIG AUTOMATION -----------------
 os.makedirs(".streamlit", exist_ok=True)
 config_toml_path = os.path.join(".streamlit", "config.toml")
 try:
@@ -20,13 +19,15 @@ try:
 except Exception:
     pass
 
+# ----------------- PAGE CONFIG -----------------
 st.set_page_config(
-    page_title="Recap Studio MM Pro - Master Suite",
+    page_title="Recap Studio MM Pro - Strict Sync",
     page_icon="🎬",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
+# ----------------- NEON CYBERPUNK STYLING -----------------
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Plus+Jakarta+Sans:wght@400;600;700&display=swap');
@@ -108,6 +109,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ----------------- SDK AUTO-DETECTOR -----------------
 use_new_sdk = False
 try:
     from google import genai
@@ -120,6 +122,7 @@ except ImportError:
     except ImportError:
         pass
 
+# ----------------- MYANMAR FONT CONFIG -----------------
 FONTS_CONF = "fonts.conf"
 if not os.path.exists(FONTS_CONF):
     try:
@@ -155,6 +158,7 @@ def ensure_myanmar_fonts():
 
 ensure_myanmar_fonts()
 
+# ----------------- CONFIG & CLEANUP -----------------
 CONFIG_FILE = ".recap_config.json"
 
 def load_config(key, default=""):
@@ -182,9 +186,8 @@ def save_config(key, value):
         pass
 
 def cleanup_workspace():
-    """SAFE CLEANUP: Only removes intermediate audio/subtitle files. 
-    Does NOT delete temp_input.mp4 or part_*.mp4 to prevent Splitter linkage errors."""
-    patterns = ["silence_*.mp3", "raw_seg_*.mp3", "conf_seg_*.mp3", "*.ass", "temp_bgm.mp3", "concat_segments.txt", "raw_frame.png"]
+    """SAFE CLEANUP: Only removes intermediate audio/subtitle files."""
+    patterns = ["silence_*.mp3", "raw_seg_*.mp3", "*.ass", "temp_bgm.mp3", "concat_segments.txt", "raw_frame.png"]
     count = 0
     for p in patterns:
         for f in glob.glob(p):
@@ -215,6 +218,7 @@ def format_time_str(seconds):
     secs = int(seconds % 60)
     return f"{mins:02d}:{secs:02d}"
 
+# ----------------- SCRIPT CLEANER -----------------
 PHONETICS_MM = {
     r"\bAI\b": "အေအိုင်",
     r"\bFBI\b": "အက်ဖ်ဘီအိုင်",
@@ -283,6 +287,7 @@ def process_user_logo(input_path, output_path):
     except Exception:
         return False
 
+# ----------------- SESSION STATES -----------------
 if "gemini_api_key" not in st.session_state:
     st.session_state.gemini_api_key = load_config("gemini_api_key", os.getenv("GEMINI_API_KEY", ""))
 if "top_hook_text" not in st.session_state:
@@ -293,10 +298,6 @@ if "target_language" not in st.session_state:
     st.session_state.target_language = "🇲🇲 Burmese (မြန်မာစကားပြောသံ)"
 if "dialogues_timeline" not in st.session_state:
     st.session_state.dialogues_timeline = []
-if "seo_description" not in st.session_state:
-    st.session_state.seo_description = ""
-if "seo_hashtags" not in st.session_state:
-    st.session_state.seo_hashtags = "#recap #movie #myanmar"
 if "sub_v_pos_percent" not in st.session_state:
     st.session_state.sub_v_pos_percent = 22
 if "hook_top_percent" not in st.session_state:
@@ -347,37 +348,35 @@ def extract_timeline_dialogues(raw_api_keys, video_path, target_language="my", m
 
     mode_prompts = {
         "auto": "Observe this video very carefully. Focus ONLY on exact speaking moments.",
-        "experiment": "This is a Science/Experiment video. Focus on explaining the scientific steps matching the exact timestamps where someone is actively explaining.",
-        "craft": "This is a DIY/Craft video. If it's silent, only dub during actual prominent actions.",
-        "movie": "This is a Movie/Animation clip. Act as an expert dubbing director."
+        "experiment": "This is an Experiment video. Only dub exactly when someone is actively explaining.",
+        "craft": "This is a DIY video. If silent, only dub briefly during prominent actions.",
+        "movie": "This is a Movie/Animation. Act as an expert dubbing director."
     }
     context = mode_prompts.get(mode_key, mode_prompts["auto"])
 
     prompt = f"""
 {context}
 
-CRITICAL TIMELINE RULES FOR PERFECT DUBBING:
-1. ONLY identify timestamps where characters or narrators are ACTUALLY SPEAKING or where an active narration is strictly necessary.
-2. If there is NO speech (e.g. background music, silent actions, walking), DO NOT create any dialogue entry for that gap.
-3. Make sure the translated text length is DIRECTLY PROPORTIONAL to the timestamp gap. If the gap is fast (1 sec), write 2 words. If the gap is long (5 secs), write 10-15 words.
+CRITICAL TIMELINE RULES FOR STRICT DUBBING:
+1. ONLY identify timestamps where characters or narrators are ACTUALLY SPEAKING in the video.
+2. If there is NO speech (e.g. background music, silent walking, fighting), DO NOT create any dialogue entry for that gap.
+3. Make sure the translated text is VERY CONCISE. It must fit within the given start/end timeframe at normal speaking speed.
 4. For each active dialogue segment, output:
    - "start": exact start timestamp in seconds (float, e.g. 3.2)
    - "end": exact end timestamp in seconds (float, e.g. 6.8)
    - "speaker": character name or gender
-   - "text": natural lip-fit dubbed speech in {lang_instruction}.
+   - "text": natural, concise dubbed speech in {lang_instruction}.
 
 Return STRICTLY JSON format:
 {{
-  "hook_line1": "Catchy Hook Line 1 (3-4 words)",
-  "hook_line2": "Catchy Hook Line 2 (3-4 words)",
-  "seo_description": "2-sentence viral summary of this clip for social media",
-  "hashtags": "#recap #animation #movie",
+  "hook_line1": "Catchy Hook Line 1",
+  "hook_line2": "Catchy Hook Line 2",
   "dialogues": [
     {{
       "start": 2.5,
       "end": 5.4,
-      "speaker": "Main Hero",
-      "text": "Translated dubbed dialogue line matching length..."
+      "speaker": "Hero",
+      "text": "Short translated dialogue..."
     }}
   ]
 }}
@@ -390,7 +389,7 @@ Return STRICTLY JSON format:
                 client = genai.Client(api_key=current_key)
                 contents = []
                 if video_path and os.path.exists(video_path):
-                    with st.spinner("📤 ဗီဒီယိုကို AI မျက်စိဖြင့် လေ့လာရန် Gemini API သို့ ပေးပို့နေပါသည်..."):
+                    with st.spinner("📤 ဗီဒီယိုကို AI မျက်စိဖြင့် လေ့လာရန် ပေးပို့နေပါသည်..."):
                         video_file = client.files.upload(file=video_path)
                         waits = 0
                         while getattr(video_file, "state", None) == "PROCESSING" and waits < 35:
@@ -407,7 +406,7 @@ Return STRICTLY JSON format:
                 legacy_genai.configure(api_key=current_key)
                 video_file_obj = None
                 if video_path and os.path.exists(video_path):
-                    with st.spinner("📤 ဗီဒီယိုကို AI မျက်စိဖြင့် လေ့လာရန် Gemini API သို့ ပေးပို့နေပါသည်..."):
+                    with st.spinner("📤 ဗီဒီယိုကို AI မျက်စိဖြင့် လေ့လာရန် ပေးပို့နေပါသည်..."):
                         video_file_obj = legacy_genai.upload_file(path=video_path)
                         waits = 0
                         while video_file_obj.state.name == "PROCESSING" and waits < 35:
@@ -430,28 +429,31 @@ Return STRICTLY JSON format:
         except Exception as e:
             last_err = e
             if "429" in str(e).lower() or "quota" in str(e).lower():
-                st.warning(f"⚠️ API Key (#{k_idx+1}) Quota ပြည့်သွားသဖြင့် နောက် Key သို့ ကူးပြောင်းနေပါသည်...")
+                st.warning(f"⚠️ API Key (#{k_idx+1}) Limit ပြည့်သွားသဖြင့် နောက် Key သို့ ကူးပြောင်းနေပါသည်...")
                 continue
             continue
     raise Exception(f"AI Extraction Error: {last_err}")
 
-def render_timeline_locked_narration(dialogues, voice_cfg, total_video_duration, final_audio_path):
+def render_strict_1x_timeline_narration(dialogues, voice_cfg, total_video_duration, final_audio_path):
+    """
+    CRITICAL FIX: NO ATEMPO USED. Audio runs at pure 1x normal speed.
+    Places audio strictly at the start timestamp by padding with silence before it.
+    """
     import edge_tts
     sorted_dialogues = sorted(dialogues, key=lambda d: float(d.get("start", 0)))
     concat_list_file = "concat_segments.txt"
     segment_files = []
     current_time = 0.0
 
-    with st.spinner("🎙️ ဗီဒီယို အမြန်နှုန်းအတိုင်း (မြန်လျှင်မြန်၊ နှေးလျှင်နှေး) အသံများကို ၁:၁ ကွက်တိ ညှိနေပါသည်..."):
+    with st.spinner("🎙️ အမြန်နှုန်းကို လုံးဝမပြောင်းလဲဘဲ Normal 1x အတိုင်း အချိန်ဇယားတိတိကျကျ ချထားနေပါသည်..."):
         for idx, item in enumerate(sorted_dialogues):
             d_start = max(0.0, float(item.get("start", 0.0)))
-            d_end = min(total_video_duration, float(item.get("end", d_start + 2.5)))
             d_text = clean_script_line(item.get("text", ""), voice_cfg.get("lang", "my"))
 
-            if not d_text or d_end <= d_start:
+            if not d_text:
                 continue
 
-            # 1. Fill silence gap before dialogue
+            # 1. Fill exact silence gap before this dialogue begins
             gap = d_start - current_time
             if gap > 0.05:
                 silence_gap = f"silence_gap_{idx}.mp3"
@@ -464,13 +466,13 @@ def render_timeline_locked_narration(dialogues, voice_cfg, total_video_duration,
                 ]
                 subprocess.run(cmd_sil, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 segment_files.append(silence_gap)
-                current_time = d_start
+                current_time += gap
+            elif gap < 0:
+                # If previous audio was slightly longer, we just start immediately without silence gap.
+                pass 
 
-            # 2. Render dialogue TTS
-            allowed_duration = max(0.5, d_end - d_start) # Minimum 0.5s window
+            # 2. Render normal 1x speed dialogue TTS
             raw_seg = f"raw_seg_{idx}.mp3"
-            conformed_seg = f"conf_seg_{idx}.mp3"
-
             comm = edge_tts.Communicate(
                 text=d_text,
                 voice=voice_cfg["voice"],
@@ -481,34 +483,10 @@ def render_timeline_locked_narration(dialogues, voice_cfg, total_video_duration,
 
             raw_dur = get_media_duration(raw_seg)
             if raw_dur > 0:
-                tempo = raw_dur / allowed_duration
-                
-                # Clamping tempo to avoid FFmpeg errors (atempo < 0.5 is invalid) and robotic distortion
-                if tempo < 0.85:
-                    actual_tempo = 0.85
-                elif tempo > 2.5:
-                    actual_tempo = 2.5
-                else:
-                    actual_tempo = tempo
-
-                # Use apad to fill any remaining silence if the voice finishes early
-                tempo_filter = f"atempo={actual_tempo:.3f},apad"
-
-                cmd_conf = [
-                    "ffmpeg", "-y", "-i", raw_seg,
-                    "-filter:a", tempo_filter,
-                    "-t", f"{allowed_duration:.3f}",
-                    "-c:a", "libmp3lame", "-b:a", "192k",
-                    conformed_seg
-                ]
-                subprocess.run(cmd_conf, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                segment_files.append(conformed_seg)
-            else:
                 segment_files.append(raw_seg)
+                current_time += raw_dur
 
-            current_time = d_start + allowed_duration
-
-        # 3. Final silence tail to guarantee full length
+        # 3. Final silence tail to guarantee audio length perfectly matches video length
         if total_video_duration > current_time + 0.05:
             tail_gap = total_video_duration - current_time
             tail_file = "silence_tail.mp3"
@@ -522,7 +500,16 @@ def render_timeline_locked_narration(dialogues, voice_cfg, total_video_duration,
             subprocess.run(cmd_tail, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             segment_files.append(tail_file)
 
-    # 4. Concatenate into single master timeline
+    # 4. Concatenate all segments into a master track
+    if not segment_files:
+        # Fallback empty audio if no dialogues found
+        cmd_empty = [
+            "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+            "-t", f"{total_video_duration:.3f}", "-c:a", "libmp3lame", "-b:a", "192k", final_audio_path
+        ]
+        subprocess.run(cmd_empty, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return
+
     with open(concat_list_file, "w", encoding="utf-8") as cf:
         for sf in segment_files:
             cf.write(f"file '{sf}'\n")
@@ -530,7 +517,6 @@ def render_timeline_locked_narration(dialogues, voice_cfg, total_video_duration,
     cmd_concat = [
         "ffmpeg", "-y", "-f", "concat", "-safe", "0",
         "-i", concat_list_file,
-        "-t", f"{total_video_duration:.3f}",
         "-c:a", "libmp3lame", "-b:a", "192k",
         final_audio_path
     ]
@@ -580,7 +566,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     for d in dialogues:
         st_sec = max(0.0, float(d.get("start", 0.0)))
-        en_sec = min(duration, float(d.get("end", st_sec + 2.5)))
+        en_sec = min(duration, float(d.get("end", st_sec + 3.0)))
         line = d.get("text", "").strip()
         if line:
             # CapCut Style pop-in subtitle effect
@@ -627,15 +613,15 @@ def render_dialogue_synced_video(input_video, narration_audio, ass_path, output_
     has_orig_audio = has_audio_stream(input_video)
     
     if not has_orig_audio or mute_original:
-        # User completely muted it or video is silent
+        # Strictly muted or silent video
         audio_filter = "[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.2,apad[afinal]"
     else:
-        # Advanced Audio Ducking (Original volume slightly lower, AI ducks it further when speaking)
+        # Advanced Audio Ducking (Original volume lowered when AI speaks)
         audio_filter = (
-            "[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.08[orig_sfx];"
+            "[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.3[orig_sfx];"
             "[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.2,apad[ai_dub];"
             "[ai_dub]asplit[ai_final][ai_sc];"
-            "[orig_sfx][ai_sc]sidechaincompress=threshold=0.04:ratio=10.0:attack=10:release=500[ducked_sfx];"
+            "[orig_sfx][ai_sc]sidechaincompress=threshold=0.03:ratio=10.0:attack=10:release=500[ducked_sfx];"
             "[ducked_sfx][ai_final]amix=inputs=2:duration=longest:dropout_transition=0[afinal]"
         )
 
@@ -685,53 +671,11 @@ def render_dialogue_synced_video(input_video, narration_audio, ass_path, output_
 
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-def generate_viral_thumbnail(video_path, timestamp_sec, hook1, hook2, logo_path, output_thumb_path):
-    temp_frame = "raw_frame.png"
-    subprocess.run([
-        "ffmpeg", "-y",
-        "-ss", str(timestamp_sec),
-        "-i", video_path,
-        "-vframes", "1",
-        "-vf", "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280",
-        temp_frame
-    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    if not os.path.exists(temp_frame):
-        return False
-
-    try:
-        base = Image.open(temp_frame).convert("RGBA")
-        shade = Image.new("RGBA", (720, 1280), (0, 0, 0, 0))
-        s_draw = ImageDraw.Draw(shade)
-        s_draw.rectangle([0, 0, 720, 300], fill=(0, 0, 0, 180))
-        s_draw.rectangle([0, 980, 720, 1280], fill=(0, 0, 0, 180))
-        base = Image.alpha_composite(base, shade)
-        draw = ImageDraw.Draw(base)
-
-        font_path = "Pyidaungsu.ttf" if os.path.exists("Pyidaungsu.ttf") else None
-        font = ImageFont.truetype(font_path, 52) if font_path else ImageFont.load_default()
-
-        if hook1:
-            draw.text((360, 100), hook1, fill=(255, 235, 59, 255), font=font, anchor="mm", stroke_width=5, stroke_fill=(0, 0, 0, 255))
-        if hook2:
-            draw.text((360, 180), hook2, fill=(0, 242, 254, 255), font=font, anchor="mm", stroke_width=5, stroke_fill=(0, 0, 0, 255))
-
-        draw.polygon([(320, 580), (320, 700), (430, 640)], fill=(255, 255, 255, 220), outline=(0, 242, 254, 255), width=8)
-
-        if logo_path and os.path.exists(logo_path):
-            l_img = Image.open(logo_path).convert("RGBA").resize((110, 110))
-            base.paste(l_img, (720 - 130, 30), l_img)
-
-        base.convert("RGB").save(output_thumb_path, "JPEG", quality=95)
-        return True
-    except Exception:
-        return False
-
 with st.sidebar:
     st.markdown("""
     <div style="text-align: center; padding: 10px 0 16px 0;">
         <h2 style="font-family: 'Orbitron', sans-serif; color: #00f2fe; margin-bottom: 4px; font-weight: 800;">⚡ RECAP STUDIO PRO</h2>
-        <span class="badge-sync">DIALOGUE-LOCKED AI</span>
+        <span class="badge-sync">STRICT 1:1 TIMELINE</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -754,7 +698,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("#### 🌐 **Language & Narrator**")
     st.session_state.target_language = st.selectbox(
-        "ဘာသာစကား ရွေးချယ်ပါ",
+        "ဘာသာစကား ရွေးချယ်ပါ (Dub Language)",
         ["🇲🇲 Burmese (မြန်မာစကားပြောသံ)", "🇬🇧 English (English Dubbing)"],
         index=0 if "Burmese" in st.session_state.target_language else 1
     )
@@ -768,10 +712,10 @@ with st.sidebar:
         st.success(f"🧹 ယာယီအသံဖိုင်ပေါင်း {cleaned_cnt} ခုအား ရှင်းလင်းပြီးပါပြီ!")
 
 tab_dub, tab_thumb, tab_splitter, tab_settings = st.tabs([
-    "🎬 Master Studio (1:1 Sync)",
-    "🖼️ Viral Thumbnail & SEO",
+    "🎬 Master Studio (Strict Sync)",
+    "🖼️ Viral Thumbnail",
     "🍿 1 GB Shorts Splitter",
-    "⚙️ System Features"
+    "⚙️ System Settings"
 ])
 
 with tab_dub:
@@ -779,13 +723,13 @@ with tab_dub:
     <div class="neo-card" style="animation: neonPulse 4s infinite alternate;">
         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div>
-                <h2 class="hero-title" style="font-size: 24px;">🎬 Auto-Synced 1:1 Timeline Dubbing</h2>
+                <h2 class="hero-title" style="font-size: 24px;">🎬 Normal 1x Speed Locked Dubbing</h2>
                 <p style="color: #94a3b8; font-size: 13px; margin-top: 6px; margin-bottom: 0;">
-                    ဇာတ်ကောင် စကားပြောချိန်တွင်သာ AI မှ အမြန်နှုန်းအချိုးချ၍ (မြန်/နှေး) လိုက်ပြောမည်ဖြစ်ပြီး အဆုံးထိ ကွက်တိကျစေမည့်စနစ်
+                    ဇာတ်ကောင် စကားပြောချိန်တွင်သာ AI မှ အမြန်နှုန်းမပြောင်းဘဲ (1x အတိုင်း) အတိအကျဝင်ရောက်ပြောဆိုပေးမည့်စနစ်
                 </p>
             </div>
             <div>
-                <span class="badge-sync">SPEED-LOCKED</span>
+                <span class="badge-sync">NO SPEED DISTORTION</span>
                 <span class="badge-purple">AUDIO DUCKING</span>
             </div>
         </div>
@@ -798,7 +742,6 @@ with tab_dub:
         st.markdown("""<div class="neo-card"><h4 style="color: #00f2fe; margin-top: 0;">1. 📤 ဗီဒီယို တင်ပါ</h4>""", unsafe_allow_html=True)
         up_file = st.file_uploader("ဗီဒီယိုဖိုင် တင်ပါ (MP4, MOV, WebM - Max 1GB)", type=["mp4", "mov", "webm"])
         
-        # Protect against file loss from splitter
         if up_file and up_file.file_id != st.session_state.last_uploaded_file_id:
             with open("temp_input.mp4", "wb") as f:
                 f.write(up_file.getbuffer())
@@ -821,8 +764,8 @@ with tab_dub:
         st.markdown("</div>", unsafe_allow_html=True)
 
     with col_up2:
-        st.markdown("""<div class="neo-card-accent"><h4 style="color: #c084fc; margin-top: 0;">2. 🏷️ Logo & Audio Options</h4>""", unsafe_allow_html=True)
-        logo_file = st.file_uploader("Channel Logo တင်ပါ (Auto Remove BG ပြုလုပ်ပေးမည်)", type=["png", "jpg", "jpeg", "webp"])
+        st.markdown("""<div class="neo-card-accent"><h4 style="color: #c084fc; margin-top: 0;">2. 🏷️ Logo & Audio Control</h4>""", unsafe_allow_html=True)
+        logo_file = st.file_uploader("Channel Logo တင်ပါ (Auto Remove BG)", type=["png", "jpg", "jpeg", "webp"])
         if logo_file:
             raw_logo = "raw_user_logo.png"
             clean_logo = "processed_user_logo.png"
@@ -833,19 +776,20 @@ with tab_dub:
                 st.success("✅ Logo Background ဖျက်ပြီးပါပြီ!")
                 st.image(clean_logo, width=70)
 
-        logo_pos_choice = st.selectbox("📍 Logo နေရာ", ["top_right (ညာဘက် အပေါ်)", "top_left (ဘယ်ဘက် အပေါ်)", "bottom_right (ညာဘက် အောက်)"], index=0)
-        logo_pos_key = logo_pos_choice.split(" ")[0]
-
-        # MUTE ORIGINAL AUDIO TOGGLE
+        logo_pos_choice = st.selectbox("📍 Logo နေရာ", ["top_right", "top_left", "bottom_right"], index=0)
+        
         st.markdown("---")
-        st.session_state.mute_original_audio = st.checkbox("🔇 မူရင်းဗီဒီယိုအသံကို အပြည့်အဝ ပိတ်မည် (Mute Original Audio)", value=st.session_state.mute_original_audio)
-        st.caption("အမှတ်ခြစ်ထားပါက မူရင်းဗီဒီယိုမှ ဆူညံသံများ လုံးဝပျောက်သွားပါမည်။")
+        st.session_state.mute_original_audio = st.checkbox(
+            "🔇 မူရင်းဗီဒီယိုအသံကို အပြည့်အဝ ပိတ်မည် (Mute Original Audio)", 
+            value=st.session_state.mute_original_audio
+        )
+        st.caption("အမှတ်ခြစ်ထားပါက မူရင်းအသံ (သီချင်း၊ ဆူညံသံများ) လုံးဝပျောက်သွားပါမည်။")
 
         st.markdown("</div>", unsafe_allow_html=True)
 
     col_btn1, col_btn2 = st.columns([1.5, 1.0])
     with col_btn1:
-        start_magic_btn = st.button("⚡ ONE-CLICK DIALOGUE-LOCKED DUB (စကားပြောချိန်အတိုင်း ကွက်တိထည့်မည်)", type="primary", use_container_width=True)
+        start_magic_btn = st.button("⚡ ONE-CLICK STRICT SYNC DUB (အသံမမြန်စေဘဲ အတိအကျထည့်မည်)", type="primary", use_container_width=True)
     with col_btn2:
         extract_only_btn = st.button("🔍 Timeline သာ အရင်စစ်ဆေးမည်", use_container_width=True)
 
@@ -866,7 +810,7 @@ with tab_dub:
 
             try:
                 lang_code = "my" if "Burmese" in st.session_state.target_language else "en"
-                with st.spinner(f"👁️ AI ဖြင့် ဇာတ်ကောင် စကားပြောချိန်ကို စက္ကန့်မလွဲ တွက်ချက်နေပါသည်..."):
+                with st.spinner(f"👁️ AI ဖြင့် ဇာတ်ကောင် စကားပြောချိန်ကို စက္ကန့်မလွဲ ရှာဖွေနေပါသည်..."):
                     res_data = extract_timeline_dialogues(
                         raw_api_keys=st.session_state.gemini_api_key,
                         video_path="temp_input.mp4",
@@ -876,16 +820,14 @@ with tab_dub:
                     st.session_state.dialogues_timeline = res_data.get("dialogues", [])
                     st.session_state.top_hook_text = res_data.get("hook_line1", "စိတ်လှုပ်ရှားဖွယ်ရာ")
                     st.session_state.bottom_hook_text = res_data.get("hook_line2", "ဇာတ်ကွက်")
-                    st.session_state.seo_description = res_data.get("seo_description", "")
-                    st.session_state.seo_hashtags = res_data.get("hashtags", "")
 
                 st.success(f"🎯 စကားပြောခန်းပေါင်း {len(st.session_state.dialogues_timeline)} ခုကို အချိန်အတိအကျဖြင့် ရှာဖွေတွေ့ရှိပါပြီ!")
 
                 if start_magic_btn:
                     voice_cfg = available_voices[voice_sel]
-                    synced_audio = "final_dialogue_synced_voice.mp3"
+                    synced_audio = "final_dialogue_strict_1x.mp3"
                     
-                    render_timeline_locked_narration(
+                    render_strict_1x_timeline_narration(
                         dialogues=st.session_state.dialogues_timeline,
                         voice_cfg=voice_cfg,
                         total_video_duration=v_duration,
@@ -909,7 +851,7 @@ with tab_dub:
                     else:
                         ass_file = None
 
-                    with st.spinner("🎬 Final Video ပြုလုပ်နေပါသည် (အစအဆုံး လိုက်ပြောပါမည်)..."):
+                    with st.spinner("🎬 Final Video ပြုလုပ်နေပါသည် (အစအဆုံး တိကျစွာ လိုက်ပြောပါမည်)..."):
                         final_out = "recap_output.mp4"
                         render_dialogue_synced_video(
                             input_video="temp_input.mp4",
@@ -917,23 +859,22 @@ with tab_dub:
                             ass_path=ass_file,
                             output_video=final_out,
                             logo_path=st.session_state.user_watermark_file if os.path.exists(st.session_state.user_watermark_file) else None,
-                            logo_pos=logo_pos_key,
+                            logo_pos=logo_pos_choice.split(" ")[0],
                             reframe_mode=st.session_state.video_reframe_style,
                             mute_original=st.session_state.mute_original_audio
                         )
                         st.session_state.last_rendered_video = final_out
-                        st.success("🎉 အောင်မြင်ပါပြီ! ဗီဒီယိုအမြန်နှုန်းအတိုင်း အဆုံးထိတိကျစွာ လိုက်ပြောသော ဗီဒီယို ထွက်ရှိပါပြီ!")
+                        st.success("🎉 အောင်မြင်ပါပြီ! ဗီဒီယိုအမြန်နှုန်း ၁ဆ (1x) အတိုင်း စကားပြောချိန်တွင်သာ ကွက်တိလိုက်ပြောသော ဗီဒီယို ထွက်ရှိပါပြီ!")
             except Exception as ex:
-                st.error(f"❌ {ex}")
+                st.error(f"❌ Error: {ex}")
 
     st.markdown("---")
     
     col_p_vid, col_p_ctrl = st.columns([1.2, 1.2])
 
     with col_p_ctrl:
-        st.markdown("""<div class="neo-card"><h4 style="color: #00f2fe; margin-top: 0;">⏱️ Dialogue Timeline Editor</h4>""", unsafe_allow_html=True)
+        st.markdown("""<div class="neo-card"><h4 style="color: #00f2fe; margin-top: 0;">⏱️ Timeline Editor (Manual Fixes)</h4>""", unsafe_allow_html=True)
         if st.session_state.dialogues_timeline:
-            st.caption("AI ရှာဖွေထားသော အချိန်နှင့် စာသားများကို လိုသလို ပြင်ဆင်နိုင်ပါသည်:")
             new_dialogues = []
             for d_idx, d_item in enumerate(st.session_state.dialogues_timeline):
                 c_t1, c_t2, c_txt = st.columns([1, 1, 2.5])
@@ -949,7 +890,7 @@ with tab_dub:
         else:
             st.info("ဗီဒီယိုကို AI စတင်ခိုင်းပြီးပါက ဤနေရာတွင် Timeline များ ပေါ်လာမည် ဖြစ်ပါသည်။")
 
-        st.markdown("#### ⚙️ Typography & CapCut Subtitles")
+        st.markdown("#### ⚙️ Typography & Subtitles")
         st.session_state.enable_subtitles = st.checkbox("📝 Pop-up စာတန်းထိုး ထည့်သွင်းမည်", value=st.session_state.enable_subtitles)
         col_s1, col_s2 = st.columns(2)
         with col_s1:
@@ -958,9 +899,7 @@ with tab_dub:
             st.session_state.sub_bg_style = st.selectbox("📦 နောက်ခံစတိုင်", ["Solid Box (အမည်းနောက်ခံ)", "Semi-Transparent (မှန်ကြည်)", "Outline Only (အနားကွပ် သီးသန့်)"], index=0)
 
         st.session_state.sub_v_pos_percent = st.slider("↕️ စာတန်းထိုး အမြင့်နေရာ %", 5, 80, int(st.session_state.sub_v_pos_percent))
-        st.session_state.hook_top_percent = st.slider("↕️ Hook ခေါင်းစဉ် အမြင့်နေရာ %", 2, 25, int(st.session_state.hook_top_percent))
-        st.session_state.sub_font_size = st.slider("🔤 စာလုံး အရွယ်အစား", 28, 56, int(st.session_state.sub_font_size))
-
+        
         if st.button("🚀 ပြင်ဆင်ချက်များဖြင့် Final Video ပြန်ထုတ်မည်", type="primary", use_container_width=True):
             if not os.path.exists("temp_input.mp4"):
                 st.error("ဗီဒီယိုဖိုင် မရှိသေးပါ ခင်ဗျာ။")
@@ -968,8 +907,8 @@ with tab_dub:
                 with st.spinner("Timeline အသစ်ဖြင့် ဗီဒီယို ပြန်လည်ထုတ်ယူနေပါသည်..."):
                     v_dur = get_media_duration("temp_input.mp4")
                     voice_cfg = available_voices[voice_sel]
-                    synced_audio = "final_dialogue_synced_voice.mp3"
-                    render_timeline_locked_narration(
+                    synced_audio = "final_dialogue_strict_1x.mp3"
+                    render_strict_1x_timeline_narration(
                         dialogues=st.session_state.dialogues_timeline,
                         voice_cfg=voice_cfg,
                         total_video_duration=v_dur,
@@ -995,7 +934,7 @@ with tab_dub:
                         ass_path=ass_file if st.session_state.enable_subtitles else None,
                         output_video=final_out,
                         logo_path=st.session_state.user_watermark_file if os.path.exists(st.session_state.user_watermark_file) else None,
-                        logo_pos=logo_pos_key,
+                        logo_pos="top_right",
                         reframe_mode=st.session_state.video_reframe_style,
                         mute_original=st.session_state.mute_original_audio
                     )
@@ -1012,7 +951,7 @@ with tab_dub:
                 st.download_button(
                     label="📥 Final Master MP4 ဒေါင်းလုဒ်ရယူရန်",
                     data=vf.read(),
-                    file_name="dialogue_synced_master.mp4",
+                    file_name="dialogue_strict_1x_master.mp4",
                     mime="video/mp4",
                     type="primary",
                     use_container_width=True
@@ -1026,67 +965,57 @@ with tab_dub:
 with tab_thumb:
     st.markdown("""
     <div class="neo-card-accent">
-        <h2 style="font-family: 'Orbitron', sans-serif; color: #ffffff; margin: 0; font-size: 20px;">🖼️ 1-Click Viral Thumbnail & SEO Engine</h2>
-        <p style="color: #cbd5e1; font-size: 13px; margin-top: 4px; margin-bottom: 0;">
-            ဗီဒီယိုကို Social Media ပေါ် တိုက်ရိုက်တင်ရန် လိုအပ်သော Cover ပုံနှင့် Caption/Hashtag များကို AI က အလိုအလျောက် ထုတ်ပေးသည့် စနစ်
-        </p>
+        <h2 style="font-family: 'Orbitron', sans-serif; color: #ffffff; margin: 0; font-size: 20px;">🖼️ 1-Click Viral Thumbnail</h2>
     </div>
     """, unsafe_allow_html=True)
 
     col_th1, col_th2 = st.columns([1.2, 1.2])
 
     with col_th1:
-        st.markdown("""<div class="neo-card"><h4 style="color: #c084fc; margin-top: 0;">📸 Cover Thumbnail Settings</h4>""", unsafe_allow_html=True)
+        st.markdown("""<div class="neo-card"><h4 style="color: #c084fc; margin-top: 0;">📸 Cover Snapshot</h4>""", unsafe_allow_html=True)
         v_d_max = get_media_duration("temp_input.mp4") if os.path.exists("temp_input.mp4") else 10.0
-        thumb_sec = st.slider("📍 ဖမ်းယူမည့် ဗီဒီယို စက္ကန့်နေရာ (Snapshot Time)", 0.0, float(v_d_max), float(min(2.5, v_d_max)), 0.1)
+        thumb_sec = st.slider("📍 ဖမ်းယူမည့် စက္ကန့်", 0.0, float(v_d_max), float(min(2.5, v_d_max)), 0.1)
 
-        t_h1 = st.text_input("Cover Title Line 1 (အပေါ်စာသား)", value=st.session_state.top_hook_text)
-        t_h2 = st.text_input("Cover Title Line 2 (အောက်စာသား)", value=st.session_state.bottom_hook_text)
+        t_h1 = st.text_input("Cover Line 1", value=st.session_state.top_hook_text)
+        t_h2 = st.text_input("Cover Line 2", value=st.session_state.bottom_hook_text)
 
-        if st.button("✨ Thumbnail Cover ဖန်တီးမည်", type="primary", use_container_width=True):
+        if st.button("✨ Thumbnail ဖန်တီးမည်", type="primary", use_container_width=True):
             if not os.path.exists("temp_input.mp4"):
                 st.error("ဗီဒီယိုဖိုင် မရှိသေးပါ ခင်ဗျာ။")
             else:
-                out_thumb = "viral_thumbnail.jpg"
-                if generate_viral_thumbnail(
-                    video_path="temp_input.mp4",
-                    timestamp_sec=thumb_sec,
-                    hook1=t_h1,
-                    hook2=t_h2,
-                    logo_path=st.session_state.user_watermark_file,
-                    output_thumb_path=out_thumb
-                ):
-                    st.session_state.latest_thumbnail = out_thumb
-                    st.success("🎉 Cover ပုံ ဖန်တီးပြီးပါပြီ ခင်ဗျာ!")
-
+                temp_frame = "raw_frame.png"
+                subprocess.run(["ffmpeg", "-y", "-ss", str(thumb_sec), "-i", "temp_input.mp4", "-vframes", "1", "-vf", "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280", temp_frame], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if os.path.exists(temp_frame):
+                    try:
+                        base = Image.open(temp_frame).convert("RGBA")
+                        shade = Image.new("RGBA", (720, 1280), (0, 0, 0, 0))
+                        s_draw = ImageDraw.Draw(shade)
+                        s_draw.rectangle([0, 0, 720, 300], fill=(0, 0, 0, 180))
+                        base = Image.alpha_composite(base, shade)
+                        draw = ImageDraw.Draw(base)
+                        font_path = "Pyidaungsu.ttf" if os.path.exists("Pyidaungsu.ttf") else None
+                        font = ImageFont.truetype(font_path, 52) if font_path else ImageFont.load_default()
+                        draw.text((360, 100), t_h1, fill=(255, 235, 59, 255), font=font, anchor="mm", stroke_width=5, stroke_fill=(0, 0, 0, 255))
+                        draw.text((360, 180), t_h2, fill=(0, 242, 254, 255), font=font, anchor="mm", stroke_width=5, stroke_fill=(0, 0, 0, 255))
+                        
+                        out_thumb = "viral_thumbnail.jpg"
+                        base.convert("RGB").save(out_thumb, "JPEG", quality=95)
+                        st.session_state.latest_thumbnail = out_thumb
+                        st.success("🎉 Cover ပုံ ဖန်တီးပြီးပါပြီ ခင်ဗျာ!")
+                    except Exception:
+                        pass
         if "latest_thumbnail" in st.session_state and os.path.exists(st.session_state.latest_thumbnail):
-            st.image(st.session_state.latest_thumbnail, caption="9:16 Viral Cover Art", use_container_width=True)
-            with open(st.session_state.latest_thumbnail, "rb") as tf:
-                st.download_button("📥 Download Thumbnail JPG", data=tf.read(), file_name="viral_thumbnail.jpg", mime="image/jpeg", use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with col_th2:
-        st.markdown("""<div class="neo-card"><h4 style="color: #00f2fe; margin-top: 0;">🚀 Viral Auto-SEO (Copy & Paste)</h4>""", unsafe_allow_html=True)
-        st.caption("AI မှ ဗီဒီယိုကို ကြည့်ရှုပြီး TikTok / Facebook Reels တွင် တင်ရန် အဆင်သင့် ရေးသားပေးထားသော စာသားများ:")
-        
-        st.markdown("<span class='badge-green'>Caption / Description</span>", unsafe_allow_html=True)
-        st.text_area("Description", value=st.session_state.seo_description, height=140, label_visibility="collapsed")
-        
-        st.markdown("<span class='badge-purple' style='margin-top: 15px;'>Trending Hashtags</span>", unsafe_allow_html=True)
-        st.text_area("Hashtags", value=st.session_state.seo_hashtags, height=80, label_visibility="collapsed")
+            st.image(st.session_state.latest_thumbnail, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
 with tab_splitter:
     st.markdown("""
     <div class="neo-card-accent">
         <h2 style="font-family: 'Orbitron', sans-serif; color: #ffffff; margin: 0; font-size: 20px;">🍿 Multi-Part Auto Splitter (1 GB Support)</h2>
-        <p style="color: #cbd5e1; font-size: 13px; margin-top: 6px; margin-bottom: 0;">
-            ဗီဒီယိုရှည်ကြီးများကို ၆၀ စက္ကန့် Shorts အပိုင်း ၁၊ ၂၊ ၃ အဖြစ် အလိုအလျောက် ခွဲထုတ်ပေးသည့် စနစ်
-        </p>
     </div>
     """, unsafe_allow_html=True)
 
-    long_file = st.file_uploader("ဗီဒီယိုရှည် တင်ပါ (အများဆုံး 1 GB အထိ ရပါသည်)", type=["mp4", "mov"], key="splitter_upload")
+    long_file = st.file_uploader("ဗီဒီယိုရှည် တင်ပါ", type=["mp4", "mov"], key="splitter_upload")
     if long_file:
         with open("temp_long_video.mp4", "wb") as f:
             f.write(long_file.getbuffer())
@@ -1094,84 +1023,51 @@ with tab_splitter:
     long_dur = get_media_duration("temp_long_video.mp4") if os.path.exists("temp_long_video.mp4") else 0.0
 
     if long_dur > 0:
-        st.info(f"⏱️ ဗီဒီယိုရှည် ကြာချိန်: **{format_time_str(long_dur)} ({long_dur:.1f} စက္ကန့်)**")
         col_s1, col_s2, col_s3 = st.columns(3)
         with col_s1:
             split_slice = st.selectbox("အပိုင်းတစ်ခုစီ၏ ကြာချိန်", [30, 60, 90, 180], index=1)
         with col_s2:
-            split_aspect = st.selectbox("ဗီဒီယိုပုံစံ", ["9:16 ဒေါင်လိုက် (TikTok/Reels)", "မူရင်း 16:9"])
+            split_aspect = st.selectbox("ဗီဒီယိုပုံစံ", ["9:16 ဒေါင်လိုက်", "မူရင်း 16:9"])
         with col_s3:
             total_parts = max(1, int(long_dur // split_slice))
-            st.markdown(f"<div style='margin-top:28px; color:#00f2fe; font-weight:bold;'>ထွက်ရှိမည့် အပိုင်း အရေအတွက်: {total_parts} ပိုင်း</div>", unsafe_allow_html=True)
-
-        if st.button("✂️ အပိုင်းတိုများ အလိုအလျောက် ခွဲထုတ်မည် (Generate All Parts)", type="primary"):
-            with st.spinner(f"ဗီဒီယိုအား {total_parts} ပိုင်း အလိုအလျောက် ဖြတ်တောက်နေပါသည်..."):
+            
+        if st.button("✂️️ အပိုင်းတိုများ ခွဲထုတ်မည်", type="primary"):
+            with st.spinner(f"ဗီဒီယိုအား {total_parts} ပိုင်း ဖြတ်တောက်နေပါသည်..."):
                 part_files = []
                 for p_idx in range(total_parts):
                     st_sec = p_idx * split_slice
                     out_part = f"part_{p_idx+1}.mp4"
-
                     vf_part = "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280" if "9:16" in split_aspect else "scale=1280:720"
-                    badge_filter = f"{vf_part},drawtext=text='PART {p_idx+1}':fontfile=Pyidaungsu.ttf:fontsize=48:fontcolor=yellow:x=(w-text_w)/2:y=100:box=1:boxcolor=black@0.8:boxborderw=10"
-
                     cmd_split = [
-                        "ffmpeg", "-y",
-                        "-ss", str(st_sec),
-                        "-t", str(split_slice),
-                        "-i", "temp_long_video.mp4",
-                        "-vf", badge_filter,
-                        "-c:v", "libx264", "-preset", "ultrafast",
-                        "-c:a", "aac",
-                        out_part
+                        "ffmpeg", "-y", "-ss", str(st_sec), "-t", str(split_slice),
+                        "-i", "temp_long_video.mp4", "-vf", vf_part,
+                        "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", out_part
                     ]
                     subprocess.run(cmd_split, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                     if os.path.exists(out_part):
                         part_files.append((out_part, p_idx+1))
-
                 st.session_state.split_parts_list = part_files
-                st.success(f"🎉 အပိုင်းတို {len(part_files)} ပိုင်း အောင်မြင်စွာ ခွဲထုတ်ပြီးပါပြီ ခင်ဗျာ!")
+                st.success("အောင်မြင်စွာ ခွဲထုတ်ပြီးပါပြီ!")
 
         if "split_parts_list" in st.session_state and st.session_state.split_parts_list:
             cols = st.columns(2)
             for file_name, p_num in st.session_state.split_parts_list:
-                col_target = cols[(p_num - 1) % 2]
-                with col_target:
-                    st.markdown(f"""
-                    <div class="neo-card">
-                        <h4 style="color:#38bdf8; margin:0 0 10px 0;">📌 Part {p_num} ({split_slice} စက္ကန့်)</h4>
-                    """, unsafe_allow_html=True)
-                    if os.path.exists(file_name):
-                        st.video(file_name)
-                        c_b1, c_b2 = st.columns(2)
-                        with c_b1:
-                            with open(file_name, "rb") as pf:
-                                st.download_button(f"📥 Download Part {p_num}", data=pf.read(), file_name=file_name, mime="video/mp4", key=f"dl_p_{p_num}")
-                        with c_b2:
-                            if st.button(f"🚀 Master Studio သို့ ပို့မည် (Part {p_num})", key=f"send_recap_{p_num}"):
-                                shutil.copyfile(file_name, "temp_input.mp4")
-                                st.session_state.last_uploaded_file_id = None
-                                st.success(f"✅ Part {p_num} အား Master Studio သို့ ပို့ဆောင်ပြီးပါပြီ! ပထမ Tab (Master Studio) ကို နှိပ်ပြီး ဆက်လက်လုပ်ဆောင်နိုင်ပါပြီ။")
-                    else:
-                        st.error(f"⚠️ ဖိုင်ရှာမတွေ့ပါ! ကျေးဇူးပြု၍ ပြန်လည်ခွဲထုတ်ပေးပါ။")
-                    st.markdown("</div>", unsafe_allow_html=True)
+                with cols[(p_num - 1) % 2]:
+                    st.markdown(f"**📌 Part {p_num}**")
+                    st.video(file_name)
+                    if st.button(f"🚀 Master Studio သို့ ပို့မည် (Part {p_num})", key=f"send_recap_{p_num}"):
+                        shutil.copyfile(file_name, "temp_input.mp4")
+                        st.session_state.last_uploaded_file_id = None
+                        st.success(f"✅ Part {p_num} ကို Master Studio သို့ ပို့ပြီးပါပြီ! ပထမ Tab ကို သွားပါ။")
 
 with tab_settings:
     st.markdown("""
     <div class="neo-card">
-        <h2 style="font-family: 'Orbitron', sans-serif; color: #00f2fe; margin-top: 0;">⚙️ System Architecture & Added Features</h2>
-        <ul style="color: #cbd5e1; line-height: 1.8;">
-            <li><span class="badge-sync">DIALOGUE LOCK & DYNAMIC SPEED</span> Detects exact speech windows. AI perfectly scales speaking speed (fast/slow) to match the timeframe.</li>
-            <li><span class="badge-purple">MUTE & DUCKING TOGGLE</span> Ability to completely mute original loud noises, or elegantly duck them by 80% when AI speaks.</li>
-            <li><span class="badge-green">FULL DURATION LOCK</span> Audio is padded perfectly so speech at the very end of the video is never cut off.</li>
-            <li><span class="badge-sync">CAPCUT POP SUBS</span> Modern fast-paced pop-up subtitle animations via ASS tags.</li>
-            <li><span class="badge-purple">SAFE CLEANUP</span> Workspace files purged without deleting `part_` routing logic, fixing `FileNotFoundError` across tabs.</li>
-            <li><span class="badge-green">SMART BLUR REFRAME</span> Retains full horizontal view by padding with a cinematic blur.</li>
+        <h2 style="color: #00f2fe; margin-top: 0;">⚙️ System Architecture </h2>
+        <ul>
+            <li><span class="badge-sync">STRICT 1X SPEED</span> လုံးဝ အသံမပြောင်းလဲဘဲ Normal 1x အတိုင်း အံဝင်ခွင်ကျ အလုပ်လုပ်ပါသည်။ (atempo ကို လုံးဝ ဖြုတ်ပစ်ထားပါသည်)</li>
+            <li><span class="badge-purple">FULL DURATION LOCK</span> အသံကို ဗီဒီယိုအဆုံးထိ တိတိကျကျ Padding ဖြင့် ဖြည့်သွင်းထားပါသည်။</li>
+            <li><span class="badge-sync">MUTE TOGGLE</span> မူရင်းအသံကို အပြည့်အဝ ပိတ်ပစ်နိုင်သည့် Option ကို UI တွင် ထည့်သွင်းထားပါသည်။</li>
         </ul>
     </div>
     """, unsafe_allow_html=True)
-
-    key_input = st.text_area("Gemini API Key List (ကော်မာခံ၍ အပိုထည့်သွင်းနိုင်သည်)", value=st.session_state.gemini_api_key, height=100)
-    if st.button("💾 သိမ်းဆည်းမည်", type="primary"):
-        save_config("gemini_api_key", key_input)
-        st.session_state.gemini_api_key = key_input
-        st.success("Config သိမ်းဆည်းပြီးပါပြီ ခင်ဗျာ!")
