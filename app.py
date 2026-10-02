@@ -403,26 +403,37 @@ Example Output:
 
             try:
                 raw_resp = ""
-                if use_new_sdk:
-                    contents = [uploaded_file_ref, prompt] if uploaded_file_ref else [prompt]
-                    with st.spinner(f"🧠 AI စဉ်းစားနေပါသည် ({selected_model}) - ဗီဒီယိုအဆုံးထိ ဖတ်ရှုနေသဖြင့် အချိန်အနည်းငယ် ယူပါမည်..."):
-                        # MAX OUTPUT TOKENS TO PREVENT TRUNCATION
-                        res = client.models.generate_content(
-                            model=selected_model, 
-                            contents=contents,
-                            config={"max_output_tokens": 8192, "temperature": 0.2}
-                        )
-                    raw_resp = res.text.strip()
-                else:
-                    model = legacy_genai.GenerativeModel(selected_model)
-                    contents = [uploaded_file_ref, prompt] if uploaded_file_ref else prompt
-                    with st.spinner(f"🧠 AI စဉ်းစားနေပါသည် ({selected_model}) - ဗီဒီယိုအဆုံးထိ ဖတ်ရှုနေသဖြင့် အချိန်အနည်းငယ် ယူပါမည်..."):
-                        # MAX OUTPUT TOKENS TO PREVENT TRUNCATION
-                        res = model.generate_content(
-                            contents,
-                            generation_config=legacy_genai.types.GenerationConfig(max_output_tokens=8192, temperature=0.2)
-                        )
-                    raw_resp = res.text.strip()
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        if use_new_sdk:
+                            contents = [uploaded_file_ref, prompt] if uploaded_file_ref else [prompt]
+                            with st.spinner(f"🧠 AI စဉ်းစားနေပါသည် ({selected_model}) - ကြိုးစားမှုအကြိမ် ({attempt+1}/{max_retries})..."):
+                                # MAX OUTPUT TOKENS TO PREVENT TRUNCATION
+                                res = client.models.generate_content(
+                                    model=selected_model, 
+                                    contents=contents,
+                                    config={"max_output_tokens": 8192, "temperature": 0.2}
+                                )
+                            raw_resp = res.text.strip()
+                        else:
+                            model = legacy_genai.GenerativeModel(selected_model)
+                            contents = [uploaded_file_ref, prompt] if uploaded_file_ref else prompt
+                            with st.spinner(f"🧠 AI စဉ်းစားနေပါသည် ({selected_model}) - ကြိုးစားမှုအကြိမ် ({attempt+1}/{max_retries})..."):
+                                # MAX OUTPUT TOKENS TO PREVENT TRUNCATION
+                                res = model.generate_content(
+                                    contents,
+                                    generation_config=legacy_genai.types.GenerationConfig(max_output_tokens=8192, temperature=0.2)
+                                )
+                            raw_resp = res.text.strip()
+                        break # Success, exit retry loop
+                    except Exception as gen_e:
+                        if "503" in str(gen_e) or "unavailable" in str(gen_e).lower() or "demand" in str(gen_e).lower():
+                            if attempt < max_retries - 1:
+                                st.toast(f"⚠️ Google Server ကြပ်နေပါသည်။ ၅ စက္ကန့်စောင့်ပြီး အလိုအလျောက် ပြန်လည်ကြိုးစားပါမည်... ({attempt+1})")
+                                time.sleep(5)
+                                continue
+                        raise gen_e # Re-raise if not 503 or out of retries
 
                 # Clean markdown and parse JSON safely (Forgiving Parser)
                 raw_resp = raw_resp.replace("```json", "").replace("```", "").strip()
@@ -441,18 +452,17 @@ Example Output:
                 
             except Exception as e:
                 last_err = e
-                err_str = str(e).lower()
-                if "429" in err_str or "quota" in err_str:
-                    raise e 
-                else:
-                    raise e
+                raise e
                     
         except Exception as e:
             last_err = e
-            if "429" in str(e).lower() or "quota" in str(e).lower():
+            err_str = str(e).lower()
+            if "429" in err_str or "quota" in err_str:
                 st.warning(f"⚠️ API Key (#{k_idx+1}) Limit ပြည့်သွားသဖြင့် နောက် Key သို့ ကူးပြောင်းနေပါသည်...")
                 continue
-            # Note: We do NOT fallback to a different model. We respect the user's choice!
+            elif "503" in err_str or "unavailable" in err_str:
+                st.error("❌ Google Server တွင် ယခုအချိန်၌ အသုံးပြုသူများလွန်းသဖြင့် ယာယီပိတ်ဆို့နေပါသည်။ ခဏစောင့်ပြီး ပြန်လုပ်ကြည့်ပါ သို့မဟုတ် ဘယ်ဘက် Sidebar မှ AI Model (ဥပမာ - gemini-1.5-flash သို့မဟုတ် 1.5-pro) ကို ပြောင်းသုံးကြည့်ပါ ခင်ဗျာ။")
+                break
             break
             
     raise Exception(f"AI Extraction Error: {last_err}")
