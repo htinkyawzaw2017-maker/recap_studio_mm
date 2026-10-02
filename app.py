@@ -359,9 +359,9 @@ CRITICAL TIMELINE RULES FOR STRICT DUBBING:
    - "start": exact start timestamp in seconds (float, e.g. 3.2)
    - "end": exact end timestamp in seconds (float, e.g. 6.8)
    - "speaker": character name or gender
-   - "text": natural, concise dubbed speech in {lang_instruction}.
+   - "text": natural, concise dubbed speech in {lang_instruction}. (CRITICAL: DO NOT use double quotes inside this text. Use single quotes if needed.)
 
-Return STRICTLY JSON format:
+Return STRICTLY JSON format ONLY. Do not include markdown formatting like ```json:
 {{
   "hook_line1": "Catchy Hook Line 1",
   "hook_line2": "Catchy Hook Line 2",
@@ -421,10 +421,19 @@ Return STRICTLY JSON format:
                                 res = model.generate_content(contents)
                             raw_resp = res.text.strip()
 
-                        match = re.search(r"\{.*\}", raw_resp, re.DOTALL)
-                        if match:
-                            data = json.loads(match.group(0))
-                            return data
+                        # Clean markdown and parse JSON safely
+                        raw_resp = raw_resp.replace("```json", "").replace("```", "").strip()
+                        start_idx = raw_resp.find('{')
+                        end_idx = raw_resp.rfind('}')
+                        
+                        if start_idx != -1 and end_idx != -1:
+                            json_str = raw_resp[start_idx:end_idx+1]
+                            try:
+                                data = json.loads(json_str, strict=False)
+                                return data
+                            except json.JSONDecodeError as je:
+                                raise ValueError(f"JSON Parse Error: {je}")
+                                
                         raise ValueError("AI JSON ပြန်ကြားချက် မမှန်ကန်ပါ။")
                         
                     except Exception as e:
