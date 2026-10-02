@@ -10,7 +10,6 @@ import urllib.request
 import asyncio
 from PIL import Image, ImageDraw, ImageFont
 
-# ----------------- 1 GB FILE UPLOAD CONFIG AUTOMATION -----------------
 # Ensures Streamlit config allows up to 1024 MB (1 GB) upload limit
 os.makedirs(".streamlit", exist_ok=True)
 config_toml_path = os.path.join(".streamlit", "config.toml")
@@ -20,7 +19,6 @@ try:
 except Exception:
     pass
 
-# ----------------- PAGE CONFIG -----------------
 st.set_page_config(
     page_title="Recap Studio MM Pro - Master Suite",
     page_icon="🎬",
@@ -28,40 +26,125 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ----------------- NEON CYBERPUNK STYLING -----------------
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Plus+Jakarta+Sans:wght@400;600;700&display=swap');
+
     .stApp {
-        background-color: #030712;
+        background: radial-gradient(circle at 15% 15%, #071026 0%, #030712 60%, #02040a 100%);
         color: #f1f5f9;
+        font-family: 'Plus Jakarta Sans', 'Pyidaungsu', sans-serif;
     }
-    @keyframes neonGlow {
-        0% { box-shadow: 0 0 5px #00f2fe, 0 0 10px #00f2fe; }
-        50% { box-shadow: 0 0 18px #00f2fe, 0 0 28px #38bdf8; }
-        100% { box-shadow: 0 0 5px #00f2fe, 0 0 10px #00f2fe; }
+
+    /* Neon Animations */
+    @keyframes neonPulse {
+        0% { box-shadow: 0 0 10px rgba(0, 242, 254, 0.25), 0 0 20px rgba(0, 242, 254, 0.15); border-color: rgba(0, 242, 254, 0.6); }
+        50% { box-shadow: 0 0 25px rgba(0, 242, 254, 0.45), 0 0 40px rgba(56, 189, 248, 0.25); border-color: rgba(56, 189, 248, 0.9); }
+        100% { box-shadow: 0 0 10px rgba(0, 242, 254, 0.25), 0 0 20px rgba(0, 242, 254, 0.15); border-color: rgba(0, 242, 254, 0.6); }
     }
-    .neon-panel {
-        background: linear-gradient(135deg, rgba(8, 25, 44, 0.95), rgba(3, 10, 20, 0.98));
-        border: 1.5px solid #00f2fe;
-        border-radius: 14px;
-        padding: 16px 22px;
-        animation: neonGlow 3s infinite alternate;
-        margin-bottom: 18px;
+
+    @keyframes glowBorder {
+        0% { border-color: #00f2fe; }
+        50% { border-color: #a855f7; }
+        100% { border-color: #00f2fe; }
     }
+
+    /* Cyber Card Styles */
+    .neo-card {
+        background: linear-gradient(135deg, rgba(13, 24, 48, 0.85) 0%, rgba(5, 12, 26, 0.95) 100%);
+        border: 1.5px solid rgba(0, 242, 254, 0.35);
+        border-radius: 16px;
+        padding: 20px 24px;
+        margin-bottom: 20px;
+        position: relative;
+        backdrop-filter: blur(14px);
+        transition: all 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+        overflow: hidden;
+    }
+
+    .neo-card:hover {
+        transform: translateY(-5px);
+        border-color: #00f2fe;
+        box-shadow: 0 12px 35px rgba(0, 242, 254, 0.25), 0 0 15px rgba(0, 242, 254, 0.3);
+    }
+
+    .neo-card-accent {
+        background: linear-gradient(135deg, rgba(18, 14, 42, 0.88) 0%, rgba(9, 6, 25, 0.96) 100%);
+        border: 1.5px solid rgba(168, 85, 247, 0.4);
+        border-radius: 16px;
+        padding: 20px 24px;
+        margin-bottom: 20px;
+        transition: all 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+
+    .neo-card-accent:hover {
+        transform: translateY(-5px);
+        border-color: #a855f7;
+        box-shadow: 0 12px 35px rgba(168, 85, 247, 0.25), 0 0 15px rgba(168, 85, 247, 0.3);
+    }
+
+    /* Neon Badge */
     .badge-sync {
-        background: rgba(0, 242, 254, 0.15);
+        background: rgba(0, 242, 254, 0.12);
         color: #00f2fe;
         border: 1px solid #00f2fe;
-        padding: 4px 12px;
-        border-radius: 12px;
+        padding: 5px 14px;
+        border-radius: 20px;
         font-size: 11px;
         font-weight: 800;
-        letter-spacing: 0.5px;
+        letter-spacing: 1px;
+        display: inline-block;
+        box-shadow: 0 0 10px rgba(0, 242, 254, 0.2);
+    }
+
+    .badge-purple {
+        background: rgba(168, 85, 247, 0.15);
+        color: #c084fc;
+        border: 1px solid #a855f7;
+        padding: 5px 14px;
+        border-radius: 20px;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 1px;
+        display: inline-block;
+        box-shadow: 0 0 10px rgba(168, 85, 247, 0.2);
+    }
+
+    /* Main Title Styler */
+    .hero-title {
+        font-family: 'Orbitron', 'Plus Jakarta Sans', sans-serif;
+        background: linear-gradient(90deg, #00f2fe, #38bdf8, #c084fc);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: 900;
+        letter-spacing: 1px;
+        margin: 0;
+    }
+
+    /* Streamlit Widget Polishing */
+    div[data-testid="stFileUploader"] {
+        background: rgba(8, 17, 36, 0.6);
+        border: 1.5px dashed rgba(0, 242, 254, 0.35);
+        border-radius: 12px;
+        padding: 10px;
+        transition: all 0.3s ease;
+    }
+    div[data-testid="stFileUploader"]:hover {
+        border-color: #00f2fe;
+        box-shadow: 0 0 15px rgba(0, 242, 254, 0.2);
+    }
+    .stButton>button {
+        border-radius: 12px !important;
+        font-weight: 700 !important;
+        transition: all 0.3s ease !important;
+    }
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(0, 242, 254, 0.35) !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------- MYANMAR UNICODE FONT ENGINE -----------------
 FONTS_CONF = "fonts.conf"
 if not os.path.exists(FONTS_CONF):
     try:
@@ -98,7 +181,6 @@ def ensure_myanmar_fonts():
 
 ensure_myanmar_fonts()
 
-# ----------------- CONFIG STORAGE -----------------
 CONFIG_FILE = ".recap_config.json"
 
 def load_config(key, default=""):
@@ -125,7 +207,6 @@ def save_config(key, value):
     except Exception:
         pass
 
-# ----------------- MEDIA HELPERS -----------------
 def get_media_duration(file_path):
     if not file_path or not os.path.exists(file_path):
         return 0.0
@@ -146,7 +227,6 @@ def format_time_str(seconds):
     secs = int(seconds % 60)
     return f"{mins:02d}:{secs:02d}"
 
-# ----------------- PHONETIC BURMESE TRANSLITERATION -----------------
 PHONETICS = {
     r"\bAI\b": "အေအိုင်",
     r"\bFBI\b": "အက်ဖ်ဘီအိုင်",
@@ -166,34 +246,42 @@ PHONETICS = {
 }
 
 def clean_script_for_tts(text):
+    """
+    Cleans script and normalizes punctuation for fluid human speech
+    without robotic dead-silences or abrupt chopped words.
+    """
     if not text:
         return ""
+    # Remove timestamps and line enumerations
     t = re.sub(r"[၀-၉0-9]+:[၀-၉0-9]+(\s*-\s*[၀-၉0-9]+:[၀-၉0-9]+)?", "", text)
     t = re.sub(r"(?m)^\s*[၀-၉0-9]+[\.\)။\-]\s*", "", t)
     t = re.sub(r"[\(\[（【].*?[\)\]）】]", "", t)
     t = re.sub(r"[*#_~>`]", "", t)
+
+    # Phonetic replacements for English words commonly in viral recaps
     for pattern, rep in PHONETICS.items():
         t = re.sub(pattern, rep, t, flags=re.IGNORECASE)
-    t = t.replace("\n", " ").replace("  ", " ").strip()
+
+    # Convert duplicate Burmese punctuation to single soft breath pause
+    t = re.sub(r"[၊,]+", " ၊ ", t)
+    t = re.sub(r"[။\.\!\?]+", " ။ ", t)
+    t = re.sub(r"\s+", " ", t).strip()
     return t
 
-# ----------------- USER LOGO AUTO-BACKGROUND REMOVER -----------------
 def process_user_logo(input_path, output_path):
     try:
         img = Image.open(input_path).convert("RGBA")
-        data = list(img.getdata())
-        new_data = []
-        for item in data:
-            r, g, b, a = item
-            if r > 215 and g > 215 and b > 215:
-                new_data.append((255, 255, 255, 0))
-            elif r < 30 and g < 30 and b < 30:
-                new_data.append((0, 0, 0, 0))
-            else:
-                new_data.append(item)
-        img.putdata(new_data)
-
+        # Direct RGBA pixel modification compatible with all Pillow versions
+        pixels = img.load()
         w, h = img.size
+        for y in range(h):
+            for x in range(w):
+                r, g, b, a = pixels[x, y]
+                if r > 215 and g > 215 and b > 215:
+                    pixels[x, y] = (255, 255, 255, 0)
+                elif r < 30 and g < 30 and b < 30:
+                    pixels[x, y] = (0, 0, 0, 0)
+
         min_dim = min(w, h)
         left = (w - min_dim) // 2
         top = (h - min_dim) // 2
@@ -218,7 +306,6 @@ def process_user_logo(input_path, output_path):
     except Exception:
         return False
 
-# ----------------- SESSION STATE SETUP -----------------
 if "gemini_api_key" not in st.session_state:
     st.session_state.gemini_api_key = load_config("gemini_api_key", os.getenv("GEMINI_API_KEY", ""))
 
@@ -261,11 +348,12 @@ if "last_rendered_video" not in st.session_state:
 if "saved_bgm_vol" not in st.session_state:
     st.session_state.saved_bgm_vol = 0.08
 
+# Optimized vocal rates for natural, continuous, broadcast-level recap narrations
 VOICE_CONFIGS = {
-    "မင်းသန့် (Agency - Confident Narrator - သွက်လက်တက်ကြွ)": {"voice": "my-MM-ThihaNeural", "pitch": "-2Hz", "rate": "+10%"},
-    "သီဟ (Action & Dynamic Voice - အလွန်သွက်လက်)": {"voice": "my-MM-ThihaNeural", "pitch": "+1Hz", "rate": "+12%"},
-    "ကိုမင်း (Deep Cinematic Specialist - အသံနက်ကြီး)": {"voice": "my-MM-ThihaNeural", "pitch": "-6Hz", "rate": "+6%"},
-    "မေသူ (Drama & Mystery Female - စိတ်ခံစားမှုအပြည့်)": {"voice": "my-MM-NilarNeural", "pitch": "+2Hz", "rate": "+6%"}
+    "မင်းသန့် (Agency - Confident Narrator - သွက်လက်တက်ကြွ)": {"voice": "my-MM-ThihaNeural", "pitch": "-1Hz", "rate": "+12%"},
+    "သီဟ (Action & Dynamic Voice - အလွန်သွက်လက်)": {"voice": "my-MM-ThihaNeural", "pitch": "+1Hz", "rate": "+14%"},
+    "ကိုမင်း (Deep Cinematic Specialist - အသံနက်ကြီး)": {"voice": "my-MM-ThihaNeural", "pitch": "-4Hz", "rate": "+8%"},
+    "မေသူ (Drama & Mystery Female - စိတ်ခံစားမှုအပြည့်)": {"voice": "my-MM-NilarNeural", "pitch": "+1Hz", "rate": "+8%"}
 }
 
 RECAP_MODES = {
@@ -275,20 +363,21 @@ RECAP_MODES = {
     "🎬 Movie & Fiction Recap (ရုပ်ရှင်နှင့် ဇာတ်လမ်းတွဲများ)": "movie"
 }
 
-# ----------------- MULTIMODAL VISION AI SCRIPT ENGINE (NATURAL SPEED) -----------------
 def generate_vision_matched_script(raw_api_keys, video_path, target_duration, mode_key="auto"):
-    import google.generativeai as genai
-
+    """
+    Multimodal Vision AI that calculates natural Burmese syllable cadence
+    and supports both modern google-genai and legacy google-generativeai SDKs.
+    """
     keys = [k.strip() for k in re.split(r"[,;\n]+", raw_api_keys) if k.strip()]
     if not keys:
         raise ValueError("Gemini API Key ထည့်သွင်းပေးပါ ခင်ဗျာ။")
 
-    # Fast viral recap pace: ~2.3 spoken Burmese words per second so narration fills duration NATURALLY
-    target_words = max(24, int(target_duration * 2.3))
+    # Natural Burmese recap pace: ~2.8 to 3.2 syllables/words per second for fluid speech
+    target_words = max(26, int(target_duration * 2.85))
 
     mode_prompts = {
-        "auto": "တင်ထားသော ဗီဒီယိုဖိုင်ကို မျက်စိဖြင့် သေချာကြည့်ပါ။ ဤဗီဒီယိုသည် စမ်းသပ်မှု ဖြစ်စေ၊ လက်မှုပညာ ဖြစ်စေ၊ ရုပ်ရှင် ဖြစ်စေ မျက်မြင်အစစ်အမှန် ဖြစ်ပျက်နေသော အကြောင်းအရာကိုသာ အတိအကျ ရှင်းပြပေးပါ။",
-        "experiment": "တင်ထားသော ဗီဒီယိုဖိုင်ကို သေချာကြည့်ပါ။ ဤဗီဒီယိုသည် သိပ္ပံ/လက်တွေ့ စမ်းသပ်မှု (Experiment) ဗီဒီယို ဖြစ်သည်။ စမ်းသပ်မှု လုပ်ဆောင်ပုံ၊ အဆင့်ဆင့် ဖြစ်ပျက်ပုံနှင့် နောက်ဆုံး ရလဒ်ထွက်ပေါ်လာပုံကို မျက်မြင်အစစ်အမှန်အတိုင်း အချက်အလက်တိကျစွာ ရှင်းပြပေးပါ။ စိတ်ကူးယဉ် ဇာတ်လမ်းများ လုံးဝမထည့်ပါနှင့်။",
+        "auto": "တင်ထားသော ဗီဒီယိုဖိုင်ကို သေချာကြည့်ပါ။ ဤဗီဒီယိုသည် စမ်းသပ်မှု၊ လက်မှုပညာ သို့မဟုတ် ရုပ်ရှင်ဇာတ်လမ်း ဖြစ်စေ မျက်မြင်အစစ်အမှန် ဖြစ်ပျက်နေသော အကြောင်းအရာကိုသာ အသေးစိတ် မပြတ်မတောက် ရှင်းပြပေးပါ။",
+        "experiment": "တင်ထားသော ဗီဒီယိုဖိုင်ကို သေချာကြည့်ပါ။ ဤဗီဒီယိုသည် သိပ္ပံ/လက်တွေ့ စမ်းသပ်မှု ဖြစ်သည်။ စမ်းသပ်မှု လုပ်ဆောင်ပုံ၊ အဆင့်ဆင့် ဖြစ်ပျက်ပုံနှင့် နောက်ဆုံး ရလဒ်ထွက်ပေါ်လာပုံကို မျက်မြင်အစစ်အမှန်အတိုင်း အချက်အလက်တိကျစွာ ရှင်းပြပေးပါ။",
         "craft": "တင်ထားသော ဗီဒီယိုဖိုင်ကို သေချာကြည့်ပါ။ ဤဗီဒီယိုသည် အသံမပါသော လက်မှုပညာ/DIY ဗီဒီယို ဖြစ်သည်။ လက်ဖြင့် အဆင့်ဆင့် ပြုလုပ်နေပုံများကို အနီးကပ် လိုက်လံရှင်းပြပေးပါ။",
         "movie": "တင်ထားသော ရုပ်ရှင်ဗီဒီယိုကို ကြည့်ပြီး ဇာတ်ကွက်အလိုက် စိတ်လှုပ်ရှားဖွယ် Movie Recap အဖြစ် ပြန်လည်ပြောပြပေးပါ။"
     }
@@ -296,70 +385,112 @@ def generate_vision_matched_script(raw_api_keys, video_path, target_duration, mo
     prompt = f"""
 {mode_prompts.get(mode_key, mode_prompts['auto'])}
 
-🛑 အလွန်အရေးကြီးသော စည်းကမ်းချက်များ:
-၁။ ပေးပို့ထားသော ဗီဒီယိုကို မျက်စိဖြင့် သေချာကြည့်ရှုပါ။ ဗီဒီယိုထဲတွင် အမှန်တကယ် ပါဝင်သော ပုံရိပ်များနှင့် အကြောင်းအရာကိုသာ အတိအကျ ရေးသားရပါမည်။
-၂။ ဗီဒီယို ကြာချိန်သည် အတိအကျ {target_duration:.1f} စက္ကန့် ဖြစ်သည်။
-၃။ သွက်လက်တက်ကြွသော စကားပြောနှုန်းဖြင့် ဗီဒီယိုကြာချိန်နှင့် ကွက်တိပြည့်မီစေရန် စကားလုံးပေါင်း အနည်းဆုံး {target_words - 5} မှ {target_words + 8} လုံးခန့် အသေးစိတ် ကြွယ်ဝစွာ ရေးပေးရပါမည်။ စာသားတိုလွန်း၍ စောပြီးသွားခြင်း လုံးဝ မဖြစ်ရပါ။
-၄။ မြန်မာစကားပြော သီးသန့် ဖြစ်ရပါမည်။ အင်္ဂလိပ်စာလုံး လုံးဝမထည့်ပါနှင့်။
-၅။ အောက်ပါ JSON Format သီးသန့်ဖြင့်သာ ပြန်ဖြေပါ:
+🛑 အလွန်အရေးကြီးသော သဘာဝကျ စကားပြောစည်းကမ်းချက်များ:
+၁။ ပေးပို့ထားသော ဗီဒီယိုကို အစမှ အဆုံး သေချာကြည့်ရှုပြီး အမှန်တကယ် ပါဝင်သော ပုံရိပ်များနှင့် အဆင့်ဆင့် ဖြစ်ရပ်များကိုသာ အတိအကျ ရေးသားရပါမည်။
+၂။ ဗီဒီယို စုစုပေါင်း ကြာချိန်သည် အတိအကျ {target_duration:.1f} စက္ကန့် ဖြစ်သည်။
+၃။ အသံဖတ်ကြားရာတွင် စကားလုံး မပြတ်မတောက်ဘဲ ချောမောသွက်လက်စွာ စီးဆင်းစေရန် "ပြီးတဲ့အခါမှာတော့"၊ "ရုတ်တရက်ဆိုသလို"၊ "ဆက်လက်ပြီးတော့"၊ "နောက်ဆုံးမှာတော့" စသည့် ဆက်စပ်စကားလုံးများ သဘာဝကျကျ အသုံးပြုပါ။
+၄။ ဗီဒီယိုကြာချိန်နှင့် အတိအကျ ကိုက်ညီပြည့်မီစေရန် မြန်မာစကားလုံး အရေအတွက် {target_words - 4} မှ {target_words + 6} လုံးခန့် အသေးစိတ် ရေးပေးရပါမည်။ စာသားတိုလွန်း၍ စောပြီးသွားခြင်း လုံးဝ မဖြစ်ရပါ။
+၅။ မြန်မာစကားပြော အသုံးအနှုန်း သီးသန့် ဖြစ်ရပါမည်။ အင်္ဂလိပ်စာလုံး လုံးဝမထည့်ပါနှင့်။
+၆။ အောက်ပါ JSON Format သီးသန့်ဖြင့်သာ ပြန်ဖြေပါ:
 {{
   "hook_line1": "ဗီဒီယိုနှင့် ကိုက်ညီသော ခေါင်းစဉ် ၁ (စကားလုံး ၃-၄ လုံး)",
   "hook_line2": "ဗီဒီယိုနှင့် ကိုက်ညီသော ခေါင်းစဉ် ၂ (စကားလုံး ၃-၄ လုံး)",
-  "script": "ဗီဒီယိုထဲတွင် မြင်တွေ့ရသည့်အတိုင်း အသေးစိတ် မြန်မာစကားပြော ရှင်းလင်းချက် အပြည့်အစုံ..."
+  "script": "ဗီဒီယိုထဲတွင် မြင်တွေ့ရသည့်အတိုင်း သဘာဝကျကျ မပြတ်မတောက် အသေးစိတ် မြန်မာစကားပြော ရှင်းလင်းချက်..."
 }}
 """
     last_err = None
-    for k_idx, current_key in enumerate(keys):
-        genai.configure(api_key=current_key)
-        
-        video_file_obj = None
-        if video_path and os.path.exists(video_path):
-            try:
-                with st.spinner("📤 ဗီဒီယိုအား AI မျက်စိဖြင့် လေ့လာနိုင်ရန် Gemini Vision API သို့ ပေးပို့နေပါသည်..."):
-                    video_file_obj = genai.upload_file(path=video_path)
-                    waits = 0
-                    while video_file_obj.state.name == "PROCESSING" and waits < 30:
-                        time.sleep(1.5)
-                        waits += 1
-                        video_file_obj = genai.get_file(video_file_obj.name)
-                    if video_file_obj.state.name != "ACTIVE":
-                        video_file_obj = None
-            except Exception:
-                video_file_obj = None
 
-        for m_name in ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash"]:
-            try:
-                model = genai.GenerativeModel(m_name)
+    # Check whether google-genai (new) or google.generativeai (legacy) is available
+    use_new_sdk = False
+    try:
+        from google import genai
+        use_new_sdk = True
+    except ImportError:
+        try:
+            import google.generativeai as legacy_genai
+            use_new_sdk = False
+        except ImportError:
+            raise ImportError("Google Gemini SDK မရှိသေးပါ။ ကျေးဇူးပြု၍ pip install google-genai သို့မဟုတ် pip install google-generativeai ပြုလုပ်ပေးပါ ခင်ဗျာ။")
+
+    for k_idx, current_key in enumerate(keys):
+        try:
+            if use_new_sdk:
+                from google import genai
+                client = genai.Client(api_key=current_key)
+                contents = []
+                if video_path and os.path.exists(video_path):
+                    with st.spinner("📤 ဗီဒီယိုအား AI မျက်စိဖြင့် လေ့လာနိုင်ရန် Gemini Vision API သို့ ပေးပို့နေပါသည်..."):
+                        video_file = client.files.upload(file=video_path)
+                        waits = 0
+                        while getattr(video_file, "state", None) == "PROCESSING" and waits < 35:
+                            time.sleep(2)
+                            waits += 1
+                            video_file = client.files.get(name=video_file.name)
+                        contents.append(video_file)
+
+                contents.append(prompt)
+                res = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=contents
+                )
+                raw_resp = res.text.strip()
+            else:
+                import google.generativeai as legacy_genai
+                legacy_genai.configure(api_key=current_key)
+                video_file_obj = None
+                if video_path and os.path.exists(video_path):
+                    with st.spinner("📤 ဗီဒီယိုအား AI မျက်စိဖြင့် လေ့လာနိုင်ရန် Gemini Vision API သို့ ပေးပို့နေပါသည်..."):
+                        video_file_obj = legacy_genai.upload_file(path=video_path)
+                        waits = 0
+                        while video_file_obj.state.name == "PROCESSING" and waits < 35:
+                            time.sleep(2)
+                            waits += 1
+                            video_file_obj = legacy_genai.get_file(video_file_obj.name)
+                        if video_file_obj.state.name != "ACTIVE":
+                            video_file_obj = None
+
+                model = legacy_genai.GenerativeModel("gemini-2.5-flash")
                 if video_file_obj:
                     res = model.generate_content([video_file_obj, prompt])
                 else:
                     res = model.generate_content(prompt)
-
                 raw_resp = res.text.strip()
-                match = re.search(r"\{.*\}", raw_resp, re.DOTALL)
-                if match:
-                    data = json.loads(match.group(0))
-                    return data["script"], data["hook_line1"], data["hook_line2"]
-                clean_lines = [l.strip() for l in raw_resp.split("\n") if l.strip() and not l.startswith("```")]
-                h1 = clean_lines[0][:30] if clean_lines else "ထူးဆန်းသော စမ်းသပ်မှု"
-                h2 = clean_lines[1][:30] if len(clean_lines) > 1 else "တွေ့ရှိချက်"
-                s = " ".join(clean_lines[2:]) if len(clean_lines) > 2 else raw_resp
-                return s, h1, h2
-            except Exception as e:
-                last_err = e
-                if "429" in str(e).lower() or "quota" in str(e).lower():
-                    st.warning(f"⚠️ API Key (#{k_idx+1}) Limit ပြည့်သွားသဖြင့် နောက် Key သို့ ပြောင်းနေပါသည်...")
-                    break
+
+            match = re.search(r"\{.*\}", raw_resp, re.DOTALL)
+            if match:
+                data = json.loads(match.group(0))
+                return data["script"], data["hook_line1"], data["hook_line2"]
+
+            clean_lines = [l.strip() for l in raw_resp.split("\n") if l.strip() and not l.startswith("```")]
+            h1 = clean_lines[0][:30] if clean_lines else "ထူးဆန်းသော စမ်းသပ်မှု"
+            h2 = clean_lines[1][:30] if len(clean_lines) > 1 else "တွေ့ရှိချက်"
+            s = " ".join(clean_lines[2:]) if len(clean_lines) > 2 else raw_resp
+            return s, h1, h2
+
+        except Exception as e:
+            last_err = e
+            if "429" in str(e).lower() or "quota" in str(e).lower():
+                st.warning(f"⚠️ API Key (#{k_idx+1}) Limit ပြည့်သွားသဖြင့် နောက် Key သို့ ကူးပြောင်းနေပါသည်...")
                 continue
+            continue
+
     raise Exception(f"API Error: {last_err}")
 
-# ----------------- NATURAL VOICE ENGINE (NEVER SLOW DOWN) -----------------
 def generate_natural_voice(text, voice_cfg, target_video_duration, final_output_path):
+    """
+    Renders high quality natural human cadence without robotic vocal breaks or pitch wobbles.
+    Synchronizes tightly with target video duration.
+    """
     cleaned = clean_script_for_tts(text)
     temp_raw = "temp_raw_unconformed.mp3"
-    
+
     import edge_tts
-    communicate = edge_tts.Communicate(text=cleaned, voice=voice_cfg["voice"], rate=voice_cfg["rate"], pitch=voice_cfg["pitch"])
+    communicate = edge_tts.Communicate(
+        text=cleaned,
+        voice=voice_cfg["voice"],
+        rate=voice_cfg["rate"],
+        pitch=voice_cfg["pitch"]
+    )
     asyncio.run(communicate.save(temp_raw))
 
     raw_dur = get_media_duration(temp_raw)
@@ -370,10 +501,9 @@ def generate_natural_voice(text, voice_cfg, target_video_duration, final_output_
 
     tempo = raw_dur / target_video_duration
 
-    # CRITICAL FIX: NEVER SLOW DOWN HUMAN SPEECH BELOW 0.96x!
-    # If narration finishes earlier, preserve natural fast voice and pad cleanly with BGM!
-    if tempo < 0.96:
-        pad_dur = target_video_duration - raw_dur
+    # If narration is slightly shorter, preserve human voice and pad end smoothly (no unnatural slow-motion)
+    if tempo < 0.98:
+        pad_dur = max(0.1, target_video_duration - raw_dur)
         cmd = [
             "ffmpeg", "-y",
             "-i", temp_raw,
@@ -382,7 +512,8 @@ def generate_natural_voice(text, voice_cfg, target_video_duration, final_output_
             "-c:a", "libmp3lame", "-b:a", "192k",
             final_output_path
         ]
-    elif 0.96 <= tempo <= 1.25:
+    elif 0.98 <= tempo <= 1.20:
+        # Micro-tempo adjustment within natural vocal tolerance
         cmd = [
             "ffmpeg", "-y",
             "-i", temp_raw,
@@ -392,17 +523,17 @@ def generate_natural_voice(text, voice_cfg, target_video_duration, final_output_
             final_output_path
         ]
     else:
+        # Dual-stage atempo for high tempo preservation
         cmd = [
             "ffmpeg", "-y",
             "-i", temp_raw,
-            "-filter:a", "atempo=1.20",
+            "-filter:a", "atempo=1.15",
             "-t", f"{target_video_duration:.3f}",
             "-c:a", "libmp3lame", "-b:a", "192k",
             final_output_path
         ]
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-# ----------------- CLEAN ASS SUBTITLES (NO BROKEN TAGS) -----------------
 def hex_to_ass(hex_code):
     h = hex_code.lstrip("#")
     if len(h) == 6:
@@ -447,15 +578,20 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         hook_str = f"{h1}\\N{h2}" if h1 and h2 else (h1 or h2)
         ass_text += f"Dialogue: 1,0:00:00.00,{fmt_ass_time(duration)},HookStyle,,0,0,0,,{hook_str}\n"
 
-    chunks = [s.strip() for s in re.split(r"[၊။\.\?\!\n]+", script) if s.strip()]
-    if not chunks:
-        chunks = [script]
-    chunk_time = duration / len(chunks)
+    # Chunk by punctuation pauses and allocate duration based on character length for tight lip sync
+    raw_chunks = [s.strip() for s in re.split(r"[၊။\.\?\!\n]+", script) if s.strip()]
+    if not raw_chunks:
+        raw_chunks = [script]
 
-    for i, chunk in enumerate(chunks):
-        c_st = i * chunk_time
-        c_en = min((i + 1) * chunk_time, duration)
-        # Clean plain line without broken tag fragments
+    total_chars = sum(len(c) for c in raw_chunks)
+    total_chars = max(1, total_chars)
+    current_time = 0.0
+
+    for chunk in raw_chunks:
+        c_dur = (len(chunk) / total_chars) * duration
+        c_st = current_time
+        c_en = min(c_st + c_dur, duration)
+        current_time = c_en
         ass_text += f"Dialogue: 0,{fmt_ass_time(c_st)},{fmt_ass_time(c_en)},SubtitleStyle,,0,0,0,,{chunk}\n"
 
     if cta_text and duration > 5.0:
@@ -464,7 +600,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write(ass_text)
 
-# ----------------- STRICT 1:1 HARDWARE-LOCKED RENDER PIPELINE -----------------
 def render_strict_sync_video(input_video, narration_audio, ass_path, output_video, logo_path=None, logo_pos="top_right", bgm_vol=0.08):
     exact_duration = get_media_duration(input_video)
     if exact_duration <= 0.0:
@@ -540,12 +675,11 @@ def render_strict_sync_video(input_video, narration_audio, ass_path, output_vide
 
     subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-# ----------------- SIDEBAR: GLOBAL SETTINGS -----------------
 with st.sidebar:
     st.markdown("""
-    <div style="text-align: center; margin-bottom: 12px;">
-        <h2 style="color: #00f2fe; margin-bottom: 0px;">⚡ RECAP MASTER</h2>
-        <span class="badge-sync">MAX 1 GB SUPPORT</span>
+    <div style="text-align: center; padding: 10px 0 16px 0;">
+        <h2 style="font-family: 'Orbitron', sans-serif; color: #00f2fe; margin-bottom: 4px; font-weight: 800;">⚡ RECAP MASTER</h2>
+        <span class="badge-sync">MAX 1 GB LOCKED</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -567,7 +701,6 @@ with st.sidebar:
     bgm_val = st.slider("🎵 Background Music Volume", 0.0, 0.25, float(st.session_state.saved_bgm_vol), 0.02)
     st.session_state.saved_bgm_vol = bgm_val
 
-# ----------------- UNIFIED MAIN TABS -----------------
 tab_recap, tab_splitter, tab_settings = st.tabs([
     "🎬 All-in-One Recap Studio",
     "🍿 Multi-Part Splitter (1 GB Support)",
@@ -579,15 +712,18 @@ tab_recap, tab_splitter, tab_settings = st.tabs([
 # ==============================================================================
 with tab_recap:
     st.markdown("""
-    <div class="neon-panel">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
+    <div class="neo-card" style="animation: neonPulse 4s infinite alternate;">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div>
-                <h2 style="color: #ffffff; margin: 0; font-size: 22px;">🎬 All-in-One Viral Recap Studio Pro</h2>
-                <p style="color: #94a3b8; font-size: 13px; margin-top: 4px; margin-bottom: 0;">
-                    အသံမနှေးဘဲ သွက်လက်တက်ကြွသော လူအစစ် Recap သံဖြင့် ဗီဒီယိုအစစ်ကို လေ့လာပြီး ထုတ်လုပ်ပေးမည့် စနစ်
+                <h2 class="hero-title" style="font-size: 24px;">🎬 All-in-One Viral Recap Studio Pro</h2>
+                <p style="color: #94a3b8; font-size: 13px; margin-top: 6px; margin-bottom: 0;">
+                    မပြတ်မတောက်ဘဲ သဘာဝကျသော လူအစစ် စကားပြောသံဖြင့် ဗီဒီယိုနှင့် ၁:၁ ကွက်တိကျစေမည့် စနစ်
                 </p>
             </div>
-            <div class="badge-sync">1:1 EXACT SYNC LOCKED</div>
+            <div>
+                <span class="badge-sync">1:1 EXACT SYNC</span>
+                <span class="badge-purple">NATURAL CADENCE</span>
+            </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -595,9 +731,12 @@ with tab_recap:
     col_up1, col_up2 = st.columns([1.2, 1.0])
 
     with col_up1:
-        st.markdown("#### 1. 📤 ဗီဒီယို တင်ပါ (အများဆုံး 1 GB အထိ ရနိုင်ပါသည်)")
+        st.markdown("""
+        <div class="neo-card">
+            <h4 style="color: #00f2fe; margin-top: 0;">1. 📤 ဗီဒီယို တင်ပါ (Max 1 GB)</h4>
+        """, unsafe_allow_html=True)
         up_file = st.file_uploader("ဗီဒီယို ရွေးချယ်ပါ (MP4, MOV, WebM - Max 1GB)", type=["mp4", "mov", "webm"])
-        yt_url = st.text_input("သို့မဟုတ် Video Link ထည့်ပါ", placeholder="[https://www.youtube.com/watch?v=](https://www.youtube.com/watch?v=)...")
+        yt_url = st.text_input("သို့မဟုတ် Video Link ထည့်ပါ", placeholder="https://www.youtube.com/watch?v=...")
 
         if up_file:
             with open("temp_input.mp4", "wb") as f:
@@ -605,12 +744,16 @@ with tab_recap:
 
         vid_len = get_media_duration("temp_input.mp4") if os.path.exists("temp_input.mp4") else 0.0
         if vid_len > 0:
-            st.success(f"⏱️ ဗီဒီယိုကြာချိန်: **{format_time_str(vid_len)} ({vid_len:.2f} စက္ကန့် အတိအကျ)** | အသံနှေးမသွားစေဘဲ သွက်လက်စွာ အသံသွင်းပေးပါမည်။")
+            st.success(f"⏱️ ဗီဒီယိုကြာချိန်: **{format_time_str(vid_len)} ({vid_len:.2f} စက္ကန့် အတိအကျ)** | အသံမပြတ်ဘဲ သဘာဝကျစွာ အသံသွင်းပေးပါမည်။")
 
         selected_mode_label = st.selectbox("🎯 Recap အမျိုးအစား", list(RECAP_MODES.keys()), index=0)
+        st.markdown("</div>", unsafe_allow_html=True)
 
     with col_up2:
-        st.markdown("#### 2. 🏷️ Channel Logo (Auto Background Remover)")
+        st.markdown("""
+        <div class="neo-card-accent">
+            <h4 style="color: #c084fc; margin-top: 0;">2. 🏷️ Channel Logo (Auto Background Remover)</h4>
+        """, unsafe_allow_html=True)
         logo_file = st.file_uploader("Logo ပုံတင်ပါ (PNG, JPG)", type=["png", "jpg", "jpeg", "webp"])
         if logo_file:
             raw_logo = "raw_user_logo.png"
@@ -624,12 +767,11 @@ with tab_recap:
 
         logo_pos_choice = st.selectbox("📍 Logo နေရာ", ["top_right (အပေါ် ညာဘက်)", "top_left (အပေါ် ဘယ်ဘက်)", "bottom_right (အောက် ညာဘက်)"], index=0)
         logo_pos_key = logo_pos_choice.split(" ")[0]
-
-    st.markdown("---")
+        st.markdown("</div>", unsafe_allow_html=True)
 
     col_btn1, col_btn2 = st.columns([1.5, 1.0])
     with col_btn1:
-        one_click_btn = st.button("⚡ ONE-CLICK MAGIC RECAP (အသံမနှေးစေဘဲ စက္ကန့်မလွဲ ၁:၁ ထုတ်လုပ်မည်)", type="primary", use_container_width=True)
+        one_click_btn = st.button("⚡ ONE-CLICK MAGIC RECAP (မပြတ်မတောက် သဘာဝအသံဖြင့် ၁:၁ ထုတ်လုပ်မည်)", type="primary", use_container_width=True)
     with col_btn2:
         script_only_btn = st.button("📝 Script သာ အရင်ထုတ်ယူမည်", use_container_width=True)
 
@@ -648,7 +790,7 @@ with tab_recap:
                 v_duration = 33.0
 
             try:
-                with st.spinner(f"👁️ AI က ဗီဒီယိုကို မျက်စိဖြင့် လေ့လာပြီး {v_duration:.1f}s စာသားအပြည့်အစုံ ရေးသားနေပါသည်..."):
+                with st.spinner(f"👁️ AI က ဗီဒီယိုကို မျက်စိဖြင့် လေ့လာပြီး {v_duration:.1f}s သဘာဝကျ စာသားအပြည့်အစုံ ရေးသားနေပါသည်..."):
                     s_text, h1, h2 = generate_vision_matched_script(
                         raw_api_keys=st.session_state.gemini_api_key,
                         video_path="temp_input.mp4" if os.path.exists("temp_input.mp4") else None,
@@ -660,7 +802,7 @@ with tab_recap:
                     st.session_state.bottom_hook_text = h2
 
                 if one_click_btn:
-                    with st.spinner(f"🎙️ သွက်လက်သော စကားပြောနှုန်းဖြင့် {v_duration:.2f}s အသံသွင်းနေပါသည် (အသံလုံးဝ မနှေးပါ)..."):
+                    with st.spinner(f"🎙️ မပြတ်မတောက်ဘဲ သွက်လက်ချောမွေ့သော {v_duration:.2f}s အသံသွင်းနေပါသည်..."):
                         voice_cfg = VOICE_CONFIGS[voice_sel]
                         synced_audio = "final_synced_voice.mp3"
                         generate_natural_voice(s_text, voice_cfg, v_duration, synced_audio)
@@ -701,14 +843,16 @@ with tab_recap:
 
     st.markdown("---")
 
-    # ----------------- DIRECT SUBTITLE CONTROLS ON MAIN SCREEN -----------------
     st.markdown("### 🎬 **Interactive Video Preview & Direct Subtitle Adjuster**")
-    st.caption("ဤနေရာတွင် Subtitle အမြင့်၊ အရောင်နှင့် စာလုံးအရွယ်အစားများကို တိုက်ရိုက် ပြင်ဆင်ပြီး Final Video ပြန်ထုတ်နိုင်ပါသည် ခင်ဗျာ။")
+    st.caption("Subtitle အမြင့်၊ အရောင်နှင့် စာလုံးအရွယ်အစားများကို တိုက်ရိုက် စမ်းသပ် ပြင်ဆင်ပြီး Final Video အသစ် ပြန်ထုတ်နိုင်ပါသည် ခင်ဗျာ။")
 
     col_preview_v, col_preview_c = st.columns([1.2, 1.2])
 
     with col_preview_c:
-        st.markdown("#### ⚙️ **Subtitle & Typography Settings**")
+        st.markdown("""
+        <div class="neo-card">
+            <h4 style="color: #00f2fe; margin-top: 0;">⚙️ Subtitle & Typography Settings</h4>
+        """, unsafe_allow_html=True)
         st.session_state.enable_subtitles = st.checkbox("📝 စာတန်းထိုး (Subtitles) ထည့်သွင်းမည်", value=st.session_state.enable_subtitles)
 
         col_c1, col_c2 = st.columns(2)
@@ -774,9 +918,13 @@ with tab_recap:
                     st.session_state.last_rendered_video = final_out
                     st.success("✨ Render ပြီးပါပြီ ခင်ဗျာ!")
                     st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
 
     with col_preview_v:
-        st.markdown("#### 📱 **Live Video Player**")
+        st.markdown("""
+        <div class="neo-card">
+            <h4 style="color: #00f2fe; margin-top: 0;">📱 Live Video Player</h4>
+        """, unsafe_allow_html=True)
         if st.session_state.last_rendered_video and os.path.exists(st.session_state.last_rendered_video):
             st.video(st.session_state.last_rendered_video)
             with open(st.session_state.last_rendered_video, "rb") as vf:
@@ -792,15 +940,16 @@ with tab_recap:
             st.video("temp_input.mp4")
         else:
             st.info("ဗီဒီယို ဖိုင်တင်ပြီးပါက ဤနေရာတွင် တိုက်ရိုက် ကြည့်ရှုနိုင်မည် ဖြစ်ပါသည် ခင်ဗျာ။")
+        st.markdown("</div>", unsafe_allow_html=True)
 
 # ==============================================================================
 # TAB 2: MULTI-PART SPLITTER (1 GB SUPPORT)
 # ==============================================================================
 with tab_splitter:
     st.markdown("""
-    <div class="neon-panel">
-        <h2 style="color: #ffffff; margin: 0; font-size: 20px;">🍿 Multi-Part Auto Splitter (1 GB Support)</h2>
-        <p style="color: #94a3b8; font-size: 13px; margin-top: 4px; margin-bottom: 0;">
+    <div class="neo-card-accent">
+        <h2 style="font-family: 'Orbitron', sans-serif; color: #ffffff; margin: 0; font-size: 20px;">🍿 Multi-Part Auto Splitter (1 GB Support)</h2>
+        <p style="color: #cbd5e1; font-size: 13px; margin-top: 6px; margin-bottom: 0;">
             မိနစ် ၃၀၊ ၁ နာရီ ဗီဒီယိုရှည်ကြီးများကို ၆၀ စက္ကန့် Shorts အပိုင်း ၁၊ ၂၊ ၃ အဖြစ် အလိုအလျောက် ခွဲထုတ်ပေးသည့် စနစ်
         </p>
     </div>
@@ -830,7 +979,7 @@ with tab_splitter:
                 for p_idx in range(total_parts):
                     st_sec = p_idx * split_slice
                     out_part = f"part_{p_idx+1}.mp4"
-                    
+
                     vf_part = "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280" if "9:16" in split_aspect else "scale=1280:720"
                     badge_filter = f"{vf_part},drawtext=text='PART {p_idx+1}':fontfile=Pyidaungsu.ttf:fontsize=48:fontcolor=yellow:x=(w-text_w)/2:y=100:box=1:boxcolor=black@0.8:boxborderw=10"
 
@@ -856,7 +1005,10 @@ with tab_splitter:
             for file_name, p_num in st.session_state.split_parts_list:
                 col_target = cols[(p_num - 1) % 2]
                 with col_target:
-                    st.markdown(f"**📌 Part {p_num} ({split_slice} စက္ကန့်)**")
+                    st.markdown(f"""
+                    <div class="neo-card">
+                        <h4 style="color:#38bdf8; margin:0 0 10px 0;">📌 Part {p_num} ({split_slice} စက္ကန့်)</h4>
+                    """, unsafe_allow_html=True)
                     st.video(file_name)
                     c_b1, c_b2 = st.columns(2)
                     with c_b1:
@@ -867,18 +1019,24 @@ with tab_splitter:
                             import shutil
                             shutil.copyfile(file_name, "temp_input.mp4")
                             st.success(f"✅ Part {p_num} အား Recap Studio သို့ ပို့ဆောင်ပြီးပါပြီ! ပထမ Tab တွင် ဆက်လက်လုပ်ဆောင်နိုင်ပါသည် ခင်ဗျာ။")
+                    st.markdown("</div>", unsafe_allow_html=True)
 
 # ==============================================================================
 # TAB 3: SETTINGS & INFO
 # ==============================================================================
 with tab_settings:
-    st.markdown("## ⚙️ **Settings & System Info**")
     st.markdown("""
-    * **အများဆုံး တင်နိုင်သော ဗီဒီယိုဖိုင် အရွယ်အစား:** `1024 MB (1 GB)`
-    * **အသံထွက်ဖတ်ကြားမှု စနစ်:** `Natural Fast Human Cadence (+10% Speed Lock)`
-    * **Subtitle Engine:** `Pillow & Clean ASS Subtitles with Myanmar Unicode`
-    * **Video Ratio:** `9:16 Vertical Center-Crop (TikTok/Reels/Shorts)`
-    """)
+    <div class="neo-card">
+        <h2 style="font-family: 'Orbitron', sans-serif; color: #00f2fe; margin-top: 0;">⚙️ Settings & System Info</h2>
+        <ul style="color: #cbd5e1; line-height: 1.8;">
+            <li><strong>အများဆုံး တင်နိုင်သော ဗီဒီယိုဖိုင် အရွယ်အစား:</strong> <span class="badge-sync">1024 MB (1 GB)</span></li>
+            <li><strong>အသံထွက်ဖတ်ကြားမှု စနစ်:</strong> Natural Human Cadence + Fluid Breath Sync</li>
+            <li><strong>Subtitle Engine:</strong> Pillow & Clean ASS Subtitles with Myanmar Unicode</li>
+            <li><strong>Video Ratio:</strong> 9:16 Vertical Center-Crop (TikTok/Reels/Shorts)</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
+
     key_input = st.text_area("Gemini API Key List (ကော်မာခံ၍ Key အပိုများ ထည့်သွင်းနိုင်သည်)", value=st.session_state.gemini_api_key, height=100)
     if st.button("💾 သိမ်းဆည်းမည်", type="primary"):
         save_config("gemini_api_key", key_input)
