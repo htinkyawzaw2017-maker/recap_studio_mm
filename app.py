@@ -648,7 +648,7 @@ def render_dialogue_synced_video(input_video, narration_audio, ass_path, output_
     else:
         # Advanced Audio Ducking (Original volume lowered when AI speaks)
         audio_filter = (
-            "[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.3[orig_sfx];"
+            "[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.9[orig_sfx];"
             "[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.2,apad[ai_dub];"
             "[ai_dub]asplit[ai_final][ai_sc];"
             "[orig_sfx][ai_sc]sidechaincompress=threshold=0.03:ratio=10.0:attack=10:release=500[ducked_sfx];"
