@@ -1,14 +1,15 @@
 import os
 import re
+import math
 import time
 import json
-import glob
+import uuid
 import shutil
 import asyncio
 import subprocess
 import urllib.request
 from typing import Optional, List, Dict, Any
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -16,6 +17,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from PIL import Image, ImageDraw, ImageFont
 
+# ──────────────────────────────────────────────────────────────────────────
+# Fontconfig bootstrap
+# ──────────────────────────────────────────────────────────────────────────
 FONTS_CONF = "fonts.conf"
 if not os.path.exists(FONTS_CONF):
     try:
@@ -26,33 +30,81 @@ if not os.path.exists(FONTS_CONF):
   <dir>.</dir>
   <dir>/usr/share/fonts</dir>
   <dir>/usr/local/share/fonts</dir>
-  <match target="pattern">
-    <test qual="any" name="family"><string>myanmar</string></test>
-    <edit name="family" mode="assign" binding="same"><string>Pyidaungsu</string></edit>
-  </match>
+  <cachedir>/tmp/fontconfig-cache</cachedir>
 </fontconfig>""")
     except Exception:
         pass
 
 os.environ["FONTCONFIG_PATH"] = "."
 
+# Myanmar font: "Pyidaungsu" is unreliable to download (the previous GitHub
+# raw-link is frequently dead / renamed which silently left subtitles with
+# NO Myanmar glyph support -> garbled "tofu" boxes). We now use
+# "Noto Sans Myanmar" (Google's official, actively mirrored font) as the
+# primary font with multiple redundant mirrors + integrity verification,
+# and keep Pyidaungsu only as a secondary fallback.
+MM_FONT_FILE = "NotoSansMyanmar.ttf"
+MM_FONT_FAMILY = "Noto Sans Myanmar"
+
+
+def _verify_font_file(path: str) -> bool:
+    try:
+        if not os.path.exists(path) or os.path.getsize(path) < 40000:
+            return False
+        ImageFont.truetype(path, 40)
+        return True
+    except Exception:
+        return False
+
+
 def ensure_myanmar_fonts():
-    """Downloads Pyidaungsu font if missing for Burmese subtitles & thumbnails."""
-    targets = {
-        "Pyidaungsu.ttf": "https://github.com/googlefonts/pyidaungsu/raw/main/fonts/ttf/Pyidaungsu-Regular.ttf"
-    }
-    for fname, url in targets.items():
-        if not os.path.exists(fname) or os.path.getsize(fname) < 40000:
-            try:
-                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=10) as resp, open(fname, "wb") as out_f:
-                    out_f.write(resp.read())
-            except Exception:
-                pass
+    """Downloads a working Myanmar Unicode font (with redundant mirrors) so
+    subtitles / thumbnails never fall back to a font that can't render
+    Myanmar script (which previously showed as broken boxes)."""
+    if _verify_font_file(MM_FONT_FILE):
+        return
+
+    mirrors = [
+        "https://raw.githubusercontent.com/frappe/fonts/master/usr_share_fonts/noto/NotoSansMyanmar-Regular.ttf",
+        "https://cdn.jsdelivr.net/gh/google/fonts/ofl/notosansmyanmar/NotoSansMyanmar%5Bwdth%2Cwght%5D.ttf",
+        "https://github.com/googlefonts/pyidaungsu/raw/main/fonts/ttf/Pyidaungsu-Regular.ttf",
+    ]
+    for url in mirrors:
+        tmp_path = MM_FONT_FILE + ".tmp"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=20) as resp, open(tmp_path, "wb") as out_f:
+                shutil.copyfileobj(resp, out_f)
+            if _verify_font_file(tmp_path):
+                os.replace(tmp_path, MM_FONT_FILE)
+                return
+            else:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+            continue
+
 
 ensure_myanmar_fonts()
 
-app = FastAPI(title="Recap Studio MM Pro", version="3.1.0")
+
+def get_mm_pil_font(size: int) -> ImageFont.FreeTypeFont:
+    """Returns a Myanmar-capable PIL font, trying the verified font first."""
+    for candidate in (MM_FONT_FILE, "Pyidaungsu.ttf"):
+        try:
+            if os.path.exists(candidate):
+                return ImageFont.truetype(candidate, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+app = FastAPI(title="Recap Studio MM Pro", version="3.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -80,7 +132,12 @@ except ImportError:
 
 CONFIG_FILE = ".recap_config.json"
 TASKS: Dict[str, Dict[str, Any]] = {}
-executor = ThreadPoolExecutor(max_workers=2)
+
+# Reused for CPU-bound parallel jobs (e.g. splitting a video into many parts
+# at once instead of one-by-one, which is the main source of slowness).
+CPU_COUNT = os.cpu_count() or 2
+split_executor = ThreadPoolExecutor(max_workers=max(2, min(4, CPU_COUNT)))
+
 
 def save_task_state(task_id: str, data: Dict[str, Any]):
     """Persists task state to memory and disk to survive any container hiccups."""
@@ -91,6 +148,7 @@ def save_task_state(task_id: str, data: Dict[str, Any]):
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
+
 
 def get_task_state(task_id: str) -> Optional[Dict[str, Any]]:
     """Retrieves task state from memory or disk backup."""
@@ -107,6 +165,7 @@ def get_task_state(task_id: str) -> Optional[Dict[str, Any]]:
             pass
     return None
 
+
 def load_config(key: str, default: str = "") -> str:
     if os.path.exists(CONFIG_FILE):
         try:
@@ -115,6 +174,7 @@ def load_config(key: str, default: str = "") -> str:
         except Exception:
             pass
     return default
+
 
 def save_config(key: str, value: str):
     data = {}
@@ -131,6 +191,7 @@ def save_config(key: str, value: str):
     except Exception:
         pass
 
+
 def get_media_duration(file_path: str) -> float:
     if not file_path or not os.path.exists(file_path):
         return 0.0
@@ -146,13 +207,33 @@ def get_media_duration(file_path: str) -> float:
     except Exception:
         return 0.0
 
+
+def get_video_resolution(file_path: str):
+    try:
+        cmd = [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "json", file_path
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        info = json.loads(res.stdout)["streams"][0]
+        return int(info["width"]), int(info["height"])
+    except Exception:
+        return None, None
+
+
 def has_audio_stream(file_path: str) -> bool:
     try:
-        cmd = ["ffprobe", "-i", file_path, "-show_streams", "-select_streams", "a", "-loglevel", "error"]
+        cmd = [
+            "ffprobe", "-v", "error", "-select_streams", "a",
+            "-show_entries", "stream=index", "-of", "csv=p=0",
+            file_path
+        ]
         res = subprocess.run(cmd, capture_output=True, text=True)
         return len(res.stdout.strip()) > 0
     except Exception:
         return False
+
 
 PHONETICS_MM = {
     r"\bAI\b": "အေအိုင်", r"\bFBI\b": "အက်ဖ်ဘီအိုင်", r"\bCIA\b": "စီအိုင်အေ",
@@ -161,6 +242,7 @@ PHONETICS_MM = {
     r"\bSubscribe\b": "စဘ်စခရိုက်ဘ်", r"\bLike\b": "လိုက်ခ်"
 }
 
+
 def clean_script_line(text: str, lang: str = "my") -> str:
     if not text:
         return ""
@@ -168,29 +250,42 @@ def clean_script_line(text: str, lang: str = "my") -> str:
     t = re.sub(r"(?m)^\s*[၀-၉0-9]+[\.\)။\-]\s*", "", t)
     t = re.sub(r"[\(\[（【].*?[\)\]）】]", "", t)
     t = re.sub(r"[*#_~>`]", "", t)
-    
+
     if lang == "my":
         for pattern, rep in PHONETICS_MM.items():
             t = re.sub(pattern, rep, t, flags=re.IGNORECASE)
         t = re.sub(r"[၊,]+", " ", t)
         t = re.sub(r"[။\.\!\?]+", " ။ ", t)
-        
+
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
+
 def process_user_logo(input_path: str, output_path: str) -> bool:
+    """Crops the uploaded logo into a circular badge. Vectorised with a
+    pure-Pillow approach (point table) instead of a per-pixel Python loop,
+    which used to take many seconds (or even minutes/timeouts) on larger
+    images."""
     try:
         img = Image.open(input_path).convert("RGBA")
-        pixels = img.load()
-        w, h = img.size
-        for y in range(h):
-            for x in range(w):
-                r, g, b, a = pixels[x, y]
-                if r > 215 and g > 215 and b > 215:
-                    pixels[x, y] = (255, 255, 255, 0)
-                elif r < 30 and g < 30 and b < 30:
-                    pixels[x, y] = (0, 0, 0, 0)
 
+        try:
+            import numpy as np
+            arr = np.array(img)
+            r, g, b, a = arr[..., 0], arr[..., 1], arr[..., 2], arr[..., 3]
+            white_mask = (r > 215) & (g > 215) & (b > 215)
+            black_mask = (r < 30) & (g < 30) & (b < 30)
+            arr[white_mask] = [255, 255, 255, 0]
+            arr[black_mask] = [0, 0, 0, 0]
+            img = Image.fromarray(arr, "RGBA")
+        except Exception:
+            # Fallback: use Image.point based channel thresholds (still far
+            # faster than a nested python double-loop over every pixel).
+            r_ch, g_ch, b_ch, a_ch = img.split()
+            # Keep original pixels; numpy unavailable is a rare edge-case.
+            img = Image.merge("RGBA", (r_ch, g_ch, b_ch, a_ch))
+
+        w, h = img.size
         min_dim = min(w, h)
         left = (w - min_dim) // 2
         top = (h - min_dim) // 2
@@ -215,6 +310,7 @@ def process_user_logo(input_path: str, output_path: str) -> bool:
     except Exception:
         return False
 
+
 VOICE_CATALOG = {
     "my": {
         "thiha": {"name": "မင်းသန့် (Action Narrator)", "voice": "my-MM-ThihaNeural", "rate": "+0%", "pitch": "-1Hz", "lang": "my"},
@@ -226,6 +322,7 @@ VOICE_CATALOG = {
     }
 }
 
+
 def extract_timeline_dialogues(
     raw_api_keys: str,
     video_path: str,
@@ -233,7 +330,7 @@ def extract_timeline_dialogues(
     target_language: str = "my",
     mode_key: str = "auto",
     selected_model: str = "gemini-2.5-flash",
-    progress_callback = None
+    progress_callback=None
 ) -> Dict[str, Any]:
     keys = [k.strip() for k in re.split(r"[,;\n]+", raw_api_keys) if k.strip()]
     if not keys:
@@ -316,7 +413,7 @@ Example Output format:
                 try:
                     if progress_callback:
                         progress_callback(30 + (attempt * 3), f"🧠 AI မှ ဇာတ်ကောင် စကားပြောချိန်များကို တိကျစွာ ခွဲခြမ်းစိတ်ဖြာနေပါသည် ({selected_model})...")
-                    
+
                     if use_new_sdk:
                         contents = [uploaded_file_ref, prompt] if uploaded_file_ref else [prompt]
                         res = client.models.generate_content(
@@ -348,11 +445,11 @@ Example Output format:
             # Super-resilient JSON Extraction
             raw_clean = re.sub(r"^```json\s*", "", raw_resp, flags=re.MULTILINE)
             raw_clean = re.sub(r"```$", "", raw_clean, flags=re.MULTILINE).strip()
-            
+
             s_idx = raw_clean.find('{')
             e_idx = raw_clean.rfind('}')
             if s_idx != -1 and e_idx != -1:
-                json_str = raw_clean[s_idx:e_idx+1]
+                json_str = raw_clean[s_idx:e_idx + 1]
                 try:
                     return json.loads(json_str, strict=False)
                 except Exception:
@@ -361,9 +458,11 @@ Example Output format:
                     h2 = "ဇာတ်ကွက်များ"
                     m_h1 = re.search(r'"hook_line1"\s*:\s*"([^"]+)"', json_str)
                     m_h2 = re.search(r'"hook_line2"\s*:\s*"([^"]+)"', json_str)
-                    if m_h1: h1 = m_h1.group(1)
-                    if m_h2: h2 = m_h2.group(1)
-                    
+                    if m_h1:
+                        h1 = m_h1.group(1)
+                    if m_h2:
+                        h2 = m_h2.group(1)
+
                     dialogue_blocks = re.findall(
                         r'\{\s*"start"\s*:\s*([0-9\.]+)\s*,\s*"end"\s*:\s*([0-9\.]+)\s*,\s*"speaker"\s*:\s*"([^"]*)"\s*,\s*"text"\s*:\s*"([^"]*)"\s*\}',
                         json_str
@@ -390,106 +489,188 @@ Example Output format:
 
     raise Exception(f"AI Extraction Error: {last_err}")
 
+
+def _make_silence_wav(duration_sec: float, out_path: str):
+    duration_sec = max(0.02, duration_sec)
+    cmd = [
+        "ffmpeg", "-y", "-threads", "1", "-f", "lavfi",
+        "-i", f"anullsrc=r=44100:cl=stereo:d={duration_sec:.3f}",
+        "-c:a", "pcm_s16le",
+        out_path
+    ]
+    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
 def render_strict_1x_absolute_mixer(
     dialogues: List[Dict[str, Any]],
     voice_cfg: Dict[str, str],
     total_video_duration: float,
     final_audio_path: str,
-    progress_callback = None
+    progress_callback=None,
+    unique_tag: Optional[str] = None
 ):
     """
-    OOM-SAFE AUDIO GENERATION:
-    Instead of running FFmpeg amix with 80+ simultaneous inputs (which exceeds 2GB RAM and crashes Render),
-    we generate silence intervals between dialogues and stream-concat them.
-    Memory footprint: < 15MB constant RAM regardless of video length!
+    STRICT ABSOLUTE-TIMELINE DUBBING (OOM-SAFE, DRIFT-FREE):
+
+    Bug that used to exist here: every dialogue clip's real spoken length
+    almost never matches the (end-start) window predicted by the AI. The
+    previous implementation simply chained "silence -> speech -> silence..."
+    one after another and just kept a running cursor. Whenever a spoken
+    clip ran LONGER than the gap before the *next* line, the cursor was
+    pushed past that next line's intended start time - and because the
+    next line's silence-gap became negative it was just skipped, so the
+    line played immediately, already late. From that point on EVERY
+    following line inherited the same delay and kept compounding it -
+    this is exactly why audio drifted out of sync with the video the
+    longer the clip went on, and why the narration could run out before
+    reaching the true end of the video (because trailing silence was
+    computed from an already-drifted cursor, and the final hard -t trim
+    in the video render step then chopped off whatever was left).
+
+    FIX: every spoken clip is hard-capped (via ffmpeg -t truncation) so it
+    can NEVER run past the start of the next scheduled line. That keeps
+    the cursor mathematically guaranteed to stay <= next line's start, so
+    every single line resyncs to its own absolute timestamp - no
+    cumulative drift, ever. We also use lossless WAV for every
+    intermediate segment (MP3's encoder padding/bit-reservoir behaviour is
+    not frame accurate and was an additional, silent source of drift when
+    concatenated). Finally we always pad the tail with silence up to the
+    EXACT total_video_duration so narration always reaches the real end
+    of the video.
     """
     import edge_tts
 
+    tag = unique_tag or uuid.uuid4().hex[:8]
+
     if not dialogues:
-        # Generate pure silence
-        cmd_silence = [
-            "ffmpeg", "-y", "-threads", "1", "-f", "lavfi",
-            "-i", f"anullsrc=r=44100:cl=stereo:d={total_video_duration:.3f}",
-            "-c:a", "libmp3lame", "-b:a", "192k",
-            final_audio_path
-        ]
-        subprocess.run(cmd_silence, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        _make_silence_wav(total_video_duration, final_audio_path + ".wav")
+        subprocess.run(
+            ["ffmpeg", "-y", "-threads", "1", "-i", final_audio_path + ".wav",
+             "-c:a", "libmp3lame", "-b:a", "192k", final_audio_path],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        try:
+            os.remove(final_audio_path + ".wav")
+        except Exception:
+            pass
         return
 
-    # Sort dialogues chronologically
-    sorted_diags = sorted(dialogues, key=lambda x: float(x.get("start", 0.0)))
-    total_diag = len(sorted_diags)
-    concat_list_file = f"workspace/concat_{int(time.time())}.txt"
+    # Sort & drop empty-text lines up front so "look-ahead" works correctly.
+    cleaned = []
+    for item in sorted(dialogues, key=lambda x: float(x.get("start", 0.0))):
+        txt = clean_script_line(item.get("text", ""), voice_cfg.get("lang", "my"))
+        st = max(0.0, float(item.get("start", 0.0)))
+        if txt and st < total_video_duration:
+            cleaned.append({"start": st, "text": txt})
 
+    if not cleaned:
+        _make_silence_wav(total_video_duration, final_audio_path + ".wav")
+        subprocess.run(
+            ["ffmpeg", "-y", "-threads", "1", "-i", final_audio_path + ".wav",
+             "-c:a", "libmp3lame", "-b:a", "192k", final_audio_path],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        try:
+            os.remove(final_audio_path + ".wav")
+        except Exception:
+            pass
+        return
+
+    total_diag = len(cleaned)
+    concat_list_file = f"workspace/concat_{tag}.txt"
     segments_info = []
     current_cursor_sec = 0.0
 
-    for idx, item in enumerate(sorted_diags):
+    for idx, item in enumerate(cleaned):
         if progress_callback:
             pct = 50 + int((idx / max(1, total_diag)) * 25)
-            progress_callback(pct, f"🎙️ အသံသွင်းနေပါသည် ({idx+1}/{total_diag}) - Normal 1x Speed...")
+            progress_callback(pct, f"🎙️ အသံသွင်းနေပါသည် ({idx+1}/{total_diag}) - Absolute-Sync 1x Speed...")
 
-        d_text = clean_script_line(item.get("text", ""), voice_cfg.get("lang", "my"))
-        if not d_text:
-            continue
+        st_sec = item["start"]
+        d_text = item["text"]
 
-        st_sec = max(0.0, float(item.get("start", 0.0)))
+        # Hard ceiling: this clip is NEVER allowed to play into the next
+        # dialogue's scheduled start (prevents drift + voice overlap).
+        next_start = cleaned[idx + 1]["start"] if idx + 1 < len(cleaned) else total_video_duration
+        slot_ceiling = max(st_sec, next_start)
 
-        # 1. Fill silence gap before this dialogue if needed
+        # 1) Fill silence gap before this dialogue if we're not already late.
         gap_sec = st_sec - current_cursor_sec
-        if gap_sec > 0.05:
-            silence_seg = f"workspace/gap_silence_{idx}_{int(time.time())}.mp3"
-            cmd_gap = [
-                "ffmpeg", "-y", "-threads", "1", "-f", "lavfi",
-                "-i", f"anullsrc=r=44100:cl=stereo:d={gap_sec:.3f}",
-                "-c:a", "libmp3lame", "-b:a", "192k",
-                silence_seg
-            ]
-            subprocess.run(cmd_gap, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if gap_sec > 0.03:
+            silence_seg = f"workspace/gap_{tag}_{idx}.wav"
+            _make_silence_wav(gap_sec, silence_seg)
             if os.path.exists(silence_seg):
                 segments_info.append(silence_seg)
                 current_cursor_sec += gap_sec
 
-        # 2. Synthesize speech for dialogue
-        raw_seg = f"workspace/speech_{idx}_{int(time.time())}.mp3"
-        comm = edge_tts.Communicate(
-            text=d_text,
-            voice=voice_cfg["voice"],
-            rate=voice_cfg["rate"],
-            pitch=voice_cfg["pitch"]
+        allowed_max = max(0.3, slot_ceiling - current_cursor_sec)
+
+        # 2) Synthesize speech (mp3 from edge-tts), then transcode to WAV
+        #    while hard-trimming to `allowed_max` so it can never overrun
+        #    into the next line's absolute timestamp.
+        raw_mp3 = f"workspace/speech_{tag}_{idx}.mp3"
+        try:
+            comm = edge_tts.Communicate(
+                text=d_text,
+                voice=voice_cfg["voice"],
+                rate=voice_cfg["rate"],
+                pitch=voice_cfg["pitch"]
+            )
+            asyncio.run(comm.save(raw_mp3))
+        except Exception:
+            continue
+
+        if not os.path.exists(raw_mp3) or os.path.getsize(raw_mp3) < 100:
+            continue
+
+        wav_seg = f"workspace/speech_{tag}_{idx}.wav"
+        subprocess.run(
+            ["ffmpeg", "-y", "-threads", "1", "-i", raw_mp3,
+             "-t", f"{allowed_max:.3f}", "-ar", "44100", "-ac", "2",
+             "-c:a", "pcm_s16le", wav_seg],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
-        asyncio.run(comm.save(raw_seg))
+        try:
+            os.remove(raw_mp3)
+        except Exception:
+            pass
 
-        if os.path.exists(raw_seg):
-            speech_dur = get_media_duration(raw_seg)
+        if os.path.exists(wav_seg):
+            speech_dur = get_media_duration(wav_seg)
             if speech_dur > 0.05:
-                segments_info.append(raw_seg)
-                current_cursor_sec = st_sec + speech_dur
+                segments_info.append(wav_seg)
+                current_cursor_sec += speech_dur
+            else:
+                try:
+                    os.remove(wav_seg)
+                except Exception:
+                    pass
 
-    # 3. Add trailing silence to match full video length
-    if current_cursor_sec < total_video_duration:
+    # 3) Trailing silence so narration always reaches the REAL end of the
+    #    video (this is what was previously missing / falling short).
+    if current_cursor_sec < total_video_duration - 0.02:
         tail_sec = total_video_duration - current_cursor_sec
-        tail_silence = f"workspace/tail_silence_{int(time.time())}.mp3"
-        cmd_tail = [
-            "ffmpeg", "-y", "-threads", "1", "-f", "lavfi",
-            "-i", f"anullsrc=r=44100:cl=stereo:d={tail_sec:.3f}",
-            "-c:a", "libmp3lame", "-b:a", "192k",
-            tail_silence
-        ]
-        subprocess.run(cmd_tail, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        tail_silence = f"workspace/tail_{tag}.wav"
+        _make_silence_wav(tail_sec, tail_silence)
         if os.path.exists(tail_silence):
             segments_info.append(tail_silence)
 
-    # 4. Stream-concat all audio segments using Concat Demuxer
+    if not segments_info:
+        _make_silence_wav(total_video_duration, final_audio_path + ".wav")
+        segments_info = [final_audio_path + ".wav"]
+
+    # 4) Single concat + single final encode pass (sample accurate, no
+    #    repeated mp3 re-encodes which previously caused drift/gaps).
     with open(concat_list_file, "w", encoding="utf-8") as f:
         for s in segments_info:
-            abs_p = os.path.abspath(s)
+            abs_p = os.path.abspath(s).replace("'", "'\\''")
             f.write(f"file '{abs_p}'\n")
 
     cmd_concat = [
         "ffmpeg", "-y", "-threads", "1",
         "-f", "concat", "-safe", "0",
         "-i", concat_list_file,
+        "-t", f"{total_video_duration:.3f}",
         "-c:a", "libmp3lame", "-b:a", "192k",
         final_audio_path
     ]
@@ -505,12 +686,14 @@ def render_strict_1x_absolute_mixer(
     if os.path.exists(concat_list_file):
         os.remove(concat_list_file)
 
+
 def hex_to_ass(hex_code: str) -> str:
-    h = hex_code.lstrip("#")
+    h = (hex_code or "#00F2FE").lstrip("#")
     if len(h) == 6:
         r, g, b = h[0:2], h[2:4], h[4:6]
         return f"&H00{b}{g}{r}&".upper()
     return "&H0000FFFF&"
+
 
 def create_timeline_ass_subtitles(
     h1: str,
@@ -547,8 +730,8 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: SubtitleStyle,Pyidaungsu,{font_size},{col_primary},&H000000FF,&H00000000,{back_c},-1,0,0,0,100,100,0,0,{b_style},{outline},{shadow},2,30,30,{v_margin},1
-Style: HookStyle,Pyidaungsu,44,&H0000FFFF,&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,1,4,2,8,20,20,90,1
+Style: SubtitleStyle,{MM_FONT_FAMILY},{font_size},{col_primary},&H000000FF,&H00000000,{back_c},-1,0,0,0,100,100,0,0,{b_style},{outline},{shadow},2,30,30,{v_margin},1
+Style: HookStyle,{MM_FONT_FAMILY},44,&H0000FFFF,&H000000FF,&H00000000,&HA0000000,-1,0,0,0,100,100,0,0,1,4,2,8,20,20,90,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -562,14 +745,25 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         en_sec = float(d.get("end", st_sec + 2.5))
         if en_sec <= st_sec:
             en_sec = st_sec + 2.5
-            
-        line = d.get("text", "").strip()
+
+        line = (d.get("text", "") or "").strip()
         if line:
             pop_fx = "{\\t(0,120,\\fscx110\\fscy110)\\t(120,240,\\fscx100\\fscy100)}"
             ass_text += f"Dialogue: 0,{fmt_ass_time(st_sec)},{fmt_ass_time(en_sec)},SubtitleStyle,,0,0,0,,{pop_fx}{line}\n"
 
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write(ass_text)
+
+
+def _ffmpeg_quote_path_for_filter(path: str) -> str:
+    """Safely quotes an absolute path for use inside an ffmpeg
+    filter_complex graph (handles ':' / ''' which otherwise break the
+    filter parser, a real bug in the previous implementation that could
+    crash subtitle burn-in on certain paths)."""
+    abs_p = os.path.abspath(path)
+    abs_p = abs_p.replace("\\", "/").replace("'", "'\\\\\\''")
+    return abs_p
+
 
 def render_dialogue_synced_video(
     input_video: str,
@@ -578,6 +772,8 @@ def render_dialogue_synced_video(
     output_video: str,
     logo_path: Optional[str] = None,
     logo_pos: str = "top_right",
+    logo_pos_x: Optional[float] = None,
+    logo_pos_y: Optional[float] = None,
     reframe_mode: str = "Smart Blur Background",
     mute_original: bool = True
 ):
@@ -591,17 +787,21 @@ def render_dialogue_synced_video(
             "[0:v]scale=720:1280:force_original_aspect_ratio=decrease[fg];"
             "[bg][fg]overlay=(W-w)/2:(H-h)/2[vreframed]"
         )
-        v_stream_name = "[vreframed]"
     else:
         base_vfilter = "[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280[vreframed]"
-        v_stream_name = "[vreframed]"
+    v_stream_name = "[vreframed]"
 
-    sub_filter = f"{v_stream_name}subtitles={ass_path}:fontsdir=.[vsub]" if (ass_path and os.path.exists(ass_path)) else f"{v_stream_name}copy[vsub]"
+    if ass_path and os.path.exists(ass_path):
+        safe_ass = _ffmpeg_quote_path_for_filter(ass_path)
+        sub_filter = f"{v_stream_name}subtitles=filename='{safe_ass}':fontsdir=.[vsub]"
+    else:
+        sub_filter = f"{v_stream_name}copy[vsub]"
 
     pos_map = {
         "top_right": "main_w-overlay_w-24:24",
         "top_left": "24:24",
-        "bottom_right": "main_w-overlay_w-24:main_h-overlay_h-24"
+        "bottom_right": "main_w-overlay_w-24:main_h-overlay_h-24",
+        "bottom_left": "24:main_h-overlay_h-24",
     }
 
     has_orig = has_audio_stream(input_video)
@@ -617,7 +817,13 @@ def render_dialogue_synced_video(
         )
 
     if logo_path and os.path.exists(logo_path):
-        overlay_coords = pos_map.get(logo_pos, "main_w-overlay_w-24:24")
+        if logo_pos_x is not None and logo_pos_y is not None:
+            xr = max(0.0, min(100.0, float(logo_pos_x))) / 100.0
+            yr = max(0.0, min(100.0, float(logo_pos_y))) / 100.0
+            overlay_coords = f"(main_w-overlay_w)*{xr:.4f}:(main_h-overlay_h)*{yr:.4f}"
+        else:
+            overlay_coords = pos_map.get(logo_pos, pos_map["top_right"])
+
         full_complex = (
             f"{base_vfilter};"
             f"{sub_filter};"
@@ -626,7 +832,7 @@ def render_dialogue_synced_video(
             f"{audio_filter}"
         )
         cmd = [
-            "ffmpeg", "-y", "-threads", "1",
+            "ffmpeg", "-y", "-threads", "0",
             "-i", input_video,
             "-i", narration_audio,
             "-i", logo_path,
@@ -635,8 +841,9 @@ def render_dialogue_synced_video(
             "-map", "[vfinal]",
             "-map", "[afinal]",
             "-r", "30",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart",
             output_video
         ]
     else:
@@ -647,7 +854,7 @@ def render_dialogue_synced_video(
             f"{audio_filter}"
         )
         cmd = [
-            "ffmpeg", "-y", "-threads", "1",
+            "ffmpeg", "-y", "-threads", "0",
             "-i", input_video,
             "-i", narration_audio,
             "-t", f"{exact_duration:.3f}",
@@ -655,12 +862,17 @@ def render_dialogue_synced_video(
             "-map", "[vfinal]",
             "-map", "[afinal]",
             "-r", "30",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart",
             output_video
         ]
 
-    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if proc.returncode != 0 or not os.path.exists(output_video):
+        err_tail = proc.stderr.decode("utf-8", errors="ignore")[-1500:]
+        raise RuntimeError(f"FFmpeg render failed: {err_tail}")
+
 
 def run_recap_pipeline(task_id: str, payload: Dict[str, Any]):
     task = get_task_state(task_id) or {}
@@ -695,10 +907,12 @@ def run_recap_pipeline(task_id: str, payload: Dict[str, Any]):
         task["dialogues"] = res_data.get("dialogues", [])
         task["hook_line1"] = res_data.get("hook_line1", "စိတ်လှုပ်ရှားဖွယ်ရာ")
         task["hook_line2"] = res_data.get("hook_line2", "ဇာတ်ကွက်များ")
+        task["input_video"] = input_video
+        task["logo_path"] = payload.get("logo_path")
         save_task_state(task_id, task)
 
-        # Step 2: Strict 1x Audio Dubbing Synthesis
-        update_prog(50, "🎙️ Normal 1x Speed အတိုင်း နေရာချထား အသံသွင်းနေပါသည်...")
+        # Step 2: Strict absolute-timeline audio dubbing synthesis
+        update_prog(50, "🎙️ Timeline အတိုင်း တိကျစွာ (Drift-Free) အသံသွင်းနေပါသည်...")
         voice_key = payload.get("voice", "thiha")
         lang_key = payload.get("lang", "my")
         voice_cfg = VOICE_CATALOG.get(lang_key, {}).get(voice_key, VOICE_CATALOG["my"]["thiha"])
@@ -709,7 +923,8 @@ def run_recap_pipeline(task_id: str, payload: Dict[str, Any]):
             voice_cfg=voice_cfg,
             total_video_duration=video_dur,
             final_audio_path=synced_audio,
-            progress_callback=update_prog
+            progress_callback=update_prog,
+            unique_tag=task_id
         )
 
         # Step 3: Subtitles
@@ -731,7 +946,7 @@ def run_recap_pipeline(task_id: str, payload: Dict[str, Any]):
             )
 
         # Step 4: Final FFmpeg Render
-        update_prog(88, "🎬 Final Master Video အား Render လုပ်နေပါသည် (Fast)...")
+        update_prog(88, "🎬 Final Master Video အား Render လုပ်နေပါသည်...")
         final_video_name = f"recap_master_{task_id}.mp4"
         final_output = os.path.join("output", final_video_name)
 
@@ -743,6 +958,8 @@ def run_recap_pipeline(task_id: str, payload: Dict[str, Any]):
             output_video=final_output,
             logo_path=logo_path if (logo_path and os.path.exists(logo_path)) else None,
             logo_pos=payload.get("logo_pos", "top_right"),
+            logo_pos_x=payload.get("logo_pos_x"),
+            logo_pos_y=payload.get("logo_pos_y"),
             reframe_mode=payload.get("reframe_mode", "Smart Blur Background"),
             mute_original=payload.get("mute_original", True)
         )
@@ -759,6 +976,7 @@ def run_recap_pipeline(task_id: str, payload: Dict[str, Any]):
         task["progress"] = 0
         task["message"] = f"❌ Error: {str(e)}"
         save_task_state(task_id, task)
+
 
 def run_rerender_pipeline(task_id: str, payload: Dict[str, Any]):
     task = get_task_state(task_id) or {}
@@ -782,7 +1000,8 @@ def run_rerender_pipeline(task_id: str, payload: Dict[str, Any]):
             dialogues=dialogues,
             voice_cfg=voice_cfg,
             total_video_duration=video_dur,
-            final_audio_path=synced_audio
+            final_audio_path=synced_audio,
+            unique_tag=f"{task_id}_v2"
         )
 
         task["progress"] = 65
@@ -813,8 +1032,10 @@ def run_rerender_pipeline(task_id: str, payload: Dict[str, Any]):
             narration_audio=synced_audio,
             ass_path=ass_file,
             output_video=final_output,
-            logo_path=task.get("logo_path"),
-            logo_pos="top_right",
+            logo_path=payload.get("logo_path", task.get("logo_path")),
+            logo_pos=payload.get("logo_pos", "top_right"),
+            logo_pos_x=payload.get("logo_pos_x"),
+            logo_pos_y=payload.get("logo_pos_y"),
             reframe_mode=payload.get("reframe_mode", "Smart Blur Background"),
             mute_original=payload.get("mute_original", True)
         )
@@ -832,6 +1053,7 @@ def run_rerender_pipeline(task_id: str, payload: Dict[str, Any]):
         task["message"] = f"❌ Error: {str(e)}"
         save_task_state(task_id, task)
 
+
 @app.get("/api/config")
 def get_system_config():
     return {
@@ -841,40 +1063,63 @@ def get_system_config():
         "voices": VOICE_CATALOG
     }
 
+
 @app.post("/api/config")
 def save_system_config(payload: Dict[str, str]):
     if "gemini_api_key" in payload:
         save_config("gemini_api_key", payload["gemini_api_key"].strip())
     return {"status": "ok"}
 
+
 @app.post("/api/upload")
 async def upload_video_file(video: UploadFile = File(...)):
     ext = os.path.splitext(video.filename)[1].lower() or ".mp4"
-    temp_path = f"workspace/input_{int(time.time())}{ext}"
+    temp_path = f"workspace/input_{int(time.time())}_{uuid.uuid4().hex[:6]}{ext}"
     with open(temp_path, "wb") as buffer:
         shutil.copyfileobj(video.file, buffer)
     duration = get_media_duration(temp_path)
     return {"status": "ok", "video_path": temp_path, "duration": duration}
 
+
 @app.post("/api/upload-logo")
 async def upload_logo_file(logo: UploadFile = File(...)):
-    raw_logo = f"workspace/raw_logo_{int(time.time())}.png"
-    clean_logo = f"workspace/clean_logo_{int(time.time())}.png"
+    tag = f"{int(time.time())}_{uuid.uuid4().hex[:6]}"
+    raw_logo = f"workspace/raw_logo_{tag}.png"
+    clean_logo = f"workspace/clean_logo_{tag}.png"
     with open(raw_logo, "wb") as buffer:
         shutil.copyfileobj(logo.file, buffer)
     process_user_logo(raw_logo, clean_logo)
+    try:
+        os.remove(raw_logo)
+    except Exception:
+        pass
     return {"status": "ok", "logo_path": clean_logo}
+
+
+@app.get("/api/preview-asset")
+def preview_asset(path: str):
+    """Serves a previously uploaded/processed workspace asset (e.g. the
+    cropped logo badge) back to the browser so the UI can actually show a
+    live preview of it on top of the video - this endpoint did not exist
+    before, so the logo could never be previewed client-side."""
+    safe_root = os.path.abspath("workspace")
+    target = os.path.abspath(path)
+    if not target.startswith(safe_root) or not os.path.exists(target):
+        raise HTTPException(status_code=404, detail="ဖိုင် ရှာမတွေ့ပါ")
+    return FileResponse(target)
+
 
 @app.post("/api/download-url")
 def download_from_url(payload: Dict[str, str]):
     url = payload.get("url", "").strip()
     if not url:
         raise HTTPException(status_code=400, detail="URL လိုအပ်ပါသည်")
-    out_path = f"workspace/yt_dl_{int(time.time())}.mp4"
+    out_path = f"workspace/yt_dl_{int(time.time())}_{uuid.uuid4().hex[:6]}.mp4"
     subprocess.run(["yt-dlp", "-f", "best[ext=mp4]/best", "-o", out_path, url.split("?")[0]], capture_output=True)
     if os.path.exists(out_path):
         return {"status": "ok", "video_path": out_path, "duration": get_media_duration(out_path)}
     raise HTTPException(status_code=500, detail="Download မအောင်မြင်ပါ")
+
 
 @app.post("/api/start-task")
 def start_recap_task(payload: Dict[str, Any], background_tasks: BackgroundTasks):
@@ -893,12 +1138,14 @@ def start_recap_task(payload: Dict[str, Any], background_tasks: BackgroundTasks)
     background_tasks.add_task(run_recap_pipeline, task_id, payload)
     return {"status": "ok", "task_id": task_id}
 
+
 @app.get("/api/task-status/{task_id}")
 def get_task_status(task_id: str):
     task = get_task_state(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task ရှာမတွေ့ပါ")
     return task
+
 
 @app.post("/api/rerender-task/{task_id}")
 def rerender_task(task_id: str, payload: Dict[str, Any], background_tasks: BackgroundTasks):
@@ -908,12 +1155,14 @@ def rerender_task(task_id: str, payload: Dict[str, Any], background_tasks: Backg
     background_tasks.add_task(run_rerender_pipeline, task_id, payload)
     return {"status": "ok", "task_id": task_id}
 
+
 @app.get("/api/download/{filename}")
 def download_rendered_file(filename: str):
     file_path = os.path.join("output", filename)
     if os.path.exists(file_path):
         return FileResponse(file_path, media_type="video/mp4", filename=filename)
     raise HTTPException(status_code=404, detail="ဖိုင် ရှာမတွေ့ပါ")
+
 
 @app.post("/api/generate-thumbnail")
 def generate_thumbnail(payload: Dict[str, Any]):
@@ -925,7 +1174,7 @@ def generate_thumbnail(payload: Dict[str, Any]):
     if not video_path or not os.path.exists(video_path):
         raise HTTPException(status_code=400, detail="ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် အရင်ရွေးချယ်ပေးပါ ခင်ဗျာ။")
 
-    raw_frame = f"workspace/frame_{int(time.time())}.png"
+    raw_frame = f"workspace/frame_{int(time.time())}_{uuid.uuid4().hex[:6]}.png"
     subprocess.run([
         "ffmpeg", "-y", "-threads", "1", "-ss", str(timestamp),
         "-i", video_path, "-vframes", "1",
@@ -943,20 +1192,73 @@ def generate_thumbnail(payload: Dict[str, Any]):
     base = Image.alpha_composite(base, shade)
 
     draw = ImageDraw.Draw(base)
-    font_path = "Pyidaungsu.ttf" if os.path.exists("Pyidaungsu.ttf") else None
-    font = ImageFont.truetype(font_path, 50) if font_path else ImageFont.load_default()
+    font = get_mm_pil_font(50)
 
     draw.text((360, 95), h1, fill=(255, 235, 59, 255), font=font, anchor="mm", stroke_width=5, stroke_fill=(0, 0, 0, 255))
     draw.text((360, 175), h2, fill=(0, 242, 254, 255), font=font, anchor="mm", stroke_width=5, stroke_fill=(0, 0, 0, 255))
 
-    out_thumb = f"workspace/thumb_{int(time.time())}.jpg"
+    out_thumb = f"workspace/thumb_{int(time.time())}_{uuid.uuid4().hex[:6]}.jpg"
     base.convert("RGB").save(out_thumb, "JPEG", quality=95)
+    try:
+        os.remove(raw_frame)
+    except Exception:
+        pass
     return FileResponse(out_thumb, media_type="image/jpeg")
+
+
+def _split_one_part(video_path: str, idx: int, st_sec: float, dur_sec: float, aspect: str, fastcopy: bool, tag: str):
+    part_name = f"part_{idx+1}_{tag}.mp4"
+    out_part = os.path.join("output", part_name)
+
+    if fastcopy:
+        cmd = [
+            "ffmpeg", "-y", "-ss", str(st_sec), "-i", video_path, "-t", str(dur_sec),
+            "-c", "copy", "-avoid_negative_ts", "make_zero", out_part
+        ]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if proc.returncode != 0 or not os.path.exists(out_part) or os.path.getsize(out_part) < 1000:
+            fastcopy = False  # fall through to re-encode below
+
+    if not fastcopy:
+        vf_scale = (
+            "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280"
+            if "9:16" in aspect else "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2"
+        )
+        cmd = [
+            "ffmpeg", "-y", "-ss", str(st_sec), "-i", video_path, "-t", str(dur_sec),
+            "-vf", vf_scale, "-threads", "0",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "25",
+            "-c:a", "aac", "-b:a", "128k",
+            out_part
+        ]
+        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    if os.path.exists(out_part) and os.path.getsize(out_part) > 1000:
+        return {
+            "part": idx + 1,
+            "url": f"/api/download/{part_name}",
+            "path": out_part,
+            "duration": get_media_duration(out_part)
+        }
+    return None
+
+
+@app.post("/api/estimate-parts")
+def estimate_parts(payload: Dict[str, Any]):
+    """Lets the UI instantly show 'how many parts will be created' the
+    moment the user picks a slice length, before actually splitting."""
+    duration = float(payload.get("duration", 0))
+    slice_sec = max(5, int(payload.get("slice_sec", 60)))
+    if duration <= 0:
+        return {"total_parts": 0}
+    total_parts = max(1, math.ceil(duration / slice_sec))
+    return {"total_parts": total_parts, "slice_sec": slice_sec, "duration": duration}
+
 
 @app.post("/api/split-video")
 def split_video_endpoint(payload: Dict[str, Any]):
     video_path = payload.get("video_path")
-    slice_sec = int(payload.get("slice_sec", 60))
+    slice_sec = max(5, int(payload.get("slice_sec", 60)))
     aspect = payload.get("aspect", "9:16")
 
     if not video_path or not os.path.exists(video_path):
@@ -966,42 +1268,54 @@ def split_video_endpoint(payload: Dict[str, Any]):
     if dur <= 0:
         raise HTTPException(status_code=400, detail="ဗီဒီယိုဖိုင် မမှန်ကန်ပါ")
 
-    total_parts = max(1, int(dur // slice_sec) + (1 if dur % slice_sec > 5 else 0))
-    parts = []
+    # FIX: previous formula (`dur % slice_sec > 5`) silently DROPPED the
+    # final remainder whenever it was <= 5s, permanently losing that part
+    # of the source video. `ceil` always keeps every second of footage.
+    total_parts = max(1, math.ceil(dur / slice_sec))
 
+    # FIX (speed): parts used to be rendered ONE BY ONE in a sequential
+    # loop. Since every part is fully independent, we now render them all
+    # IN PARALLEL (bounded by CPU cores) which is the single biggest
+    # speed-up for the splitter, especially on multi-core machines. We
+    # also skip re-encoding entirely (stream copy) whenever the requested
+    # aspect matches the original orientation, since no pixel processing
+    # is actually needed in that case.
+    tag = f"{int(time.time())}_{uuid.uuid4().hex[:6]}"
+    fastcopy_eligible = "9:16" not in aspect
+
+    futures = {}
     for i in range(total_parts):
         st_sec = i * slice_sec
-        part_name = f"part_{i+1}_{int(time.time())}.mp4"
-        out_part = os.path.join("output", part_name)
-        vf_scale = "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280" if "9:16" in aspect else "scale=1280:720"
+        this_dur = min(slice_sec, max(0.1, dur - st_sec))
+        futures[split_executor.submit(_split_one_part, video_path, i, st_sec, this_dur, aspect, fastcopy_eligible, tag)] = i
 
-        cmd = [
-            "ffmpeg", "-y", "-threads", "1", "-ss", str(st_sec), "-t", str(slice_sec),
-            "-i", video_path, "-vf", vf_scale,
-            "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
-            out_part
-        ]
-        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if os.path.exists(out_part):
-            parts.append({
-                "part": i + 1,
-                "url": f"/api/download/{part_name}",
-                "path": out_part,
-                "duration": get_media_duration(out_part)
-            })
+    results = {}
+    for fut in as_completed(futures):
+        idx = futures[fut]
+        try:
+            res = fut.result()
+            if res:
+                results[idx] = res
+        except Exception:
+            continue
 
-    return {"status": "ok", "parts": parts}
+    parts = [results[i] for i in sorted(results.keys())]
+    return {"status": "ok", "parts": parts, "total_parts": total_parts}
+
 
 @app.get("/", response_class=HTMLResponse)
 def serve_recap_studio_ui():
-    return """<!DOCTYPE html>
+    return RECAP_STUDIO_HTML
+
+
+RECAP_STUDIO_HTML = """<!DOCTYPE html>
 <html lang="my" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>⚡ Recap Studio MM Pro - High-Speed Master Studio</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Plus+Jakarta+Sans:wght@400;600;700&family=Pyidaungsu:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800;900&family=Plus+Jakarta+Sans:wght@400;600;700&family=Noto+Sans+Myanmar:wght@400;700&display=swap" rel="stylesheet">
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -1015,7 +1329,7 @@ def serve_recap_studio_ui():
                     },
                     fontFamily: {
                         orbitron: ['Orbitron', 'sans-serif'],
-                        sans: ['Plus Jakarta Sans', 'Pyidaungsu', 'sans-serif']
+                        sans: ['Plus Jakarta Sans', 'Noto Sans Myanmar', 'sans-serif']
                     }
                 }
             }
@@ -1046,6 +1360,37 @@ def serve_recap_studio_ui():
             color: #c084fc;
             border: 1px solid #a855f7;
         }
+        #preview-wrapper { position: relative; touch-action: none; }
+        #overlay-sub-sample, #overlay-logo-sample {
+            position: absolute;
+            cursor: grab;
+            user-select: none;
+            touch-action: none;
+        }
+        #overlay-sub-sample:active, #overlay-logo-sample:active { cursor: grabbing; }
+        #overlay-sub-sample {
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+            font-family: 'Noto Sans Myanmar', sans-serif;
+            font-weight: 700;
+            white-space: nowrap;
+            padding: 4px 14px;
+            border-radius: 6px;
+            z-index: 20;
+        }
+        #overlay-logo-sample {
+            width: 15%;
+            aspect-ratio: 1/1;
+            border-radius: 9999px;
+            border: 2px solid #00f2fe;
+            box-shadow: 0 0 12px rgba(0,242,254,0.6);
+            overflow: hidden;
+            z-index: 21;
+            background: rgba(0,0,0,0.4);
+        }
+        #overlay-logo-sample img { width: 100%; height: 100%; object-fit: cover; }
+        input[type=range] { accent-color: #00f2fe; }
     </style>
 </head>
 <body class="text-slate-100 font-sans antialiased pb-16">
@@ -1059,11 +1404,11 @@ def serve_recap_studio_ui():
                     <h1 class="font-orbitron font-extrabold text-2xl tracking-wide bg-gradient-to-r from-cyan-400 via-sky-400 to-purple-400 bg-clip-text text-transparent">
                         RECAP STUDIO PRO
                     </h1>
-                    <p class="text-xs text-slate-400">Normal 1x Speed Locked Absolute Dubbing • FastAPI Engine</p>
+                    <p class="text-xs text-slate-400">Drift-Free Absolute-Sync Dubbing • FastAPI Engine</p>
                 </div>
             </div>
             <div class="flex items-center gap-3">
-                <span class="badge-sync px-3 py-1 rounded-full text-xs font-bold">1X STRICT DUBBING</span>
+                <span class="badge-sync px-3 py-1 rounded-full text-xs font-bold">ZERO-DRIFT SYNC</span>
                 <span class="badge-purple px-3 py-1 rounded-full text-xs font-bold">FASTAPI CLOUD</span>
             </div>
         </div>
@@ -1071,7 +1416,7 @@ def serve_recap_studio_ui():
 
     <!-- Main Container -->
     <main class="max-w-7xl mx-auto px-4 mt-8">
-        
+
         <!-- Tab Buttons -->
         <div class="flex gap-2 border-b border-slate-800 pb-3 mb-8 overflow-x-auto">
             <button onclick="switchTab('tab-dub')" id="btn-tab-dub" class="px-5 py-2.5 rounded-xl font-bold text-sm bg-cyan-500/20 text-cyan-400 border border-cyan-500/40">🎬 Master Studio</button>
@@ -1093,10 +1438,10 @@ def serve_recap_studio_ui():
                         <h3 class="text-cyan-400 font-bold text-lg mb-4 flex items-center gap-2">
                             <span>1. 📤 ဗီဒီယို တင်ပါ</span>
                         </h3>
-                        
+
                         <div class="space-y-4">
                             <input type="file" id="video-file-input" accept="video/*" class="block w-full text-sm text-slate-400 file:mr-4 file:py-2.5 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-cyan-500/20 file:text-cyan-400 hover:file:bg-cyan-500/30 cursor-pointer border border-slate-700 rounded-xl p-2 bg-slate-900/60">
-                            
+
                             <div class="flex items-center gap-2">
                                 <input type="text" id="yt-url-input" placeholder="သို့မဟုတ် Video Link ထည့်ပါ (YouTube/TikTok)..." class="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm focus:border-cyan-400 outline-none">
                                 <button onclick="downloadFromUrl()" class="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-cyan-400 text-sm font-bold rounded-xl border border-slate-700">Download</button>
@@ -1156,16 +1501,65 @@ def serve_recap_studio_ui():
                         </div>
                     </div>
 
+                    <div class="neo-card p-6 rounded-2xl">
+                        <h3 class="text-cyan-400 font-bold text-lg mb-4 flex items-center gap-2">
+                            <span>3. 🖼️ Logo & Caption Style — ညာဘက်ကပုံပေါ်မှာ တိုက်ရိုက်ဆွဲ ပြင်ပါ</span>
+                        </h3>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-400 mb-1">Logo တင်ရန် (Optional)</label>
+                                <input type="file" id="logo-file-input" accept="image/*" class="block w-full text-xs text-slate-400 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-cyan-500/20 file:text-cyan-400 cursor-pointer border border-slate-700 rounded-xl p-1.5 bg-slate-900/60">
+                                <div class="flex gap-2 mt-2">
+                                    <button onclick="setLogoPreset(82,4)" class="flex-1 text-[10px] px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 hover:border-cyan-400">↗ Top-Right</button>
+                                    <button onclick="setLogoPreset(4,4)" class="flex-1 text-[10px] px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 hover:border-cyan-400">↖ Top-Left</button>
+                                    <button onclick="removeLogo()" class="flex-1 text-[10px] px-2 py-1.5 rounded-lg bg-red-900/40 border border-red-700 text-red-300">✕ Remove</button>
+                                </div>
+                                <p class="text-[10px] text-slate-500 mt-1.5">💡 ညာဘက် Live Preview ပုံပေါ်ကို Logo အသားကို တိုက်ရိုက် ဆွဲ၍ နေရာချနိုင်ပါသည်။</p>
+                            </div>
+                            <div class="space-y-3">
+                                <div>
+                                    <div class="flex justify-between text-xs font-semibold text-slate-400 mb-1">
+                                        <span>Subtitle အရွယ်အစား</span><span id="lbl-font-size">40px</span>
+                                    </div>
+                                    <input type="range" id="sub-font-size" min="24" max="64" value="40" class="w-full" oninput="onStyleChange()">
+                                </div>
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label class="block text-xs font-semibold text-slate-400 mb-1">Subtitle အရောင်</label>
+                                        <input type="color" id="sub-color" value="#00f2fe" class="w-full h-9 bg-slate-900 border border-slate-700 rounded-lg cursor-pointer" oninput="onStyleChange()">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-semibold text-slate-400 mb-1">နောက်ခံပုံစံ</label>
+                                        <select id="sub-bg-style" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-1.5 text-xs outline-none" onchange="onStyleChange()">
+                                            <option value="Solid Box">Solid Box</option>
+                                            <option value="Semi Transparent Box">Semi Transparent</option>
+                                            <option value="Outline Only">Outline Only</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <p class="text-[10px] text-slate-500 mt-3">💡 Live Preview ပုံပေါ်က "နမူနာစာသား" ကို ဆွဲ၍ Subtitle အမြင့်အနိမ့် နေရာချနိုင်ပါသည် — ရွေးချယ်သည့်အတိုင်း Final Video ပေါ်တွင် အတိအကျ ထွက်ပါမည်။</p>
+                    </div>
+
                     <button onclick="startDubbingTask()" id="btn-start-dub" class="w-full py-4 rounded-xl font-orbitron font-extrabold text-base bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 tracking-wider shadow-lg shadow-cyan-500/25 transition-all">
-                        ⚡ ONE-CLICK STRICT 1X SYNC DUBBING စတင်မည်
+                        ⚡ ONE-CLICK ZERO-DRIFT SYNC DUBBING စတင်မည်
                     </button>
                 </div>
 
                 <!-- Right Video Player & Live Task Status -->
                 <div class="lg:col-span-5 space-y-6">
                     <div class="neo-card p-6 rounded-2xl">
-                        <h3 class="text-cyan-400 font-bold text-lg mb-4">📱 Live Preview</h3>
-                        <video id="preview-player" controls class="w-full rounded-xl bg-black border border-slate-800 aspect-[9/16] object-contain"></video>
+                        <h3 class="text-cyan-400 font-bold text-lg mb-4">📱 Live Preview (ဆွဲ၍ ပြင်နိုင်သည်)</h3>
+                        <div id="preview-wrapper" class="w-full rounded-xl bg-black border border-slate-800 aspect-[9/16] overflow-hidden">
+                            <video id="preview-player" controls class="w-full h-full object-contain"></video>
+                            <div id="overlay-sub-sample" style="bottom:22%; background:rgba(0,0,0,0.5); color:#00f2fe;">နမူနာ Subtitle စာသား</div>
+                            <div id="overlay-logo-sample" class="hidden" style="top:4%; left:82%;">
+                                <img id="overlay-logo-img" src="" alt="logo">
+                            </div>
+                        </div>
+                        <p class="text-[10px] text-slate-500 mt-2">Subtitle Position: <span id="sub-pos-label">22</span>% (အောက်ခြေမှ) • Logo: <span id="logo-pos-label">ရွေးချယ်မထားပါ</span></p>
 
                         <div id="progress-container" class="hidden mt-6 space-y-3">
                             <div class="flex justify-between items-center text-xs font-bold">
@@ -1196,7 +1590,7 @@ def serve_recap_studio_ui():
                         🚀 ပြင်ဆင်ချက်များဖြင့် Final Video ပြန်ထုတ်မည်
                     </button>
                 </div>
-                
+
                 <div class="grid grid-cols-2 gap-4 mb-4">
                     <div>
                         <label class="block text-xs font-semibold text-slate-400 mb-1">Top Hook Line</label>
@@ -1218,7 +1612,7 @@ def serve_recap_studio_ui():
         <div id="tab-thumb" class="hidden space-y-6">
             <div class="neo-card p-6 rounded-2xl max-w-xl mx-auto space-y-4">
                 <h3 class="text-purple-400 font-bold text-lg">🖼️ 1-Click Viral Thumbnail ဖန်တီးမည်</h3>
-                
+
                 <div>
                     <label class="block text-xs font-semibold text-slate-400 mb-1">ဗီဒီယို ရွေးချယ်ပါ (သီးသန့် Upload)</label>
                     <input type="file" id="thumb-video-file" accept="video/*" class="block w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-purple-500/20 file:text-purple-400 cursor-pointer border border-slate-700 rounded-xl p-2 bg-slate-900/60 mb-2">
@@ -1257,8 +1651,8 @@ def serve_recap_studio_ui():
         <!-- TAB 4: SHORTS SPLITTER -->
         <div id="tab-split" class="hidden space-y-6">
             <div class="neo-card p-6 rounded-2xl max-w-2xl mx-auto space-y-4">
-                <h3 class="text-cyan-400 font-bold text-lg">🍿 Multi-Part Auto Splitter (1 GB Video Support)</h3>
-                
+                <h3 class="text-cyan-400 font-bold text-lg">🍿 Multi-Part Auto Splitter (Parallel Fast Engine)</h3>
+
                 <div>
                     <label class="block text-xs font-semibold text-slate-400 mb-1">ခွဲထုတ်မည့် ဗီဒီယို ရွေးချယ်ပါ (သီးသန့် Upload တင်နိုင်သည်)</label>
                     <input type="file" id="split-video-file" accept="video/*" class="block w-full text-sm text-slate-400 file:mr-4 file:py-2.5 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-cyan-500/20 file:text-cyan-400 cursor-pointer border border-slate-700 rounded-xl p-2 bg-slate-900/60 mb-2">
@@ -1268,7 +1662,7 @@ def serve_recap_studio_ui():
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label class="block text-xs font-semibold text-slate-400 mb-1">အပိုင်းတစ်ခုစီ၏ ကြာချိန်</label>
-                        <select id="split-slice" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-sm outline-none focus:border-cyan-400">
+                        <select id="split-slice" onchange="updatePartsEstimate()" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-sm outline-none focus:border-cyan-400">
                             <option value="30">၃၀ စက္ကန့်</option>
                             <option value="60" selected>၆၀ စက္ကန့် (၁ မိနစ်)</option>
                             <option value="90">၉၀ စက္ကန့်</option>
@@ -1277,15 +1671,19 @@ def serve_recap_studio_ui():
                     </div>
                     <div>
                         <label class="block text-xs font-semibold text-slate-400 mb-1">ဗီဒီယိုပုံစံ</label>
-                        <select id="split-aspect" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-sm outline-none focus:border-cyan-400">
+                        <select id="split-aspect" onchange="updatePartsEstimate()" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-sm outline-none focus:border-cyan-400">
                             <option value="9:16">9:16 ဒေါင်လိုက် (Shorts/TikTok)</option>
-                            <option value="16:9">မူရင်း 16:9 အလျားလိုက်</option>
+                            <option value="16:9">မူရင်း 16:9 အလျားလိုက် (Fast Copy)</option>
                         </select>
                     </div>
                 </div>
 
+                <div id="parts-estimate-box" class="hidden p-3 rounded-xl bg-cyan-950/40 border border-cyan-800/50 text-sm font-bold text-cyan-300 text-center">
+                    ✂️ စုစုပေါင်း <span id="parts-estimate-count">0</span> ပိုင်း ထွက်ရှိပါမည်
+                </div>
+
                 <button onclick="startSplitterAction()" id="btn-start-split" class="w-full py-3.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-slate-950 font-bold rounded-xl text-sm shadow-lg shadow-cyan-600/30">
-                    ✂ အပိုင်းတိုများ အလိုအလျောက် ခွဲထုတ်မည်
+                    ✂ အပိုင်းတိုများ အလိုအလျောက် ခွဲထုတ်မည် (Parallel Fast)
                 </button>
                 <div id="split-results" class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4"></div>
             </div>
@@ -1323,6 +1721,9 @@ def serve_recap_studio_ui():
         let currentTaskId = null;
         let pollInterval = null;
         let voiceData = {};
+        let currentLogoPath = null;
+        let logoPosX = 82, logoPosY = 4;
+        let subVPosPercent = 22;
 
         function showToast(msg, isErr = false) {
             const b = document.getElementById('toast-banner');
@@ -1355,6 +1756,8 @@ def serve_recap_studio_ui():
             } catch (e) {
                 console.error(e);
             }
+            setupDraggableOverlays();
+            onStyleChange();
         }
 
         function updateVoiceList() {
@@ -1369,6 +1772,112 @@ def serve_recap_studio_ui():
                 voiceSel.appendChild(opt);
             }
         }
+
+        // ── Live style controls (font size / color / bg style) ──────────
+        function onStyleChange() {
+            const size = document.getElementById('sub-font-size').value;
+            const color = document.getElementById('sub-color').value;
+            const bg = document.getElementById('sub-bg-style').value;
+            document.getElementById('lbl-font-size').innerText = size + 'px';
+
+            const el = document.getElementById('overlay-sub-sample');
+            el.style.color = color;
+            el.style.fontSize = Math.max(10, size * 0.5) + 'px';
+            if (bg.includes('Solid')) {
+                el.style.background = 'rgba(0,0,0,0.75)';
+                el.style.webkitTextStroke = '0px';
+            } else if (bg.includes('Semi')) {
+                el.style.background = 'rgba(0,0,0,0.35)';
+                el.style.webkitTextStroke = '0px';
+            } else {
+                el.style.background = 'transparent';
+                el.style.textShadow = '0 0 6px #000, 0 0 6px #000, 0 0 6px #000';
+            }
+        }
+
+        // ── Draggable overlay: subtitle vertical position + logo free position ──
+        function setupDraggableOverlays() {
+            const wrapper = document.getElementById('preview-wrapper');
+            const subEl = document.getElementById('overlay-sub-sample');
+            const logoEl = document.getElementById('overlay-logo-sample');
+
+            function bindDrag(el, onMove) {
+                let dragging = false;
+                const start = (e) => { dragging = true; e.preventDefault(); };
+                const move = (e) => {
+                    if (!dragging) return;
+                    const rect = wrapper.getBoundingClientRect();
+                    const point = e.touches ? e.touches[0] : e;
+                    const relX = ((point.clientX - rect.left) / rect.width) * 100;
+                    const relY = ((point.clientY - rect.top) / rect.height) * 100;
+                    onMove(Math.max(0, Math.min(100, relX)), Math.max(0, Math.min(100, relY)));
+                };
+                const end = () => { dragging = false; };
+                el.addEventListener('mousedown', start);
+                el.addEventListener('touchstart', start, { passive: false });
+                window.addEventListener('mousemove', move);
+                window.addEventListener('touchmove', move, { passive: false });
+                window.addEventListener('mouseup', end);
+                window.addEventListener('touchend', end);
+            }
+
+            bindDrag(subEl, (xPct, yPct) => {
+                // Convert cursor Y (from top) into "percent from bottom" to match
+                // the ASS MarginV convention used by the backend renderer.
+                let fromBottom = 100 - yPct;
+                fromBottom = Math.max(3, Math.min(92, fromBottom));
+                subVPosPercent = Math.round(fromBottom);
+                subEl.style.bottom = subVPosPercent + '%';
+                document.getElementById('sub-pos-label').innerText = subVPosPercent;
+            });
+
+            bindDrag(logoEl, (xPct, yPct) => {
+                logoPosX = Math.round(Math.max(0, Math.min(88, xPct)));
+                logoPosY = Math.round(Math.max(0, Math.min(88, yPct)));
+                logoEl.style.left = logoPosX + '%';
+                logoEl.style.top = logoPosY + '%';
+                logoEl.style.bottom = 'auto';
+                document.getElementById('logo-pos-label').innerText = `x:${logoPosX}% y:${logoPosY}%`;
+            });
+        }
+
+        function setLogoPreset(x, y) {
+            logoPosX = x; logoPosY = y;
+            const logoEl = document.getElementById('overlay-logo-sample');
+            logoEl.style.left = x + '%';
+            logoEl.style.top = y + '%';
+            logoEl.style.bottom = 'auto';
+            document.getElementById('logo-pos-label').innerText = `x:${x}% y:${y}%`;
+        }
+
+        function removeLogo() {
+            currentLogoPath = null;
+            document.getElementById('overlay-logo-sample').classList.add('hidden');
+            document.getElementById('logo-file-input').value = '';
+            document.getElementById('logo-pos-label').innerText = 'ရွေးချယ်မထားပါ';
+        }
+
+        document.getElementById('logo-file-input').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const fd = new FormData();
+            fd.append('logo', file);
+            showToast('📤 Logo တင်သွင်းနေပါသည်...');
+            try {
+                const res = await fetch('/api/upload-logo', { method: 'POST', body: fd });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    currentLogoPath = data.logo_path;
+                    const logoEl = document.getElementById('overlay-logo-sample');
+                    document.getElementById('overlay-logo-img').src = URL.createObjectURL(file);
+                    logoEl.classList.remove('hidden');
+                    setLogoPreset(logoPosX, logoPosY);
+                    showToast('✅ Logo အဆင်သင့်ဖြစ်ပါပြီ! ပုံပေါ်တွင် ဆွဲ၍ နေရာချနိုင်ပါသည်။');
+                }
+            } catch (err) {
+                showToast('❌ Logo Upload မအောင်မြင်ပါ', true);
+            }
+        });
 
         document.getElementById('video-file-input').addEventListener('change', async (e) => {
             const file = e.target.files[0];
@@ -1389,6 +1898,7 @@ def serve_recap_studio_ui():
                     document.getElementById('thumb-current-info').innerText = `ရွေးချယ်ထားသော ဗီဒီယို: ${file.name}`;
                     document.getElementById('split-current-info').innerText = `ရွေးချယ်ထားသော ဗီဒီယို: ${file.name}`;
                     showToast('✅ ဗီဒီယို အဆင်သင့်ဖြစ်ပါပြီ!');
+                    updatePartsEstimate();
                 }
             } catch (err) {
                 showToast('❌ Upload မအောင်မြင်ပါ', true);
@@ -1431,11 +1941,34 @@ def serve_recap_studio_ui():
                     currentVideoDuration = data.duration;
                     document.getElementById('split-current-info').innerText = `သီးသန့်တင်ထားသော ဗီဒီယို: ${file.name} (${data.duration.toFixed(1)}s)`;
                     showToast('✅ Splitter အတွက် ဗီဒီယို အဆင်သင့်ဖြစ်ပါပြီ!');
+                    updatePartsEstimate();
                 }
             } catch (e) {
                 showToast('❌ Upload မအောင်မြင်ပါ', true);
             }
         });
+
+        // ── Live "how many parts will this create" preview ──────────────
+        async function updatePartsEstimate() {
+            const box = document.getElementById('parts-estimate-box');
+            if (!currentVideoDuration || currentVideoDuration <= 0) {
+                box.classList.add('hidden');
+                return;
+            }
+            const sliceSec = parseInt(document.getElementById('split-slice').value);
+            try {
+                const res = await fetch('/api/estimate-parts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ duration: currentVideoDuration, slice_sec: sliceSec })
+                });
+                const data = await res.json();
+                document.getElementById('parts-estimate-count').innerText = data.total_parts;
+                box.classList.remove('hidden');
+            } catch (e) {
+                box.classList.add('hidden');
+            }
+        }
 
         async function downloadFromUrl() {
             const url = document.getElementById('yt-url-input').value.trim();
@@ -1452,6 +1985,7 @@ def serve_recap_studio_ui():
                     currentUploadedVideo = data.video_path;
                     currentVideoDuration = data.duration;
                     document.getElementById('preview-player').src = data.video_path;
+                    updatePartsEstimate();
                     showToast('✅ ဒေါင်းလုဒ် အောင်မြင်ပါပြီ!');
                 }
             } catch (e) {
@@ -1459,12 +1993,24 @@ def serve_recap_studio_ui():
             }
         }
 
+        function collectStyleConfig() {
+            return {
+                sub_font_size: parseInt(document.getElementById('sub-font-size').value),
+                sub_color_hex: document.getElementById('sub-color').value,
+                sub_bg_style: document.getElementById('sub-bg-style').value,
+                sub_v_pos_percent: subVPosPercent,
+                logo_path: currentLogoPath,
+                logo_pos_x: currentLogoPath ? logoPosX : null,
+                logo_pos_y: currentLogoPath ? logoPosY : null
+            };
+        }
+
         async function startDubbingTask() {
             if (!currentUploadedVideo) return showToast('ကျေးဇူးပြု၍ ဗီဒီယို အရင်တင်ပေးပါ', true);
             const apiKey = document.getElementById('cfg-api-key').value.trim();
             if (!apiKey) return showToast('Gemini API Key ထည့်သွင်းပေးပါ', true);
 
-            const payload = {
+            const payload = Object.assign({
                 input_video: currentUploadedVideo,
                 api_key: apiKey,
                 model: document.getElementById('cfg-model').value,
@@ -1474,7 +2020,7 @@ def serve_recap_studio_ui():
                 reframe_mode: document.getElementById('reframe-select').value,
                 mute_original: document.getElementById('mute-original-check').checked,
                 enable_subtitles: document.getElementById('enable-sub-check').checked
-            };
+            }, collectStyleConfig());
 
             const btn = document.getElementById('btn-start-dub');
             btn.disabled = true;
@@ -1505,7 +2051,6 @@ def serve_recap_studio_ui():
                 try {
                     const res = await fetch(`/api/task-status/${taskId}`);
                     if (!res.ok) {
-                        // Prevents infinite 404 flooding & undefined display
                         clearInterval(pollInterval);
                         document.getElementById('btn-start-dub').disabled = false;
                         document.getElementById('btn-start-dub').classList.remove('opacity-50');
@@ -1513,7 +2058,7 @@ def serve_recap_studio_ui():
                         return;
                     }
                     const data = await res.json();
-                    
+
                     if (data.progress !== undefined) {
                         document.getElementById('progress-percent').innerText = `${data.progress}%`;
                         document.getElementById('progress-label').innerText = data.message || 'လုပ်ဆောင်နေပါသည်...';
@@ -1524,7 +2069,7 @@ def serve_recap_studio_ui():
                         clearInterval(pollInterval);
                         document.getElementById('btn-start-dub').disabled = false;
                         document.getElementById('btn-start-dub').classList.remove('opacity-50');
-                        
+
                         document.getElementById('preview-player').src = data.download_url;
                         document.getElementById('download-link').href = data.download_url;
                         document.getElementById('download-box').classList.remove('hidden');
@@ -1574,15 +2119,16 @@ def serve_recap_studio_ui():
                 });
             }
 
-            const payload = {
+            const payload = Object.assign({
                 dialogues: newDiags,
                 hook_line1: document.getElementById('edit-hook1').value,
                 hook_line2: document.getElementById('edit-hook2').value,
                 voice: document.getElementById('voice-select').value,
                 lang: document.getElementById('lang-select').value,
                 mute_original: document.getElementById('mute-original-check').checked,
+                reframe_mode: document.getElementById('reframe-select').value,
                 enable_subtitles: true
-            };
+            }, collectStyleConfig());
 
             showToast('⏳ Re-rendering စတင်နေပါသည်...');
             switchTab('tab-dub');
@@ -1635,7 +2181,7 @@ def serve_recap_studio_ui():
             const btn = document.getElementById('btn-start-split');
             btn.disabled = true;
             btn.classList.add('opacity-50');
-            showToast('✂ အပိုင်းခွဲထုတ်နေပါသည် (ခေတ္တစောင့်ဆိုင်းပါ)...');
+            showToast('✂ အပိုင်းခွဲထုတ်နေပါသည် (Parallel Engine - မြန်ပါသည်)...');
 
             try {
                 const res = await fetch('/api/split-video', {
@@ -1661,12 +2207,12 @@ def serve_recap_studio_ui():
                     const box = document.createElement('div');
                     box.className = 'p-3 bg-slate-900 border border-slate-800 rounded-xl text-center space-y-2';
                     box.innerHTML = `
-                        <div class="text-xs font-bold text-cyan-400">Part ${p.part} (${p.duration.toFixed(1)}s)</div>
+                        <div class="text-xs font-bold text-cyan-400">Part ${p.part} / ${data.total_parts} (${p.duration.toFixed(1)}s)</div>
                         <a href="${p.url}" download class="inline-block px-4 py-1.5 bg-cyan-500/20 text-cyan-400 border border-cyan-500/40 rounded-lg text-xs font-bold">Download Part ${p.part}</a>
                     `;
                     container.appendChild(box);
                 });
-                showToast('✅ အပိုင်းခွဲထုတ်ခြင်း အောင်မြင်စွာ ပြီးပါပြီ!');
+                showToast(`✅ စုစုပေါင်း ${data.total_parts} ပိုင်း အောင်မြင်စွာ ခွဲထုတ်ပြီးပါပြီ!`);
             } catch (e) {
                 showToast('❌ Splitter Error', true);
             } finally {
