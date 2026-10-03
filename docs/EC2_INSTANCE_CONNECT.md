@@ -12,7 +12,7 @@
 EC2 Instance Connect terminal (အမည်းရောင် မျက်နှာပြင်) ထဲမှာ ဒါကို copy ကူးပြီး Enter ခေါက်ပါ:
 
 ```bash
-curl -fsSL -o /tmp/recap_install.sh https://raw.githubusercontent.com/htinkyawzaw2017-maker/recap_studio_mm/arena/01a10175-recap-studio-mm/deploy/ec2_install.sh && sudo bash /tmp/recap_install.sh
+cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10175-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
 ```
 
 ဒါပါပဲ။ Script က အောက်ပါအလုပ်အားလုံးကို လုပ်ပေးပါမည်:
@@ -26,19 +26,16 @@ curl -fsSL -o /tmp/recap_install.sh https://raw.githubusercontent.com/htinkyawza
 7. **systemd service** တည်ဆောက်သည် (reboot ဖြစ်လည်း အလိုအလျောက် ပြန်တက် — tmux မလိုတော့ပါ)
 8. Health check လုပ်ပြီး အောင်မြင်မှုကို ပြပေးသည်
 
-**ဖြစ်နိုင်သည့် အခက်အခဲ:** အချို့ network များတွင် `raw.githubusercontent.com` ပိတ်ထားတတ်သည်။
-အဲဒီအခါ အောက်က နည်းလမ်း (၃) ကြောင်းကို သုံးပါ 👇
-
 ---
 
-## 🅱️ backup နည်းလမ်း (raw URL မရပါက)
+## 🅱️ backup နည်းလမ်း — `raw.githubusercontent.com` ဖြင့် (script ဖိုင်တစ်ခုတည်း)
 
 ```bash
-cd /tmp
-curl -fsSL -o recap.tar.gz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10175-recap-studio-mm
-tar xzf recap.tar.gz
-sudo bash recap_studio_mm-*/deploy/ec2_install.sh
+curl -fsSL -o /tmp/recap_install.sh https://raw.githubusercontent.com/htinkyawzaw2017-maker/recap_studio_mm/arena/01a10175-recap-studio-mm/deploy/ec2_install.sh && sudo bash /tmp/recap_install.sh
 ```
+
+> အချို့ network / ISP များတွင် `raw.githubusercontent.com` ကို ပိတ်ထားတတ်သည် —
+> အဲဒီအခါ အပေါ်က **အဓိက one-liner** (codeload) ကို သုံးပါ။
 
 ---
 
@@ -133,7 +130,7 @@ sudo bash /opt/recap-studio/deploy/ec2_install.sh
 သို့မဟုတ် (code ကို GitHub မှ အသစ် ပြန်လိုချင်လျှင်):
 
 ```bash
-curl -fsSL -o /tmp/recap_install.sh https://raw.githubusercontent.com/htinkyawzaw2017-maker/recap_studio_mm/arena/01a10175-recap-studio-mm/deploy/ec2_install.sh && sudo bash /tmp/recap_install.sh
+cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10175-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
 ```
 
 > 💡 အရေးကြီး — **`main` branch ကို merge လုပ်လိုက်ပါက** `RECAP_BRANCH=main` ဖြင့် run နိုင်သည်:

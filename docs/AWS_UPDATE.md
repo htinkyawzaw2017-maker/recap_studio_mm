@@ -19,7 +19,7 @@ origin/arena/01a10175-recap-studio-mm  7b1c264   ← fix အားလုံး (
 | # | လုပ်ရမည့်အရာ | ဘယ်မှာ |
 |---|---|---|
 | 1 | **PR #1 ကို merge** (သို့) branch/tarball ကို deploy target အဖြစ် သတ်မှတ် | GitHub |
-| 2 | **Image ပြန် build + push** → service ကို force new deployment | AWS (ECR/ECS) |
+| 2 | **deploy**: EC2 ဖြစ်ပါက one-liner (§1b) · ECS/ECR ဖြစ်ပါက image ပြန် build + push → force new deployment | AWS |
 | 3 | **Volume + env var စစ်** → `verify_deployment.py` ဖြင့် အတည်ပြု | AWS / laptop |
 
 ---
@@ -56,6 +56,17 @@ scp recap.tar.gz ec2-user@YOUR_EC2:/tmp/
 ssh ec2-user@YOUR_EC2
 sudo mkdir -p /opt/recap && sudo tar xzf /tmp/recap.tar.gz -C /opt/recap --strip-components=1
 ```
+
+---
+
+## 1b. EC2 (Instance Connect / Docker မသုံး) ဖြစ်ပါက — command တစ်ကြောင်းတည်း
+
+```bash
+cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10175-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
+```
+
+Script က code အသစ်ကို ရယူပြီး `/opt/recap-studio` ထဲ တပ်ဆင်၊ systemd service အဖြစ်
+(port 80) run ပေးပါမည် — အသေးစိတ်: **[EC2_INSTANCE_CONNECT.md](EC2_INSTANCE_CONNECT.md)**
 
 ---
 

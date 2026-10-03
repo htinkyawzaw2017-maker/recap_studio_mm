@@ -113,7 +113,7 @@ ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → M
 
 * **AWS EC2 (Instance Connect, port 80) — command တစ်ကြောင်းတည်း** — [docs/EC2_INSTANCE_CONNECT.md](docs/EC2_INSTANCE_CONNECT.md)
   ```bash
-  curl -fsSL -o /tmp/recap_install.sh https://raw.githubusercontent.com/htinkyawzaw2017-maker/recap_studio_mm/arena/01a10175-recap-studio-mm/deploy/ec2_install.sh && sudo bash /tmp/recap_install.sh
+  cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10175-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
   ```
 * **AWS (ECS Fargate + ALB + EFS)** — [docs/AWS_DEPLOY.md](docs/AWS_DEPLOY.md)
 * **AWS ပေါ်ရှိ deployment ကို update လုပ်ရန်** — [docs/AWS_UPDATE.md](docs/AWS_UPDATE.md)
