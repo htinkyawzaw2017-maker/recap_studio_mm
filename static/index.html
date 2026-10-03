@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="my">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Recap Studio MM — AI Recap · Dubbing · Subtitles</title>
+<link rel="stylesheet" href="/static/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">🎬</div>
+    <div>
+      <h1>RECAP STUDIO MM</h1>
+      <p>AI Recap · Zero-Drift Dubbing · Myanmar Subtitles</p>
+    </div>
+  </div>
+  <div class="topbar-spacer"></div>
+  <div class="chips" id="status-chips">
+    <span class="chip muted" id="chip-engine"><span class="spinner"></span> Engine စစ်ဆေးနေသည်…</span>
+  </div>
+</header>
+
+<nav class="nav" id="tabs">
+  <button data-tab="studio" class="active">🎬 Studio</button>
+  <button data-tab="timeline">⏱️ Timeline Editor</button>
+  <button data-tab="thumb">🖼️ Thumbnail</button>
+  <button data-tab="split">🍿 Shorts Splitter</button>
+  <button data-tab="jobs">📁 Jobs &amp; Files</button>
+  <button data-tab="settings">⚙️ Settings</button>
+</nav>
+
+<main>
+  <!-- ══════════════════════ STUDIO ══════════════════════ -->
+  <section id="tab-studio" class="tab-panel">
+    <div class="grid studio">
+      <div>
+        <!-- STEP 1 -->
+        <div class="card">
+          <div class="card-head">
+            <span class="step">1</span>
+            <h3>ဗီဒီယို ထည့်သွင်းပါ</h3>
+            <span class="done-badge" id="step1-badge"></span>
+          </div>
+
+          <div class="dropzone" id="dropzone">
+            <div class="dz-icon">🎞️</div>
+            <div class="dz-title">ဗီဒီယိုဖိုင် ဒီနေရာကို ဆွဲထည့်ပါ သို့မဟုတ် နှိပ်၍ ရွေးပါ</div>
+            <div class="dz-hint">MP4 · MOV · MKV · WEBM — ကြီးသောဖိုင်များကို အပိုင်းလိုက် (resumable) တင်၍ progress ပြပါမည်</div>
+          </div>
+          <input type="file" id="video-file" accept="video/*" class="hidden-input">
+
+          <div id="video-upload-status" class="upload-status">
+            <div class="meter" id="video-meter"><i id="video-meter-fill"></i></div>
+            <div class="upload-meta">
+              <span id="video-upload-text">တင်နေသည်…</span>
+              <span><button class="btn small ghost" id="btn-cancel-upload">ရပ်မည်</button></span>
+            </div>
+          </div>
+
+          <div class="file-pill hidden" id="video-pill">
+            <img class="thumb" id="video-pill-thumb" alt="">
+            <div class="meta">
+              <b id="video-pill-name">—</b>
+              <span id="video-pill-info">—</span>
+            </div>
+            <button class="btn small danger" id="btn-clear-video">✕</button>
+          </div>
+
+          <div class="divider"></div>
+          <label class="field">
+            <span>သို့မဟုတ် Video Link (YouTube / TikTok / Facebook) မှ ဆွဲချမည်</span>
+            <div class="btn-row" style="gap:8px;flex-wrap:nowrap">
+              <input type="text" id="url-input" placeholder="https://www.youtube.com/watch?v=...">
+              <button class="btn small" id="btn-import-url">⬇ Import</button>
+            </div>
+          </label>
+          <p class="help" id="url-help">YouTube မှ bot စစ်ဆေးမှု ရှိပါက server တွင် <span class="kbd">RECAP_YTDLP_COOKIES</span> သတ်မှတ်ပါ။</p>
+        </div>
+
+        <!-- STEP 2 -->
+        <div class="card">
+          <div class="card-head">
+            <span class="step violet">2</span>
+            <h3>အသံနှင့် Recap ပုံစံ</h3>
+          </div>
+          <div class="row c2">
+            <label class="field">
+              <span>ဘာသာစကား</span>
+              <select id="lang">
+                <option value="my">🇲🇲 မြန်မာ (Burmese)</option>
+                <option value="en">🇬🇧 English</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Narrator အသံ</span>
+              <select id="voice"></select>
+            </label>
+          </div>
+          <div class="row c2">
+            <label class="field">
+              <span>Recap အမျိုးအစား</span>
+              <select id="mode">
+                <option value="auto">🔍 Auto-Detect</option>
+                <option value="movie">🎬 Movie / Drama</option>
+                <option value="experiment">🔬 Science / Review</option>
+                <option value="craft">🛠️ DIY / Cooking</option>
+                <option value="news">📰 News / Documentary</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>အသံသွင်းပုံစံ (Dubbing Mode)</span>
+              <select id="fill-mode">
+                <option value="continuous">🗣️ အစအဆုံး စကားပြော (Recap အတွက် အကြံပြု)</option>
+                <option value="dialogue">🎭 စကားပြောခန်း ရှိသည့်အချိန်သာ (Dialogue Dub)</option>
+              </select>
+            </label>
+          </div>
+          <div class="row c2">
+            <label class="field">
+              <span>AI Model</span>
+              <select id="model"></select>
+            </label>
+            <label class="field">
+              <span>Output Quality</span>
+              <select id="quality">
+                <option value="fast">⚡ မြန် (720p, veryfast)</option>
+                <option value="balanced" selected>⚖️ မျှတ (720p, faster)</option>
+                <option value="quality">💎 အရည်အသွေး (1080p, medium)</option>
+              </select>
+            </label>
+          </div>
+          <label class="check">
+            <input type="checkbox" id="mute-original" checked>
+            <span><b>မူရင်းအသံ ပိတ်မည်</b> — ပိတ်ထားလျှင် AI အသံသာ ကြားရပါမည်</span>
+          </label>
+          <div class="row c2 hidden" id="original-audio-row">
+            <label class="field">
+              <span>မူရင်းအသံ အကျယ် (background)</span>
+              <input type="range" id="original-level" min="0" max="40" value="12">
+            </label>
+            <label class="field">
+              <span>AI အသံ အကျယ်</span>
+              <input type="range" id="narration-gain" min="60" max="200" value="130">
+            </label>
+          </div>
+        </div>
+
+        <!-- STEP 3 -->
+        <div class="card">
+          <div class="card-head">
+            <span class="step">3</span>
+            <h3>စာတန်းထိုး · Logo · ဖော်မတ်</h3>
+          </div>
+          <div class="row c2">
+            <div>
+              <label class="check"><input type="checkbox" id="enable-subs" checked>
+                <span><b>စာတန်းထိုး Burn-in</b> — CapCut စတိုင် pop-up စာတန်း</span></label>
+              <label class="field"><span>စာလုံးအရွယ် — <b id="lbl-font">42</b>px</span>
+                <input type="range" id="sub-font" min="24" max="72" value="42">
+              </label>
+              <div class="row c2">
+                <label class="field"><span>စာလုံးအရောင်</span>
+                  <input type="color" id="sub-color" value="#00f2fe"></label>
+                <label class="field"><span>နောက်ခံပုံစံ</span>
+                  <select id="sub-bg">
+                    <option value="Solid Box">Solid Box</option>
+                    <option value="Semi Transparent Box">Semi Transparent</option>
+                    <option value="Outline Only">Outline Only</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+            <div>
+              <label class="field"><span>Logo တင်ရန် (Optional — Preview ပေါ်တွင် ဆွဲ၍ နေရာချနိုင်သည်)</span>
+                <input type="file" id="logo-file" accept="image/*">
+              </label>
+              <div class="btn-row" id="logo-presets">
+                <button class="btn small" data-logo-pos="82,4">↗ Top-Right</button>
+                <button class="btn small" data-logo-pos="4,4">↖ Top-Left</button>
+                <button class="btn small" data-logo-pos="82,82">↘ Bottom-Right</button>
+                <button class="btn small danger" id="btn-remove-logo">✕ Logo ဖျက်မည်</button>
+              </div>
+              <div class="row c2" style="margin-top:12px">
+                <label class="field"><span>Output ဖော်မတ်</span>
+                  <select id="aspect">
+                    <option value="9:16">9:16 ဒေါင်လိုက် (Shorts/TikTok)</option>
+                    <option value="1:1">1:1 စတုရန်း (Feed)</option>
+                    <option value="16:9">16:9 အလျားလိုက် (YouTube)</option>
+                    <option value="original">မူရင်း အတိုင်း</option>
+                  </select>
+                </label>
+                <label class="field"><span>Reframe</span>
+                  <select id="reframe">
+                    <option value="Smart Blur Background">Smart Blur Background</option>
+                    <option value="Center Crop">Center Crop</option>
+                    <option value="Original (no reframe)">မပြောင်းလဲ (အလျင်မြန်ဆုံး)</option>
+                  </select>
+                </label>
+              </div>
+              <div class="row c2">
+                <label class="field"><span>Hook စာသား (အပေါ်ထိပ်)</span>
+                  <input type="text" id="hook1" placeholder="စိတ်ဝင်စားဖွယ် အစပိုင်း"></label>
+                <label class="field"><span>Hook စာသား ၂</span>
+                  <input type="text" id="hook2" placeholder="အဆုံးအထိ ကြည့်ပါ"></label>
+              </div>
+              <label class="field"><span>Hook ပြသမည့် ကြာချိန်</span>
+                <select id="hook-seconds">
+                  <option value="0" selected>တစ်ဗီဒီယိုလုံး (persistent)</option>
+                  <option value="8">၈ စက္ကန့်</option>
+                  <option value="15">၁၅ စက္ကန့်</option>
+                  <option value="30">၃၀ စက္ကန့်</option>
+                </select>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <button class="btn primary block" id="btn-start" style="padding:16px;font-size:15px">
+          ⚡ ONE-CLICK RECAP + DUBBING စတင်မည်
+        </button>
+        <p class="help" style="text-align:center">AI analysis → အသံသွင်း → စာတန်းထိုး → Render — အားလုံး အလိုအလျောက်။ ရပ်လိုပါက Job panel မှ ရပ်နိုင်သည်။</p>
+      </div>
+
+      <!-- RIGHT COLUMN -->
+      <div class="grid" style="gap:18px">
+        <div class="card sticky">
+          <div class="card-head" style="margin-bottom:10px">
+            <h3>📱 Live Preview</h3>
+            <span class="sub" style="margin-left:auto">ဆွဲ၍ နေရာချပါ</span>
+          </div>
+          <div class="preview-wrap" id="preview-wrap">
+            <video id="preview-video" controls playsinline preload="metadata"></video>
+            <div class="overlay-hook" id="overlay-hook"></div>
+            <div class="overlay-sub" id="overlay-sub">နမူနာ စာတန်းထိုး</div>
+            <div class="overlay-logo hidden" id="overlay-logo"><img id="overlay-logo-img" alt="logo"></div>
+          </div>
+          <p class="help" id="position-help">Subtitle အနိမ့်: <b id="lbl-sub-pos">22</b>% · Logo: <b id="lbl-logo-pos">မထည့်ရသေးပါ</b></p>
+        </div>
+
+        <div class="card" id="job-card">
+          <div class="card-head" style="margin-bottom:10px">
+            <h3>🚀 Job Progress</h3>
+            <span class="chip muted" id="job-status-chip" style="margin-left:auto">idle</span>
+          </div>
+          <div id="job-idle-msg" class="empty">ဗီဒီယိုတင်ပြီး <b>One-Click</b> နှိပ်လိုက်ပါ။</div>
+
+          <div id="job-live" class="hidden">
+            <div class="progress-head">
+              <span id="job-message">စတင်နေပါသည်…</span>
+              <b id="job-percent">0%</b>
+            </div>
+            <div class="meter" style="margin-top:8px"><i id="job-meter-fill"></i></div>
+            <p class="help" id="job-eta">—</p>
+            <div class="stages" id="job-stages"></div>
+            <div class="log-box" id="job-logs"></div>
+            <div class="btn-row" style="margin-top:12px">
+              <button class="btn small danger" id="btn-cancel-job">⏹ ရပ်မည်</button>
+              <button class="btn small ghost" id="btn-goto-timeline">⏱️ Timeline ပြင်</button>
+            </div>
+          </div>
+
+          <div id="job-result" class="hidden">
+            <div class="divider"></div>
+            <div class="stat-grid" id="job-stats"></div>
+            <div class="btn-row" style="margin-top:12px">
+              <a class="btn success" id="btn-download" download>📥 Master MP4</a>
+              <a class="btn small ghost hidden" id="btn-srt" download>SRT</a>
+              <a class="btn small ghost hidden" id="btn-ass" download>ASS</a>
+              <a class="btn small ghost hidden" id="btn-mp3" download>Narration MP3</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="coverage-card" style="display:none">
+          <div class="card-head" style="margin-bottom:8px"><h3>📊 Dubbing Coverage</h3></div>
+          <div class="stat-grid" id="coverage-stats"></div>
+          <div class="timeline-strip" id="coverage-strip" style="margin-top:12px"></div>
+          <p class="help">လိုင်းများကို ကိုယ်စားပြုသည် — လစ်လပ်နေသော နေရာများကို <span class="tag">Timeline Editor</span> မှ ဖြည့်နိုင်ပါသည်။</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════ TIMELINE ══════════════════════ -->
+  <section id="tab-timeline" class="tab-panel hidden">
+    <div class="card">
+      <div class="card-head">
+        <h3>⏱️ Timeline Editor</h3>
+        <div class="btn-row" style="margin-left:auto">
+          <button class="btn small ghost" id="btn-tl-fix">🩹 Auto-Fix Overlaps</button>
+          <button class="btn small ghost" id="btn-tl-add">➕ လိုင်းထည့်</button>
+          <button class="btn small" id="btn-tl-preview">▶️ Preview ဖွင့်</button>
+          <button class="btn small primary" id="btn-tl-render">🚀 ပြန် Render</button>
+        </div>
+      </div>
+      <div class="row c2">
+        <label class="field"><span>Hook Line 1</span><input type="text" id="tl-hook1"></label>
+        <label class="field"><span>Hook Line 2</span><input type="text" id="tl-hook2"></label>
+      </div>
+      <div class="timeline-strip" id="tl-strip" style="margin:12px 0"></div>
+      <p class="help" id="tl-summary">Timeline မရှိသေးပါ — Job တစ်ခု ပြီးဆုံးပါက ဒီနေရာတွင် ပေါ်လာပါမည်။</p>
+      <div class="scroll-y" id="tl-list" style="margin-top:12px"></div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════ THUMBNAIL ══════════════════════ -->
+  <section id="tab-thumb" class="tab-panel hidden">
+    <div class="grid two">
+      <div class="card">
+        <div class="card-head"><h3>🖼️ Viral Thumbnail Generator</h3></div>
+        <p class="sub">Studio တွင် တင်ထားသော ဗီဒီယိုကို အသုံးပြုပါမည် (မရှိပါက ဒီနေရာတွင် တင်နိုင်သည်)။</p>
+        <label class="field" style="margin-top:12px"><span>ဗီဒီယိုဖိုင် (Optional)</span>
+          <input type="file" id="thumb-file" accept="video/*"></label>
+        <div class="row c2">
+          <label class="field"><span>ဖမ်းယူမည့် စက္ကန့်</span>
+            <input type="number" id="thumb-sec" value="2.5" step="0.5" min="0"></label>
+          <label class="field"><span>စတိုင်</span>
+            <select id="thumb-style"><option value="bold">Bold (Yellow/Cyan)</option></select></label>
+        </div>
+        <label class="field"><span>အပေါ် Hook စာသား</span>
+          <input type="text" id="thumb-h1" value="စိတ်ဝင်စားဖွယ်ရာ"></label>
+        <label class="field"><span>အောက် Hook စာသား</span>
+          <input type="text" id="thumb-h2" value="ဇာတ်ကွက်များ"></label>
+        <button class="btn primary block" id="btn-thumb">✨ Thumbnail ဖန်တီးမည်</button>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Preview</h3></div>
+        <div id="thumb-empty" class="empty">Thumbnail ဖန်တီးပြီးပါက ဒီနေရာတွင် ပေါ်လာပါမည်။</div>
+        <div id="thumb-result" class="hidden" style="text-align:center">
+          <img id="thumb-img" style="width:min(340px,90%);border-radius:14px;border:1px solid var(--line)" alt="thumbnail">
+          <div class="btn-row" style="justify-content:center;margin-top:12px">
+            <a class="btn success small" id="thumb-dl" download="thumbnail.jpg">📥 ဒေါင်းလုဒ်</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════ SPLITTER ══════════════════════ -->
+  <section id="tab-split" class="tab-panel hidden">
+    <div class="card">
+      <div class="card-head"><h3>🍿 Shorts Splitter — Parallel Fast Engine</h3></div>
+      <div class="row c3">
+        <label class="field"><span>ဗီဒီယိုဖိုင် (Optional — Studio မှ ယူမည်)</span>
+          <input type="file" id="split-file" accept="video/*"></label>
+        <label class="field"><span>အပိုင်းတစ်ခုစီ ကြာချိန်</span>
+          <select id="split-slice">
+            <option value="15">၁၅ စက္ကန့်</option>
+            <option value="30">၃၀ စက္ကန့်</option>
+            <option value="60" selected>၆၀ စက္ကန့်</option>
+            <option value="90">၉၀ စက္ကန့်</option>
+            <option value="120">၁၂၀ စက္ကန့်</option>
+          </select></label>
+        <label class="field"><span>ဖော်မတ်</span>
+          <select id="split-aspect">
+            <option value="9:16">9:16 ဒေါင်လိုက်</option>
+            <option value="1:1">1:1 စတုရန်း</option>
+            <option value="16:9">16:9 အလျားလိုက်</option>
+            <option value="original">မူရင်းအတိုင်း (stream copy — အလွန်မြန်)</option>
+          </select></label>
+      </div>
+      <div id="parts-estimate" class="chip" style="display:none"></div>
+      <button class="btn primary block" id="btn-split" style="margin-top:12px">✂ အပိုင်းများ ခွဲထုတ်မည်</button>
+      <div id="split-results" class="grid two" style="margin-top:16px"></div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════ JOBS ══════════════════════ -->
+  <section id="tab-jobs" class="tab-panel hidden">
+    <div class="card">
+      <div class="card-head">
+        <h3>📁 Jobs &amp; Files</h3>
+        <button class="btn small ghost" id="btn-refresh-jobs" style="margin-left:auto">🔄 Refresh</button>
+      </div>
+      <div style="overflow-x:auto">
+        <table class="table">
+          <thead><tr><th>အချိန်</th><th>အခြေအနေ</th><th>ကြာချိန်</th><th>ဖိုင်</th><th></th></tr></thead>
+          <tbody id="jobs-body"><tr><td colspan="5" class="empty">Job မရှိသေးပါ။</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════ SETTINGS ══════════════════════ -->
+  <section id="tab-settings" class="tab-panel hidden">
+    <div class="grid two">
+      <div class="card">
+        <div class="card-head"><h3>🔑 AI &amp; Access</h3></div>
+        <label class="field"><span>Google Gemini API Key</span>
+          <input type="password" id="cfg-key" placeholder="AIzaSy… (ထည့်ပြီးသားဆိုပါက အလွတ်ထားပါ)"></label>
+        <p class="help" id="cfg-key-state">—</p>
+        <label class="field"><span>Default AI Model</span><select id="cfg-model"></select></label>
+        <label class="field"><span>Server Access Key (deployment တွင် RECAP_ACCESS_PASSWORD သတ်မှတ်ထားပါက)</span>
+          <input type="password" id="cfg-access" placeholder="optional"></label>
+        <button class="btn primary block" id="btn-save-settings">💾 Settings သိမ်းမည်</button>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>🩺 System Diagnostics</h3>
+          <button class="btn small ghost" id="btn-refresh-system" style="margin-left:auto">🔄</button></div>
+        <div class="stat-grid" id="sys-stats"></div>
+        <div class="divider"></div>
+        <div class="mono" id="sys-detail" style="color:var(--text-dim)"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast-stack" id="toasts"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
