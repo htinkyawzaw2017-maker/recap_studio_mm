@@ -37,7 +37,7 @@ from typing import Callable, Optional
 
 from . import config
 from .media import FFMPEG, get_media_duration, make_silence_wav
-from .util import estimate_speech_seconds, get_logger, human_time
+from .util import CancelledError, estimate_speech_seconds, get_logger, human_time
 
 log = get_logger("recap.tts")
 
@@ -110,6 +110,10 @@ class PlannedLine:
     end: float
     text: str
     target_seconds: float
+    #: absolute ceiling for the produced audio: the next line's start (so the
+    #: timeline can never drift later and cut the end of the video) or the
+    #: video length for the final line.
+    hard_limit_seconds: float = 0.0
     tempo: float = 1.0
     tts_rate: str = "+0%"
     speech_seconds: float = 0.0
@@ -121,6 +125,7 @@ class PlannedLine:
         return {
             "index": self.index, "start": round(self.start, 3), "end": round(self.end, 3),
             "target_seconds": round(self.target_seconds, 3),
+            "hard_limit_seconds": round(self.hard_limit_seconds, 3),
             "speech_seconds": round(self.speech_seconds, 3),
             "tempo": round(self.tempo, 3), "trimmed": self.trimmed, "skipped": self.skipped,
             "reason": self.reason, "text": self.text,
@@ -133,15 +138,26 @@ class MixResult:
     duration: float
     planned: list[PlannedLine] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    #: windows of the finished audio that contain no speech at all
+    gaps: list[dict] = field(default_factory=list)
+    spoken_seconds: float = 0.0
 
     def stats(self) -> dict:
         trimmed = sum(1 for p in self.planned if p.trimmed)
         sped = sum(1 for p in self.planned if p.tempo > 1.02 or p.tts_rate != "+0%")
+        skipped = sum(1 for p in self.planned if p.skipped)
+        max_gap = max((g["end"] - g["start"] for g in self.gaps), default=0.0)
         return {
             "lines": len(self.planned),
             "trimmed_lines": trimmed,
             "speed_adjusted_lines": sped,
+            "skipped_lines": skipped,
             "audio_duration": round(self.duration, 2),
+            "spoken_seconds": round(self.spoken_seconds, 2),
+            "silent_seconds": round(max(0.0, self.duration - self.spoken_seconds), 2),
+            "max_silence_seconds": round(max_gap, 2),
+            "silent_windows": [{"start": round(g["start"], 1), "end": round(g["end"], 1)}
+                               for g in self.gaps[:20]],
             "warnings": self.warnings[:10],
         }
 
@@ -273,10 +289,18 @@ class TTSEngine:
             # NOT cap it by the model's own (often optimistic) `end` value:
             # speech is never stretched, so a longer window simply means the
             # take is used at its natural speed instead of being compressed.
-            window_end = cleaned[idx + 1][0] if idx + 1 < len(cleaned) else duration
+            next_start = cleaned[idx + 1][0] if idx + 1 < len(cleaned) else None
+            window_end = next_start if next_start is not None else duration
             target = max(0.4, min(window_end, duration) - start - guard)
+            # Hard ceiling: a take may NEVER run past the next line's start.
+            # (Allowing a +0.3 s overshoot used to shift every following line
+            # later, so the narration fell off the end of the video.)
+            if next_start is not None:
+                hard = max(0.4, next_start - start - 0.02)
+            else:
+                hard = max(target, min(max(0.4, duration - 0.05 - start), target + 3.0))
             planned.append(PlannedLine(index=idx, start=start, end=end, text=text,
-                                       target_seconds=target))
+                                       target_seconds=target, hard_limit_seconds=hard))
         return planned
 
     def _fit_to_window(self, line: PlannedLine, voice_cfg: dict[str, str],
@@ -336,23 +360,35 @@ class TTSEngine:
                 line.reason += " • အစွန်း အနည်းငယ် ဖြတ်ထားပါသည်"
 
         out_wav = work_dir / f"clip_{tag}_{line.index}.wav"
-        hard_limit = target if (line.trimmed or line.tempo > 1.005) else target + 0.30
+        # Never exceed the hard ceiling (the next line's start), otherwise the
+        # whole timeline shifts and the last seconds of the video stay silent.
+        hard_limit = max(0.4, line.hard_limit_seconds or target)
         if not self._convert(raw, out_wav, line.tempo, hard_limit):
             line.trimmed = True
-            if not self._convert(raw, out_wav, line.tempo, target):
+            if not self._convert(raw, out_wav, line.tempo, min(target, hard_limit)):
                 raw.unlink(missing_ok=True)
                 line.skipped = True
                 line.reason = "audio conversion failed"
                 return None
         raw.unlink(missing_ok=True)
-        line.speech_seconds = get_media_duration(out_wav)
+        produced = get_media_duration(out_wav)
+        if produced > hard_limit + 0.05:
+            # ffmpeg occasionally overshoots by a frame; trim once more so the
+            # assembly below is exact.
+            if not self._convert(out_wav, out_wav.with_suffix(".trim.wav"), 1.0, hard_limit):
+                line.trimmed = True
+            else:
+                out_wav.with_suffix(".trim.wav").replace(out_wav)
+            produced = get_media_duration(out_wav)
+        line.speech_seconds = produced
         return out_wav
 
     # ── main entry ─────────────────────────────────────────────────────
     def build_narration(self, dialogues: list[dict], voice_cfg: dict[str, str],
                         duration: float, work_dir: Path, tag: str = "job",
                         progress: ProgressFn = None,
-                        cancel: Optional[Callable[[], bool]] = None) -> MixResult:
+                        cancel: Optional[Callable[[], bool]] = None,
+                        fallback_voice_cfg: dict[str, str] | None = None) -> MixResult:
         lang = voice_cfg.get("lang", "my")
         work_dir = Path(work_dir)
         work_dir.mkdir(parents=True, exist_ok=True)
@@ -377,15 +413,23 @@ class TTSEngine:
 
         def synth_one(line: PlannedLine) -> tuple[int, Optional[Path]]:
             if cancel and cancel():
-                raise RuntimeError("cancelled")
+                raise CancelledError("အလုပ်ကို ရပ်တန့်လိုက်ပါပြီ")
             cache_key = _hash_key(voice_cfg["voice"], voice_cfg.get("rate", "+0%"),
                                   voice_cfg.get("pitch", "+0Hz"), line.text,
-                                  f"{line.target_seconds:.2f}")
+                                  f"{line.target_seconds:.2f}",
+                                  f"{line.hard_limit_seconds:.2f}")
             cached = self.cache_dir / f"{cache_key}.wav"
             if cached.exists() and cached.stat().st_size > 500:
                 line.speech_seconds = get_media_duration(cached)
                 return line.index, cached
             produced = self._fit_to_window(line, voice_cfg, work_dir, tag)
+            if produced is None and fallback_voice_cfg:
+                # A line that fails on one voice usually succeeds on the other
+                # (edge-tts throttles individual voices) - better than a hole
+                # in the narration.
+                line.skipped = False
+                line.reason = "အသံ အခြားတစ်ခုဖြင့် ပြန်သွင်းထားပါသည်"
+                produced = self._fit_to_window(line, fallback_voice_cfg, work_dir, f"{tag}_alt")
             if produced is None:
                 return line.index, None
             tmp_cache = cached.with_suffix(".tmp.wav")
@@ -403,7 +447,7 @@ class TTSEngine:
                 if cancel and cancel():
                     for f in futures:
                         f.cancel()
-                    raise RuntimeError("cancelled")
+                    raise CancelledError("အလုပ်ကို ရပ်တန့်လိုက်ပါပြီ")
                 try:
                     idx, path = future.result()
                 except Exception as exc:
@@ -436,6 +480,10 @@ class TTSEngine:
             progress(82, "🧵 Timeline အသံများ ပေါင်းစပ်နေပါသည်...")
         segments: list[Path] = []
         cursor = 0.0
+        silent_windows: list[dict] = []
+        placed: list[tuple[float, float]] = []
+        if planned and planned[0].start > 0.4:
+            silent_windows.append({"start": 0.0, "end": round(planned[0].start, 2)})
         for line in planned:
             clip = clips.get(line.index)
             if clip is None:
@@ -452,12 +500,31 @@ class TTSEngine:
                 log.warning("timeline overlap of %.3fs at line %d", -gap, line.index)
                 cursor = line.start
             segments.append(clip)
-            cursor += get_media_duration(clip) or line.target_seconds
+            length = get_media_duration(clip) or line.target_seconds
+            if length > (line.hard_limit_seconds or length) + 0.05:
+                # safety net: never let one line push the rest of the timeline
+                log.warning("clip %d overruns its window by %.2fs - trimming",
+                            line.index, length - line.hard_limit_seconds)
+                length = line.hard_limit_seconds
+                line.trimmed = True
+            placed.append((line.start, line.start + length))
+            cursor += length
 
         if cursor < duration - 0.02:
             tail = work_dir / f"tail_{tag}.wav"
             make_silence_wav(duration - cursor, tail)
             segments.append(tail)
+
+        # Report the windows that really are silent so the caller can fill
+        # them (AI gap-fill → re-synthesis) instead of shipping a video where
+        # the narrator stops for a minute.
+        for idx, (start, end) in enumerate(placed):
+            if idx + 1 < len(placed):
+                next_start = placed[idx + 1][0]
+                if next_start - end > 1.2:
+                    silent_windows.append({"start": round(end, 2), "end": round(next_start, 2)})
+            elif duration - end > 1.2:
+                silent_windows.append({"start": round(end, 2), "end": round(duration, 2)})
 
         final_wav = work_dir / f"narration_{tag}.wav"
         self._concat(segments, final_wav, duration)
@@ -471,7 +538,9 @@ class TTSEngine:
         trimmed = sum(1 for line in planned if line.trimmed)
         if trimmed:
             warnings.append(f"လိုင်း {trimmed} ခုကို အချိန်နှင့် ကိုက်ညီစေရန် အနည်းငယ် ဖြတ်ခဲ့ပါသည်")
-        return MixResult(str(final_wav), get_media_duration(final_wav), planned, warnings)
+        spoken = sum(max(0.0, e - s) for s, e in placed)
+        return MixResult(str(final_wav), get_media_duration(final_wav), planned, warnings,
+                         gaps=silent_windows, spoken_seconds=spoken)
 
     def _concat(self, segments: list[Path], out_path: Path, duration: float) -> None:
         if not segments:

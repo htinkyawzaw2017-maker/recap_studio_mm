@@ -133,7 +133,27 @@ class UploadManager:
         return ext
 
     # ── public API ─────────────────────────────────────────────────────
-    def init(self, filename: str, total_size: int, kind: str = "video") -> UploadSession:
+    def find_resumable(self, filename: str, total_size: int, kind: str) -> Optional[UploadSession]:
+        """An unfinished session for the same file (browser refresh / retry)."""
+        safe_name = slugify_filename(filename)
+        cutoff = time.time() - MAX_UPLOAD_AGE_SECONDS
+        try:
+            entries = list(self.incoming.iterdir())
+        except Exception:
+            return None
+        for entry in entries:
+            if not entry.is_dir():
+                continue
+            session = self._load_session(entry.name)
+            if session is None or session.completed_path:
+                continue
+            if (session.safe_name == safe_name and session.total_size == int(total_size)
+                    and session.kind == kind and session.created_at >= cutoff):
+                return session
+        return None
+
+    def init(self, filename: str, total_size: int, kind: str = "video",
+             resume: bool = True) -> UploadSession:
         kind = kind if kind in {"video", "logo", "audio"} else "video"
         self._validate_extension(filename, kind)
         if total_size <= 0:
@@ -144,6 +164,14 @@ class UploadManager:
                 f"အများဆုံး {human_bytes(config.settings.max_upload_bytes)} အထိ ပံ့ပိုးပါသည် "
                 "(လိုအပ်ပါက RECAP_MAX_UPLOAD_BYTES ကို ပြင်နိုင်ပါသည်)။"
             )
+        if resume:
+            existing = self.find_resumable(filename, total_size, kind)
+            if existing is not None and existing.received:
+                # A refresh / dropped connection should continue where it
+                # stopped instead of sending gigabytes again.
+                log.info("resuming upload %s (%d/%d chunks already on disk)",
+                         existing.upload_id, len(existing.received), existing.expected_chunks)
+                return existing
         upload_id = f"up_{int(time.time())}_{uuid.uuid4().hex[:8]}"
         session = UploadSession(
             upload_id=upload_id,
@@ -159,6 +187,13 @@ class UploadManager:
         log.info("upload %s started (%s, %s, %d chunks)",
                  upload_id, filename, human_bytes(total_size), session.expected_chunks)
         return session
+
+    def session_state(self, upload_id: str) -> Optional[dict]:
+        """Public progress of a session (used by /api/upload/status)."""
+        session = self._load_session(upload_id)
+        if session is None:
+            return None
+        return session.to_dict()
 
     def save_chunk(self, upload_id: str, index: int, stream: BinaryIO) -> UploadSession:
         session = self._load_session(upload_id)

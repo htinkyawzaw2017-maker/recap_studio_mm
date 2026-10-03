@@ -11,6 +11,8 @@
 #
 #  Optional overrides (env vars):
 #     RECAP_BRANCH=main                 # which git branch to install
+#                                       (default: the Arena working branch; use
+#                                        main once the update is merged)
 #     RECAP_DIR=/opt/recap-studio       # where the app lives
 #     RECAP_PORT=80                     # port to listen on
 #     RECAP_USER=ubuntu                 # service user (created automatically if missing)
@@ -21,7 +23,7 @@
 set -euo pipefail
 
 REPO="${RECAP_REPO:-htinkyawzaw2017-maker/recap_studio_mm}"
-BRANCH="${RECAP_BRANCH:-arena/01a10175-recap-studio-mm}"
+BRANCH="${RECAP_BRANCH:-arena/01a1027a-recap-studio-mm}"
 APP_DIR="${RECAP_DIR:-/opt/recap-studio}"
 PORT="${RECAP_PORT:-80}"
 SERVICE="${RECAP_SERVICE:-recap-studio}"
@@ -179,7 +181,14 @@ RECAP_FAKE_TTS=0
 # public URL အတွက် လျှို့ဝှက်စာ (ထည့်လိုက်ပါ — SPA Settings တွင် ထည့်ရမည်)
 RECAP_ACCESS_PASSWORD=
 # https://aistudio.google.com/apikey မှ ရယူပါ
+# Key ၃ ခုအထိ ထည့်နိုင်သည် — Key #1 quota ပြည့်လျှင် #2 / #3 သို့ အလိုအလျောက် ပြောင်းသည်
 GEMINI_API_KEY=
+GEMINI_API_KEY_2=
+GEMINI_API_KEY_3=
+# quota/error တက်လျှင် key အလိုအလျောက် ပြောင်းခြင်း (1=ဖွင့်)
+RECAP_API_KEY_FAILOVER=1
+# ffmpeg ပြတ်တောက်နေလျှင် အလိုအလျောက် ရပ်ပြီး error ပြရန် (စက္ကန့်)
+RECAP_FFMPEG_STALL_SECONDS=900
 EOF
   ok ".env အသစ် ဖန်တီးပြီ: $ENV_FILE"
 else
@@ -331,7 +340,7 @@ else
 fi
 say ""
 say " နောက်လုပ်ရမည့်အဆင့် (၂) ခု:"
-say "  1) API key ထည့်ပါ:   sudo nano $ENV_FILE   →  GEMINI_API_KEY=AIza... ထည့်ပြီး"
+say "  1) API key ထည့်ပါ:   sudo nano $ENV_FILE   →  GEMINI_API_KEY=AIza... (Key #2/#3 ပါ ထည့်နိုင်သည်)"
 if [ "$MANUAL_MODE" = "1" ]; then
   say "                        (service မရှိပါ — app ကို ပြန် run ပါ)"
 else

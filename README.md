@@ -45,7 +45,37 @@ Timeline အလိုက် အသံ ပေါင်းစပ် (drift-free) +
 ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → MP4 + SRT + MP3
 ```
 
-### ဒီ version တွင် ပြင်ဆင်ထားသော အဓိက bug များ
+### 🔧 v4.1.1 — "file uri and mime_type are required" ပြင်ဆင်ချက် (အရေးကြီး)
+
+တကယ့် job များတွင် `AI request failed: file uri and mime_type are required.` ဖြင့်
+အပိုင်းတိုင်း ကျရှုံးခဲ့သည် — AI ထံ ဗီဒီယို ပေးပို့သည့် အပိုင်းတွင်
+`pathlib.Path` ကို တိုက်ရိုက် ပေးပို့နေခြင်းကြောင့် (google-genai 1.20+ တွင်
+လုံးဝ လက်မခံ၊ 1.0.x တွင် ဗီဒီယို ပျောက်သွား)။ ယခု
+`GeminiClient.build_media_part()` က 12 MB အောက် proxy များကို
+`inline_data` (video/mp4) အဖြစ် တိုက်ရိုက်၊ ကြီးသော ဖိုင်များကို Files API
++ အတိအကျ mime type ဖြင့် ပေးပို့သည်။ Demo mode ဖြင့် စမ်းသပ်စဉ် AI ခေါ်ဆိုမှု
+မရှိသဖြင့် ဤ အမှားကို ရှာမတွေ့နိုင်ခဲ့ပါ — `tests/test_ai_parts.py`
+(21 checks) က လက်တွေ့ HTTP body ကို စစ်ဆေးပေးသည်။
+
+ထို့အပြင် `run_ffmpeg()` သည် job cancel ကြောင့် ရပ်ခံရသော ffmpeg ကို `CancelledError` အဖြစ် တင်ပြသည် (ယခင် "FFmpeg error" အဖြစ် ပြပြီး စာတန်းမပါဘဲ ပြန်ရိုက်ရန် ကြိုးစားခဲ့သည်) — `tests/test_cancel.py`။
+
+### 🆕 v4.1 — အသုံးပြုသူ တိုင်ကြားချက် ၇ ခုအတွက် ပြင်ဆင်ချက်များ
+
+| # | တိုင်ကြားချက် | အကြောင်းရင်း | ဖြေရှင်းချက် |
+|---|---|---|---|
+| 1 | Refresh လုပ်လျှင် **"Engine စစ်ဆေးနေသည်…"** တွင် ရပ်နေ / စာမျက်နှာ ပျက် | `/api/system` က data directory ကို တစ်ခါတည်း walk လုပ်သဖြင့် ကြာနေသည် + JS တစ်နေရာ error တက်လျှင် တစ်ခုလုံး ရပ် | cached disk size + non-blocking `/api/system`၊ UI က built-in catalog ကို ချက်ချင်း ဆွဲပြ၊ timeout+retry၊ error banner (crash မဖြစ်တော့) |
+| 2 | Refresh လုပ်တိုင်း **API key ပျောက်** | key ကို server memory/config တွင်သာ သိမ်းသည် | **Key #1–#3** ring + `localStorage` mirror + “ဒီ browser တွင် မှတ်ထားမည်” (refresh လုပ်လျှင် အလိုအလျောက် ပြန်ဖြည့်) |
+| 3 | **API key switch** လိုသည် | key တစ်ခုတည်း | Key ၃ ခုအထိ၊ quota/429 ဖြစ်လျှင် **အလိုအလျောက် failover** + UI မှ active slot ရွေးနိုင် + Key test |
+| 4 | အသံကို **အစအဆုံး မသွင်း** | AI coverage gaps + TTS လိုင်းကျော်လွန် + အလွန်ရှည်သော အပိုင်းများ | gap splitting + coverage sweep (အနှစ်ချုပ် ၂–၃ လှည့်)၊ လိုင်းကျော်လွန်လျှင် ပြန်စမ်း၊ အသံသွင်းပြီးနောက် **silence repair** (စမ်းသပ်မှုတွင် 46.2s → 3.2s အများဆုံး လစ်လပ်) |
+| 5 | Job Progress က **video preview က အုပ်** | preview card သည် sticky ဖြစ်ပြီး viewport ထက် မြင့်သည် | sticky ကို neutralise၊ `#preview-card` ကို sticky မဖြစ်စေ၊ **Job Progress** ကိုသာ (အလုပ် run နေစဉ်) sticky ထားသည် |
+| 6 | **Shorts Splitter** — ဖိုင်တင်မရ / အပိုင်းခွဲပြီးမှ ရပ် | တင်ခြင်းနှင့် ခွဲခြင်းကို request အတွင်းမှာပဲ လုပ်သည် (timeout → "ရပ်နေ") | upload UI အပြည့် + **background split job** (progress %၊ ရပ်နိုင်၊ ပြီးလျှင် part များ စာရင်း + Download all) |
+| 7 | Progress **"ရပ်မရ"** | cancel flag ကို stage ပြီးမှသာ စစ်သည် | ffmpeg watchdog + `kill` (ownership အတိအကျ)၊ cancel ကို ၀.၂–၀.၅ စက္ကန့်အတွင်း ပြီး၊ process ကျန်မနေ |
+
+တိုးတက်လာသည့် အပိုအချက်များ — ကြီးမားပြီး စာသားအပြည့်အစုံသော UI (upload dropzone ကြီး၊ အဆင့်လိုက်
+လမ်းညွှန်၊ tab တိုင်းတွင် ရှင်းလင်းချက်)၊ resumable upload ကို refresh ပြီးလျှင် ဆက်တင်နိုင်၊
+running job ကို refresh လုပ်လျှင် ပြန်ချိတ်နိုင်၊ server နှင့် ချိတ်မရလျှင် banner ပြ၍ ဆက်လက် အသုံးပြုနိုင်။
+
+### v4.0 တွင် ပြင်ဆင်ခဲ့သော bug များ (မှတ်တမ်း)
 
 | # | ပြဿနာ | အကြောင်းရင်း | ဖြေရှင်းချက် |
 |---|---|---|---|
@@ -72,6 +102,8 @@ ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → M
 * **Timeline Editor** — လိုင်း ပြင်/ထည့်/ဖျက်၊ auto-fix overlaps၊ ပြန် render
 * Myanmar font ကို server မှ တိုက်ရိုက် load (offline တွင်လည်း စာလုံး မှန်ကန်)
 * Ctrl/⌘ + Enter = render စတင်
+* **ကြီးမားသော၊ စာသားအပြည့်အစုံ UI** — အဆင့် ၄ ဆင့် လမ်းညွှန် strip၊ ကြီးမားသော upload dropzone၊
+  field တိုင်းတွင် အမည်+ရှင်းလင်းချက် (v4.1)
 
 ---
 
@@ -113,7 +145,7 @@ ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → M
 
 * **AWS EC2 (Instance Connect, port 80) — command တစ်ကြောင်းတည်း** — [docs/EC2_INSTANCE_CONNECT.md](docs/EC2_INSTANCE_CONNECT.md)
   ```bash
-  cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10175-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
+  cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a1027a-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
   ```
 * **AWS (ECS Fargate + ALB + EFS)** — [docs/AWS_DEPLOY.md](docs/AWS_DEPLOY.md)
 * **AWS ပေါ်ရှိ deployment ကို update လုပ်ရန်** — [docs/AWS_UPDATE.md](docs/AWS_UPDATE.md)
@@ -127,7 +159,10 @@ ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → M
 
 ```bash
 pip install -r requirements.txt
-python tests/smoke_test.py                    # offline: pipeline + HTTP layer (69 checks)
+python tests/smoke_test.py            # offline: pipeline + HTTP layer (69 checks)
+python tests/test_ai_parts.py        # AI ထံ ပေးပို့သော video part များ (21 checks, network မလိုပါ)
+python tests/test_cancel.py          # ⏹ ရပ်တန့်ခြင်း = CancelledError (5 checks, ~3s)
+python tests/test_key_ring.py         # API key ၃ ခု + quota failover (27 checks, network မလိုပါ)
 
 # Deploy လုပ်ပြီးသော server (AWS/Render) ကို စစ်ရန် — dependencies မလိုပါ
 python tests/verify_deployment.py https://your-domain.com
@@ -157,6 +192,8 @@ assets/fonts/           Noto Sans Myanmar (OFL) bundled
 deploy/ec2_install.sh   Ubuntu/EC2 one-shot installer + updater (systemd)
 docs/EC2_INSTANCE_CONNECT.md  EC2 (Instance Connect) အဆင့်ဆင့် လမ်းညွှန်
 docs/AWS_DEPLOY.md      AWS guide
+tests/test_cancel.py    cancel semantics (kill → CancelledError, not a crash)
+tests/test_ai_parts.py  AI content parts (file uri / mime type regression)
 tests/smoke_test.py     offline end-to-end test
 ```
 

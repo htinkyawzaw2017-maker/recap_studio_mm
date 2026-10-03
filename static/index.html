@@ -14,7 +14,7 @@
     <div class="brand-mark">🎬</div>
     <div>
       <h1>RECAP STUDIO MM</h1>
-      <p>AI Recap · Zero-Drift Dubbing · Myanmar Subtitles</p>
+      <p>AI Recap · Zero-Drift Dubbing · Myanmar Subtitles · v4.1</p>
     </div>
   </div>
   <div class="topbar-spacer"></div>
@@ -22,6 +22,20 @@
     <span class="chip muted" id="chip-engine"><span class="spinner"></span> Engine စစ်ဆေးနေသည်…</span>
   </div>
 </header>
+
+<!-- never blocks the page: shown only when something needs the user's input -->
+<div class="banner hidden" id="conn-banner">
+  <span id="conn-banner-text">Server ချိတ်ဆက်မှု စစ်ဆေးနေသည်…</span>
+  <button class="btn small ghost" id="btn-retry-conn">🔄 ပြန်စမ်း</button>
+</div>
+
+<div class="banner banner-key hidden" id="access-banner">
+  <span>🔒 ဒီ server တွင် Access Key လိုအပ်ပါသည် — Settings တွင် <b>RECAP_ACCESS_PASSWORD</b> ကို ထည့်ပါ</span>
+  <span class="banner-row">
+    <input type="password" id="quick-access-key" placeholder="Access Key">
+    <button class="btn small primary" id="btn-quick-access">ချိတ်ဆက်</button>
+  </span>
+</div>
 
 <nav class="nav" id="tabs">
   <button data-tab="studio" class="active">🎬 Studio</button>
@@ -35,20 +49,59 @@
 <main>
   <!-- ══════════════════════ STUDIO ══════════════════════ -->
   <section id="tab-studio" class="tab-panel">
+
+    <div class="hero">
+      <div class="hero-head">
+        <h2>🎬 ဗီဒီယိုတစ်ခုတည်း တင်၍ AI Recap အပြည့်အစုံ ဖန်တီးပါ</h2>
+        <p>အောက်ပါ အဆင့် ၄ ဆင့်ကို ဖြည့်လိုက်ရုံဖြင့် — AI ဇာတ်လမ်းဖတ် → မြန်မာအသံသွင်း → စာတန်းထိုး → ဒေါင်းလုဒ် အဆင်သင့် ရရှိပါမည်။</p>
+      </div>
+      <div class="hero-steps">
+        <div class="hero-step">
+          <span class="hs-num">1</span>
+          <b>ဗီဒီယို တင်ပါ</b>
+          <span>MP4 · MOV · MKV · WEBM — ဖိုင်ကြီးကို အပိုင်းလိုက် တင်ပြီး ရပ်သွားလျှင် ဆက်တင်နိုင်သည်</span>
+        </div>
+        <div class="hero-step">
+          <span class="hs-num">2</span>
+          <b>အသံနှင့် ပုံစံ ရွေးပါ</b>
+          <span>မြန်မာ/English narrator, Recap အမျိုးအစား, Output အရည်အသွေး</span>
+        </div>
+        <div class="hero-step">
+          <span class="hs-num">3</span>
+          <b>စာတန်း / Logo ပြင်ပါ</b>
+          <span>စာတန်းစတိုင်, Hook စာသား, ဒေါင်လိုက် 9:16 ဖော်မတ်</span>
+        </div>
+        <div class="hero-step">
+          <span class="hs-num">4</span>
+          <b>One-Click နှိပ်ပါ</b>
+          <span>တစ်ချက်နှိပ် — AI ခွဲခြမ်းမှု မှ Render အဆုံး အလိုအလျောက်</span>
+        </div>
+      </div>
+    </div>
+
     <div class="grid studio">
       <div>
         <!-- STEP 1 -->
         <div class="card">
           <div class="card-head">
             <span class="step">1</span>
-            <h3>ဗီဒီယို ထည့်သွင်းပါ</h3>
+            <div class="head-text">
+              <h3>ဗီဒီယို ထည့်သွင်းပါ</h3>
+              <p class="sub">ဖိုင်ကြီးများအတွက် အပိုင်းလိုက် (resumable) တင်ခြင်း — ရပ်သွားလျှင် ပြန်စရန် မလိုပါ။</p>
+            </div>
             <span class="done-badge" id="step1-badge"></span>
           </div>
 
           <div class="dropzone" id="dropzone">
             <div class="dz-icon">🎞️</div>
-            <div class="dz-title">ဗီဒီယိုဖိုင် ဒီနေရာကို ဆွဲထည့်ပါ သို့မဟုတ် နှိပ်၍ ရွေးပါ</div>
-            <div class="dz-hint">MP4 · MOV · MKV · WEBM — ကြီးသောဖိုင်များကို အပိုင်းလိုက် (resumable) တင်၍ progress ပြပါမည်</div>
+            <div class="dz-title">ဗီဒီယိုဖိုင် ဒီနေရာကို ဆွဲထည့်ပါ</div>
+            <div class="dz-sub">သို့မဟုတ် အောက်ပါ ခလုတ်ကို နှိပ်၍ ဖိုင်ရွေးပါ</div>
+            <div class="dz-badges">
+              <span class="tag">MP4</span><span class="tag">MOV</span><span class="tag">MKV</span>
+              <span class="tag">WEBM</span><span class="tag">AVI</span><span class="tag">3GP</span>
+            </div>
+            <button class="btn primary dz-cta" id="btn-pick-video" type="button">📂 ဗီဒီယိုဖိုင် ရွေးမည်</button>
+            <div class="dz-hint" id="upload-limit-hint">အများဆုံး ဖိုင်အရွယ်အစား စစ်ဆေးနေသည်…</div>
           </div>
           <input type="file" id="video-file" accept="video/*" class="hidden-input">
 
@@ -84,7 +137,10 @@
         <div class="card">
           <div class="card-head">
             <span class="step violet">2</span>
-            <h3>အသံနှင့် Recap ပုံစံ</h3>
+            <div class="head-text">
+              <h3>အသံနှင့် Recap ပုံစံ</h3>
+              <p class="sub">ဘာသာစကား၊ narrator အသံနှင့် အရည်အသွေးကို ရွေးပါ။</p>
+            </div>
           </div>
           <div class="row c2">
             <label class="field">
@@ -152,7 +208,10 @@
         <div class="card">
           <div class="card-head">
             <span class="step">3</span>
-            <h3>စာတန်းထိုး · Logo · ဖော်မတ်</h3>
+            <div class="head-text">
+              <h3>စာတန်းထိုး · Logo · ဖော်မတ်</h3>
+              <p class="sub">စာတန်းစတိုင်၊ လိုဂိုနေရာနှင့် output ဖော်မတ်ကို ချိန်ပါ။</p>
+            </div>
           </div>
           <div class="row c2">
             <div>
@@ -218,18 +277,25 @@
           </div>
         </div>
 
-        <button class="btn primary block" id="btn-start" style="padding:16px;font-size:15px">
-          ⚡ ONE-CLICK RECAP + DUBBING စတင်မည်
-        </button>
-        <p class="help" style="text-align:center">AI analysis → အသံသွင်း → စာတန်းထိုး → Render — အားလုံး အလိုအလျောက်။ ရပ်လိုပါက Job panel မှ ရပ်နိုင်သည်။</p>
+        <div class="cta-card">
+          <button class="btn primary block cta" id="btn-start">
+            ⚡ ONE-CLICK RECAP + DUBBING စတင်မည်
+          </button>
+          <p class="help" style="text-align:center;margin-top:10px">
+            AI analysis → အသံသွင်း → စာတန်းထိုး → Render — အားလုံး အလိုအလျောက်။
+            ရပ်လိုပါက ညာဘက် <b>Job Progress</b> panel မှ <b>⏹ ရပ်မည်</b> ကို နှိပ်ပါ (ffmpeg ချက်ချင်း ရပ်ပါမည်)။
+          </p>
+        </div>
       </div>
 
       <!-- RIGHT COLUMN -->
-      <div class="grid" style="gap:18px">
-        <div class="card sticky">
+      <div class="grid side">
+        <div class="card" id="preview-card">
           <div class="card-head" style="margin-bottom:10px">
-            <h3>📱 Live Preview</h3>
-            <span class="sub" style="margin-left:auto">ဆွဲ၍ နေရာချပါ</span>
+            <div class="head-text">
+              <h3>📱 Live Preview</h3>
+              <p class="sub">စာတန်းနှင့် Logo ကို ဆွဲ၍ နေရာချနိုင်သည်</p>
+            </div>
           </div>
           <div class="preview-wrap" id="preview-wrap">
             <video id="preview-video" controls playsinline preload="metadata"></video>
@@ -237,12 +303,18 @@
             <div class="overlay-sub" id="overlay-sub">နမူနာ စာတန်းထိုး</div>
             <div class="overlay-logo hidden" id="overlay-logo"><img id="overlay-logo-img" alt="logo"></div>
           </div>
+          <div class="chips" id="preview-meta" style="margin-top:12px">
+            <span class="chip muted">ဗီဒီယို မတင်ရသေးပါ</span>
+          </div>
           <p class="help" id="position-help">Subtitle အနိမ့်: <b id="lbl-sub-pos">22</b>% · Logo: <b id="lbl-logo-pos">မထည့်ရသေးပါ</b></p>
         </div>
 
         <div class="card" id="job-card">
           <div class="card-head" style="margin-bottom:10px">
-            <h3>🚀 Job Progress</h3>
+            <div class="head-text">
+              <h3>🚀 Job Progress</h3>
+              <p class="sub">အလုပ်လုပ်နေသည့် အဆင့်နှင့် ကျန်ချိန် ခန့်မှန်းချက်</p>
+            </div>
             <span class="chip muted" id="job-status-chip" style="margin-left:auto">idle</span>
           </div>
           <div id="job-idle-msg" class="empty">ဗီဒီယိုတင်ပြီး <b>One-Click</b> နှိပ်လိုက်ပါ။</div>
@@ -260,6 +332,7 @@
               <button class="btn small danger" id="btn-cancel-job">⏹ ရပ်မည်</button>
               <button class="btn small ghost" id="btn-goto-timeline">⏱️ Timeline ပြင်</button>
             </div>
+            <p class="help" id="cancel-hint">ရပ်လိုက်ပါက ffmpeg ကို ချက်ချင်း ရပ်ပါမည် (အလုပ်ပြီးဆုံးရန် မစောင့်ရပါ)။</p>
           </div>
 
           <div id="job-result" class="hidden">
@@ -275,10 +348,16 @@
         </div>
 
         <div class="card" id="coverage-card" style="display:none">
-          <div class="card-head" style="margin-bottom:8px"><h3>📊 Dubbing Coverage</h3></div>
+          <div class="card-head" style="margin-bottom:8px">
+            <div class="head-text">
+              <h3>📊 Dubbing Coverage</h3>
+              <p class="sub">အသံသွင်းထားသည့် အပိုင်းနှင့် လစ်လပ်နေသည့် အပိုင်း</p>
+            </div>
+            <span class="chip ok hidden" id="coverage-chip" style="margin-left:auto"></span>
+          </div>
           <div class="stat-grid" id="coverage-stats"></div>
           <div class="timeline-strip" id="coverage-strip" style="margin-top:12px"></div>
-          <p class="help">လိုင်းများကို ကိုယ်စားပြုသည် — လစ်လပ်နေသော နေရာများကို <span class="tag">Timeline Editor</span> မှ ဖြည့်နိုင်ပါသည်။</p>
+          <p class="help" id="coverage-note">လိုင်းများကို ကိုယ်စားပြုသည် — လစ်လပ်နေသော နေရာများကို <span class="tag">Timeline Editor</span> မှ ဖြည့်နိုင်ပါသည်။</p>
         </div>
       </div>
     </div>
@@ -288,7 +367,10 @@
   <section id="tab-timeline" class="tab-panel hidden">
     <div class="card">
       <div class="card-head">
-        <h3>⏱️ Timeline Editor</h3>
+        <div class="head-text">
+          <h3>⏱️ Timeline Editor</h3>
+          <p class="sub">AI ထုတ်ပေးသည့် စာသားလိုင်းများကို တည်းဖြတ်ပြီး အသံ/စာတန်း ပြန် Render လုပ်နိုင်သည်</p>
+        </div>
         <div class="btn-row" style="margin-left:auto">
           <button class="btn small ghost" id="btn-tl-fix">🩹 Auto-Fix Overlaps</button>
           <button class="btn small ghost" id="btn-tl-add">➕ လိုင်းထည့်</button>
@@ -310,10 +392,18 @@
   <section id="tab-thumb" class="tab-panel hidden">
     <div class="grid two">
       <div class="card">
-        <div class="card-head"><h3>🖼️ Viral Thumbnail Generator</h3></div>
-        <p class="sub">Studio တွင် တင်ထားသော ဗီဒီယိုကို အသုံးပြုပါမည် (မရှိပါက ဒီနေရာတွင် တင်နိုင်သည်)။</p>
-        <label class="field" style="margin-top:12px"><span>ဗီဒီယိုဖိုင် (Optional)</span>
-          <input type="file" id="thumb-file" accept="video/*"></label>
+        <div class="card-head">
+          <div class="head-text">
+            <h3>🖼️ Viral Thumbnail Generator</h3>
+            <p class="sub">ဗီဒီယိုမှ ဖရိမ်တစ်ခုကို ဖမ်းယူပြီး Hook စာသား ထည့်ပေးသည်</p>
+          </div>
+        </div>
+        <div class="dropzone compact" id="thumb-dropzone">
+          <div class="dz-icon">🖼️</div>
+          <div class="dz-title">ဗီဒီယိုဖိုင် ဆွဲထည့်ပါ / နှိပ်၍ ရွေးပါ</div>
+          <div class="dz-hint">မတင်ပါက Studio တွင် တင်ထားသော ဗီဒီယိုကို အသုံးပြုပါမည်</div>
+          <input type="file" id="thumb-file" accept="video/*" class="hidden-input">
+        </div>
         <div class="row c2">
           <label class="field"><span>ဖမ်းယူမည့် စက္ကန့်</span>
             <input type="number" id="thumb-sec" value="2.5" step="0.5" min="0"></label>
@@ -327,10 +417,15 @@
         <button class="btn primary block" id="btn-thumb">✨ Thumbnail ဖန်တီးမည်</button>
       </div>
       <div class="card">
-        <div class="card-head"><h3>Preview</h3></div>
+        <div class="card-head">
+          <div class="head-text">
+            <h3>Preview</h3>
+            <p class="sub">JPG အဖြစ် ဒေါင်းလုဒ် လုပ်နိုင်သည်</p>
+          </div>
+        </div>
         <div id="thumb-empty" class="empty">Thumbnail ဖန်တီးပြီးပါက ဒီနေရာတွင် ပေါ်လာပါမည်။</div>
         <div id="thumb-result" class="hidden" style="text-align:center">
-          <img id="thumb-img" style="width:min(340px,90%);border-radius:14px;border:1px solid var(--line)" alt="thumbnail">
+          <img id="thumb-img" style="width:min(420px,92%);border-radius:14px;border:1px solid var(--line)" alt="thumbnail">
           <div class="btn-row" style="justify-content:center;margin-top:12px">
             <a class="btn success small" id="thumb-dl" download="thumbnail.jpg">📥 ဒေါင်းလုဒ်</a>
           </div>
@@ -342,10 +437,22 @@
   <!-- ══════════════════════ SPLITTER ══════════════════════ -->
   <section id="tab-split" class="tab-panel hidden">
     <div class="card">
-      <div class="card-head"><h3>🍿 Shorts Splitter — Parallel Fast Engine</h3></div>
-      <div class="row c3">
-        <label class="field"><span>ဗီဒီယိုဖိုင် (Optional — Studio မှ ယူမည်)</span>
-          <input type="file" id="split-file" accept="video/*"></label>
+      <div class="card-head">
+        <div class="head-text">
+          <h3>🍿 Shorts Splitter — Parallel Fast Engine</h3>
+          <p class="sub">ဗီဒီယိုအရှည်ကြီးကို တစ်ချက်နှိပ်၍ Shorts/TikTok အပိုင်းများ အလိုအလျောက် ခွဲထုတ်သည်</p>
+        </div>
+      </div>
+
+      <div class="dropzone compact" id="split-dropzone">
+        <div class="dz-icon">🍿</div>
+        <div class="dz-title">ခွဲထုတ်လိုသည့် ဗီဒီယိုဖိုင် ဒီနေရာကို ဆွဲထည့်ပါ</div>
+        <div class="dz-sub">သို့မဟုတ် နှိပ်၍ ဖိုင်ရွေးပါ (မတင်ပါက Studio မှ ဗီဒီယိုကို သုံးပါမည်)</div>
+        <div class="dz-badges"><span class="tag">MP4</span><span class="tag">MOV</span><span class="tag">MKV</span><span class="tag">WEBM</span></div>
+        <input type="file" id="split-file" accept="video/*" class="hidden-input">
+      </div>
+
+      <div class="row c3" style="margin-top:14px">
         <label class="field"><span>အပိုင်းတစ်ခုစီ ကြာချိန်</span>
           <select id="split-slice">
             <option value="15">၁၅ စက္ကန့်</option>
@@ -361,9 +468,36 @@
             <option value="16:9">16:9 အလျားလိုက်</option>
             <option value="original">မူရင်းအတိုင်း (stream copy — အလွန်မြန်)</option>
           </select></label>
+        <label class="field"><span>စုစုပေါင်း ခန့်မှန်းချက်</span>
+          <input type="text" id="split-estimate" value="—" readonly></label>
       </div>
+
+      <div class="file-pill hidden" id="split-pill">
+        <img class="thumb" id="split-pill-thumb" alt="">
+        <div class="meta"><b id="split-pill-name">—</b><span id="split-pill-info">—</span></div>
+        <button class="btn small danger" id="btn-clear-split">✕</button>
+      </div>
+
+      <div class="upload-status" id="split-upload-status">
+        <div class="meter" id="split-meter"><i id="split-meter-fill"></i></div>
+        <div class="upload-meta">
+          <span id="split-upload-text">တင်နေသည်…</span>
+          <span><button class="btn small ghost" id="btn-cancel-split-upload">ရပ်မည်</button></span>
+        </div>
+      </div>
+
       <div id="parts-estimate" class="chip" style="display:none"></div>
       <button class="btn primary block" id="btn-split" style="margin-top:12px">✂ အပိုင်းများ ခွဲထုတ်မည်</button>
+      <p class="help">ခွဲထုတ်ခြင်းကို background job အဖြစ် လုပ်ဆောင်သည် — progress ပြပြီး <b>⏹ ရပ်မည်</b> ဖြင့် အချိန်မရွေး ရပ်နိုင်သည်။</p>
+
+      <div class="upload-status" id="split-progress">
+        <div class="meter" id="split-progress-meter"><i id="split-progress-fill"></i></div>
+        <div class="upload-meta">
+          <span id="split-progress-text">ခွဲထုတ်နေသည်…</span>
+          <span><button class="btn small danger" id="btn-cancel-split">⏹ ရပ်မည်</button></span>
+        </div>
+      </div>
+
       <div id="split-results" class="grid two" style="margin-top:16px"></div>
     </div>
   </section>
@@ -372,7 +506,10 @@
   <section id="tab-jobs" class="tab-panel hidden">
     <div class="card">
       <div class="card-head">
-        <h3>📁 Jobs &amp; Files</h3>
+        <div class="head-text">
+          <h3>📁 Jobs &amp; Files</h3>
+          <p class="sub">လုပ်ဆောင်ခဲ့သည့် အလုပ်အားလုံး၏ မှတ်တမ်းနှင့် ဖိုင်ဒေါင်းလုဒ်</p>
+        </div>
         <button class="btn small ghost" id="btn-refresh-jobs" style="margin-left:auto">🔄 Refresh</button>
       </div>
       <div style="overflow-x:auto">
@@ -388,18 +525,68 @@
   <section id="tab-settings" class="tab-panel hidden">
     <div class="grid two">
       <div class="card">
-        <div class="card-head"><h3>🔑 AI &amp; Access</h3></div>
-        <label class="field"><span>Google Gemini API Key</span>
-          <input type="password" id="cfg-key" placeholder="AIzaSy… (ထည့်ပြီးသားဆိုပါက အလွတ်ထားပါ)"></label>
-        <p class="help" id="cfg-key-state">—</p>
+        <div class="card-head">
+          <div class="head-text">
+            <h3>🔑 AI &amp; Access</h3>
+            <p class="sub">Gemini API Key ၃ ခုအထိ — quota ပြည့်လျှင် အလိုအလျောက် ပြောင်းပေးသည်</p>
+          </div>
+          <span class="chip muted" id="cfg-key-state">—</span>
+        </div>
+
+        <p class="help" style="margin-bottom:8px">
+          Key ၃ ခုအထိ ထည့်နိုင်ပါသည် — Key #1 quota ပြည့်သွားပါက Key #2 / #3 သို့
+          <b>အလိုအလျောက် ပြောင်း</b>ပေးပါမည် (long video များ အလယ်မှာ ရပ်မသွားတော့ပါ)။
+        </p>
+
+        <div class="key-ring" id="key-ring">
+          <div class="key-row" data-slot="1">
+            <label class="key-pick"><input type="radio" name="active-key" value="1"><span>#1</span></label>
+            <input type="password" id="cfg-key-1" placeholder="AIzaSy… Key #1 (အဓိက)">
+            <button class="btn small ghost" data-key-test="1">စစ်မည်</button>
+          </div>
+          <div class="key-row" data-slot="2">
+            <label class="key-pick"><input type="radio" name="active-key" value="2"><span>#2</span></label>
+            <input type="password" id="cfg-key-2" placeholder="Key #2 (quota ဖြည့်)">
+            <button class="btn small ghost" data-key-test="2">စစ်မည်</button>
+          </div>
+          <div class="key-row" data-slot="3">
+            <label class="key-pick"><input type="radio" name="active-key" value="3"><span>#3</span></label>
+            <input type="password" id="cfg-key-3" placeholder="Key #3 (အပို)">
+            <button class="btn small ghost" data-key-test="3">စစ်မည်</button>
+          </div>
+        </div>
+        <p class="help" id="cfg-key-detail">Key တစ်ခုမှ မထည့်ရသေးပါ။</p>
+        <label class="check"><input type="checkbox" id="cfg-failover" checked>
+          <span><b>Key failover</b> — error/quota တက်ပါက နောက် key သို့ အလိုအလျောက် ပြောင်းမည်</span></label>
+        <label class="check"><input type="checkbox" id="cfg-remember" checked>
+          <span><b>ဒီ browser တွင် မှတ်ထားမည်</b> — refresh လုပ်လျှင် key ပြန်ထည့်ရန် မလိုတော့ပါ</span></label>
+
+        <div class="divider"></div>
         <label class="field"><span>Default AI Model</span><select id="cfg-model"></select></label>
         <label class="field"><span>Server Access Key (deployment တွင် RECAP_ACCESS_PASSWORD သတ်မှတ်ထားပါက)</span>
           <input type="password" id="cfg-access" placeholder="optional"></label>
-        <button class="btn primary block" id="btn-save-settings">💾 Settings သိမ်းမည်</button>
+        <div class="btn-row">
+          <button class="btn primary" id="btn-save-settings">💾 Settings သိမ်းမည်</button>
+          <button class="btn ghost" id="btn-test-keys">🧪 Key အားလုံး စစ်မည်</button>
+        </div>
+
+        <div class="tip">
+          <b>💡 အကြံပြုချက်</b>
+          <ul>
+            <li>Key များကို <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> မှ အခမဲ့ ရယူနိုင်သည်။</li>
+            <li>Project တစ်ခုစီအတွက် key တစ်ခု ထည့်ပါ — quota သီးခြား ရပါသည်။</li>
+            <li>“ဒီ browser တွင် မှတ်ထားမည်” ကို ဖွင့်ထားလျှင် refresh/ပြန်ဖွင့် လုပ်တိုင်း key ပြန်ထည့်ရန် မလိုပါ။</li>
+          </ul>
+        </div>
       </div>
       <div class="card">
-        <div class="card-head"><h3>🩺 System Diagnostics</h3>
-          <button class="btn small ghost" id="btn-refresh-system" style="margin-left:auto">🔄</button></div>
+        <div class="card-head">
+          <div class="head-text">
+            <h3>🩺 System Diagnostics</h3>
+            <p class="sub">Server, ffmpeg, font, disk နှင့် job အခြေအနေ</p>
+          </div>
+          <button class="btn small ghost" id="btn-refresh-system" style="margin-left:auto">🔄 Refresh</button>
+        </div>
         <div class="stat-grid" id="sys-stats"></div>
         <div class="divider"></div>
         <div class="mono" id="sys-detail" style="color:var(--text-dim)"></div>

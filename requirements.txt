@@ -10,7 +10,10 @@ python-multipart>=0.0.9        # multipart uploads (chunked upload endpoints)
 pydantic>=2.7
 
 edge-tts>=6.1                  # neural voices (Microsoft Edge TTS endpoint)
-google-genai>=1.0              # Gemini video understanding (timeline extraction)
+google-genai>=1.20             # Gemini video understanding (timeline extraction)
+                               #  >=1.20 required: 1.0.x silently dropped file paths
+                               #  (broke "AI analysis failed for every chunk")
+python-dotenv>=1.0             # loads .env so a saved API key survives restarts
 yt-dlp>=2024.8.6               # public video link import
 Pillow>=10.2                   # thumbnails + logo badge
 numpy>=1.26                    # vectorised logo background removal

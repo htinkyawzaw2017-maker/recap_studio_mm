@@ -12,6 +12,43 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+def _load_env_files() -> list[str]:
+    """Load .env files before any os.getenv() call.
+
+    systemd deployments pass variables via EnvironmentFile and docker via the
+    compose file, but a plain ``uvicorn app:app`` run (or the installer's tmux
+    fallback) would otherwise start *without* the API key the user saved in
+    ``.env`` — which is exactly the "key ပျောက်" report. Real environment
+    variables always win (override=False).
+    """
+    loaded: list[str] = []
+    try:
+        from dotenv import load_dotenv  # type: ignore
+    except Exception:  # python-dotenv not installed — env vars only
+        return loaded
+    root = Path(__file__).resolve().parent.parent
+    candidates = [
+        root / ".env",
+        Path(os.getenv("RECAP_DATA_DIR", str(root))) / ".env",
+        Path.cwd() / ".env",
+    ]
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            path = candidate.resolve()
+        except OSError:
+            continue
+        if path in seen or not path.is_file():
+            continue
+        seen.add(path)
+        if load_dotenv(path, override=False):
+            loaded.append(str(path))
+    return loaded
+
+
+ENV_FILES_LOADED = _load_env_files()
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -70,6 +107,17 @@ class Settings:
         "gemini-2.0-flash",
     )
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    #: extra keys so a quota-exhausted key does not kill a long job.
+    #: Slot 2 / 3 can be given in the UI or with GEMINI_API_KEY_2 / _3.
+    gemini_api_key_2: str = os.getenv("GEMINI_API_KEY_2", "")
+    gemini_api_key_3: str = os.getenv("GEMINI_API_KEY_3", "")
+    #: how many key slots the UI is allowed to fill (1 = classic behaviour)
+    max_api_keys: int = max(1, _env_int("RECAP_MAX_API_KEYS", 3))
+    #: when a key answers 429 / quota / 403 the engine switches to the next
+    #: slot automatically instead of failing the whole job
+    api_key_failover: bool = _env_bool("RECAP_API_KEY_FAILOVER", True)
+    #: seconds a failed key is skipped before it is tried again
+    api_key_cooldown: int = _env_int("RECAP_API_KEY_COOLDOWN", 90)
     #: longest single video chunk handed to Gemini (Files API / context safe)
     max_chunk_seconds: int = _env_int("RECAP_MAX_CHUNK_SECONDS", 480)
     #: target number of chunks for very long videos
@@ -78,6 +126,12 @@ class Settings:
     ai_max_output_tokens: int = _env_int("RECAP_AI_MAX_TOKENS", 32768)
     ai_retries: int = _env_int("RECAP_AI_RETRIES", 4)
     ai_timeout_seconds: int = _env_int("RECAP_AI_TIMEOUT", 600)
+    #: second pass: re-ask a chunk whose answer stopped before the clip end
+    ai_tail_pass: bool = _env_bool("RECAP_AI_TAIL_PASS", True)
+    #: max narration silence tolerated between two lines (continuous mode)
+    max_narration_gap: float = _env_float("RECAP_MAX_NARRATION_GAP", 5.0)
+    #: rounds of "fill the silence → re-synthesise" repair after TTS
+    coverage_repair_rounds: int = _env_int("RECAP_COVERAGE_REPAIR_ROUNDS", 2)
 
     # ── TTS ───────────────────────────────────────────────────────────────
     tts_workers: int = _env_int("RECAP_TTS_WORKERS", 8)
@@ -92,6 +146,12 @@ class Settings:
     video_crf: int = _env_int("RECAP_X264_CRF", 23)
     audio_bitrate: str = os.getenv("RECAP_AUDIO_BITRATE", "192k")
     loudness_normalize: bool = _env_bool("RECAP_LOUDNORM", True)
+    #: 0 = let ffmpeg decide, otherwise cap x264 threads (small EC2 instances
+    #: stay responsive while a render runs)
+    ffmpeg_threads: int = _env_int("RECAP_FFMPEG_THREADS", 0)
+    #: a render that produces no output for this many seconds is treated as
+    #: stuck (killed + reported) instead of hanging the job forever
+    ffmpeg_stall_seconds: int = _env_int("RECAP_FFMPEG_STALL_SECONDS", 900)
 
     # ── Limits / housekeeping ─────────────────────────────────────────────
     max_upload_bytes: int = _env_int("RECAP_MAX_UPLOAD_BYTES", 20 * 1024 * 1024 * 1024)
@@ -117,7 +177,7 @@ class Settings:
     fake_tts: bool = _env_bool("RECAP_FAKE_TTS", False)            # beep instead of speech
     force_reencode: bool = _env_bool("RECAP_FORCE_REENCODE", False)
 
-    app_version: str = "4.0.0"
+    app_version: str = "4.1.1"
 
 
 settings = Settings()

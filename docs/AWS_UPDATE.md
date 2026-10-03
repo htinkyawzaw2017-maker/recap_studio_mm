@@ -1,26 +1,50 @@
-# AWS ပေါ်မှာ Fix ကို တင်နည်း (Update Runbook)
+# AWS ပေါ်မှာ Update တင်နည်း (Runbook) — v4.1
 
-## 0. ဘာကြောင့် AWS ပေါ်မှာ မပြောင်းသေးတာလဲ
+## 0. အခု အခြေအနေ
 
-ပြင်ထားတာက commit `7b1c264` — **branch `arena/01a10175-recap-studio-mm`** ပေါ်မှာ ရှိပါတယ်။
-`main` က ဟောင်းနေဆဲ (`fd914bd`) ဖြစ်ပါတယ်။
+v4.1 ပြင်ဆင်ချက် အားလုံး (တိုင်ကြားချက် ၇ ခု + UI ကြီးခြင်း) သည် အောက်ပါ branch တွင် ရှိပြီးဖြစ်သည်:
 
 ```
-origin/main                            fd914bd   ← AWS က ဒါကို build လုပ်နေတယ် (ဟောင်း)
-origin/arena/01a10175-recap-studio-mm  7b1c264   ← fix အားလုံး (PR #1, still open)
+origin/arena/01a1027a-recap-studio-mm   1e68b88   ← v4.1 (အသစ်ဆုံး)
+origin/main                             27eb2ca   ← ဟောင်း (v4.0)
 ```
 
-ဒါကြောင့် **code ကို AWS ဆီ ရောက်အောင် ပို့ဖို့ လိုပါတယ်** — အောက်က လုပ်ရမည့်အဆင့် ၃ ခုပဲ ရှိပါတယ်။
+> ⚠️ `origin/main` ကို merge လုပ်ပြီးသားမဟုတ်သေးပါ — ဒါကြောင့် **install script က branch ကို
+> တိုက်ရိုက် ဆွဲချသည်** (`RECAP_BRANCH` default = `arena/01a1027a-recap-studio-mm`)။
+> အောက်ပါ command များကို အပြောင်းအလဲ မလိုဘဲ တိုက်ရိုက် run နိုင်သည်။
+
+### ဘယ်လမ်းကို ရွေးမလဲ
+
+| သင့် setup | လုပ်ရမည့်အလုပ် |
+|---|---|
+| **EC2 + systemd (`/opt/recap-studio`)** ← အသုံးအများဆုံး | **§1b** command တစ်ကြောင်း run (၅ မိနစ်) |
+| ECS Fargate + ECR + ALB | §2a — image ပြန် build/push → force new deployment |
+| EC2 + Docker compose | §2b |
+| App Runner / Lightsail | §2d |
+
+**SSH မရှိသေးလျှင် / server ထဲ ဘယ်လိုဝင်ရမလဲ မသိလျှင်** → **[EC2_INSTANCE_CONNECT.md](EC2_INSTANCE_CONNECT.md)**
+(EC2 Instance Connect browser terminal အသုံးပြုနည်း၊ SSH key ဖန်တီးနည်း၊ PuTTY နည်း အဆင့်ဆင့် ရေးထားသည်)။
 
 ---
 
-## လုပ်ရမည့် အဆင့် ၃ ခု (TL;DR)
+## TL;DR — EC2 အတွက် အဆင့် ၃ ခု (၅ မိနစ်)
 
-| # | လုပ်ရမည့်အရာ | ဘယ်မှာ |
-|---|---|---|
-| 1 | **PR #1 ကို merge** (သို့) branch/tarball ကို deploy target အဖြစ် သတ်မှတ် | GitHub |
-| 2 | **deploy**: EC2 ဖြစ်ပါက one-liner (§1b) · ECS/ECR ဖြစ်ပါက image ပြန် build + push → force new deployment | AWS |
-| 3 | **Volume + env var စစ်** → `verify_deployment.py` ဖြင့် အတည်ပြု | AWS / laptop |
+```bash
+# 1) server terminal (Instance Connect / SSH) ထဲ ဝင်ပြီး —
+cd /tmp
+curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a1027a-recap-studio-mm
+rm -rf recap_studio_mm-arena-* && tar xzf recap.tgz
+sudo bash /tmp/recap_studio_mm-arena-01a1027a-recap-studio-mm/deploy/ec2_install.sh
+
+# 2) Key #2/#3 ထည့်လိုလျှင် (quota failover) —
+sudo nano /opt/recap-studio/.env      # GEMINI_API_KEY_2 / _3 ဖြည့်
+sudo systemctl restart recap-studio
+
+# 3) စစ်ဆေး —
+curl -s http://localhost/healthz      # "version":"4.1.1" ဖြစ်ရမည်
+```
+
+Browser တွင် `http://<EC2-IP>` ဖွင့်ပြီး **Ctrl + Shift + R** (hard refresh) နှိပ်ပါ။
 
 ---
 
@@ -28,28 +52,29 @@ origin/arena/01a10175-recap-studio-mm  7b1c264   ← fix အားလုံး (
 
 ### နည်းလမ်း A — PR ကို merge (အကြံပြု၊ အလွယ်ဆုံး)
 
-1. https://github.com/htinkyawzaw2017-maker/recap_studio_mm/pull/1 ကို ဖွင့်ပါ
+1. Arena session မှ ဖွင့်ထားသော PR (`arena/01a1027a-recap-studio-mm` → `main`) ကို ဖွင့်ပါ
 2. **Merge pull request** → **Confirm merge**
-3. `main` က `7b1c264` ဖြစ်သွားပါပြီ (Auto-deploy pipeline ရှိပါက အလိုအလျောက် deploy စပါပြီ)
+3. ပြီးလျှင် `main` သည် v4.1 ဖြစ်သွားမည် — Auto-deploy pipeline ရှိပါက အလိုအလျောက် deploy စပါမည်
+   (EC2 ဖြစ်ပါက §1b ကို `RECAP_BRANCH=main` ဖြင့် run နိုင်သည်)
 
 ### နည်းလမ်း B — merge မလုပ်ဘဲ branch ကို တိုက်ရိုက် deploy
 
 ```bash
 # EC2 ကဲ့သို့ server ပေါ်မှာ
 git fetch origin
-git checkout arena/01a10175-recap-studio-mm     # ← fix ရှိသည့် branch
-git pull origin arena/01a10175-recap-studio-mm
+git checkout arena/01a1027a-recap-studio-mm     # ← fix ရှိသည့် branch
+git pull origin arena/01a1027a-recap-studio-mm
 ```
 
 ECS/CodePipeline သုံးပါက source stage ၏ **branch name** ကို
-`arena/01a10175-recap-studio-mm` သို့ ပြောင်းလိုက်ပါ။
+`arena/01a1027a-recap-studio-mm` သို့ ပြောင်းလိုက်ပါ။
 
 ### နည်းလမ်း C — git မသုံးဘဲ tarball ဖြင့်
 
 ```bash
 # laptop ပေါ်တွင်
 curl -L -o recap.tar.gz \
-  https://github.com/htinkyawzaw2017-maker/recap_studio_mm/archive/refs/heads/arena/01a10175-recap-studio-mm.tar.gz
+  https://github.com/htinkyawzaw2017-maker/recap_studio_mm/archive/refs/heads/arena/01a1027a-recap-studio-mm.tar.gz
 
 # server ပေါ်တွင်
 scp recap.tar.gz ec2-user@YOUR_EC2:/tmp/
@@ -62,7 +87,7 @@ sudo mkdir -p /opt/recap && sudo tar xzf /tmp/recap.tar.gz -C /opt/recap --strip
 ## 1b. EC2 (Instance Connect / Docker မသုံး) ဖြစ်ပါက — command တစ်ကြောင်းတည်း
 
 ```bash
-cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10175-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
+cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a1027a-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
 ```
 
 Script က code အသစ်ကို ရယူပြီး `/opt/recap-studio` ထဲ တပ်ဆင်၊ systemd service အဖြစ်
@@ -107,7 +132,7 @@ aws ecs wait services-stable --cluster YOUR_CLUSTER --services YOUR_SERVICE --re
 ```bash
 ssh ec2-user@YOUR_EC2
 cd /opt/recap                                  # repo ရှိသည့်နေရာ
-git fetch origin && git checkout arena/01a10175-recap-studio-mm && git pull
+git fetch origin && git checkout arena/01a1027a-recap-studio-mm && git pull
 
 docker compose down
 docker compose up -d --build
@@ -118,7 +143,7 @@ docker compose logs -f --tail=50               # 'Recap Studio 4.0.0 starting' �
 
 ```bash
 ssh ec2-user@YOUR_EC2
-cd /opt/recap && git fetch origin && git checkout arena/01a10175-recap-studio-mm && git pull
+cd /opt/recap && git fetch origin && git checkout arena/01a1027a-recap-studio-mm && git pull
 
 source .venv/bin/activate
 pip install -r requirements.txt                # ← ယခုမှ အလုပ်လုပ်ပါသည် (အရင် apt package များ ကြောင့် fail ဖြစ်ခဲ့သည်)
