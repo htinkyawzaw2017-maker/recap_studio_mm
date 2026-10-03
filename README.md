@@ -112,6 +112,8 @@ ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → M
 ## 🚀 Deployment
 
 * **AWS (ECS Fargate + ALB + EFS)** — [docs/AWS_DEPLOY.md](docs/AWS_DEPLOY.md)
+* **AWS ပေါ်ရှိ deployment ကို update လုပ်ရန်** — [docs/AWS_UPDATE.md](docs/AWS_UPDATE.md)
+  (`python tests/verify_deployment.py https://your-domain.com` ဖြင့် စစ်နိုင်သည်)
 * **Render** — [RENDER_DEPLOY.md](RENDER_DEPLOY.md) (`render.yaml` အဆင်သင့်)
 * **Docker တစ်ခုတည်း** — `docker build -t recap . && docker run -p 8000:8000 -e GEMINI_API_KEY=... -v recap:/data recap`
 
@@ -121,7 +123,11 @@ ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → M
 
 ```bash
 pip install -r requirements.txt
-python tests/smoke_test.py          # offline: pipeline + HTTP layer (64 checks)
+python tests/smoke_test.py                    # offline: pipeline + HTTP layer (69 checks)
+
+# Deploy လုပ်ပြီးသော server (AWS/Render) ကို စစ်ရန် — dependencies မလိုပါ
+python tests/verify_deployment.py https://your-domain.com
+python tests/verify_deployment.py https://your-domain.com --video ./clip.mp4
 ```
 
 `RECAP_DEMO_MODE=1 RECAP_FAKE_TTS=1` ဖြင့် run သည် — ခွန်အား/API key မလိုဘဲ
