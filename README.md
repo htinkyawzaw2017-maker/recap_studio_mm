@@ -45,6 +45,18 @@ Timeline အလိုက် အသံ ပေါင်းစပ် (drift-free) +
 ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → MP4 + SRT + MP3
 ```
 
+### ⚡ v4.1.2 — hotfix: `'TimelineExtractor' object has no attribute 'sdk'`
+
+v4.1.1 တွင် ထည့်လိုက်သော log line တစ်ကြောင်းက `self.sdk` (မှန်သည် `self.client.sdk`)
+ဟု ဖတ်မိသဖြင့် **အလုပ် စတင်သည်နှင့် ချက်ချင်း ကျ**ခဲ့သည် (Gemini သို့ request မရောက်မီ၊
+quota မကုန်)။ Demo mode က ထို line မရောက်သဖြင့် tests မမိခဲ့ပါ။ ယခု ပြင်ပြီး၊
+ထပ်မဖြစ်စေရန် —
+
+* `tests/test_real_run.py` — demo mode **ပိတ်ပြီး** `extract_timeline()` ကို
+  offline stub client ဖြင့် အပြည့်အဝ run (7 checks)
+* `tests/test_self_attrs.py` — code တစ်ခုလုံးရှි `self.<name>` အားလုံး ရှိ/မရှိ
+  static စစ်ဆေးခြင်း (12 module)
+
 ### 🔧 v4.1.1 — "file uri and mime_type are required" ပြင်ဆင်ချက် (အရေးကြီး)
 
 တကယ့် job များတွင် `AI request failed: file uri and mime_type are required.` ဖြင့်
@@ -161,6 +173,8 @@ running job ကို refresh လုပ်လျှင် ပြန်ချိ�
 pip install -r requirements.txt
 python tests/smoke_test.py            # offline: pipeline + HTTP layer (69 checks)
 python tests/test_ai_parts.py        # AI ထံ ပေးပို့သော video part များ (21 checks, network မလိုပါ)
+python tests/test_real_run.py         # demo မပါဘဲ AI analysis အပြည့် (7 checks, offline)
+python tests/test_self_attrs.py       # self.<name> static စစ်ဆေးခြင်း (12 modules)
 python tests/test_cancel.py          # ⏹ ရပ်တန့်ခြင်း = CancelledError (5 checks, ~3s)
 python tests/test_key_ring.py         # API key ၃ ခု + quota failover (27 checks, network မလိုပါ)
 
@@ -193,6 +207,8 @@ deploy/ec2_install.sh   Ubuntu/EC2 one-shot installer + updater (systemd)
 docs/EC2_INSTANCE_CONNECT.md  EC2 (Instance Connect) အဆင့်ဆင့် လမ်းညွှန်
 docs/AWS_DEPLOY.md      AWS guide
 tests/test_cancel.py    cancel semantics (kill → CancelledError, not a crash)
+tests/test_real_run.py  non-demo analysis run (offline stub client)
+tests/test_self_attrs.py static: undefined self.<name> attributes
 tests/test_ai_parts.py  AI content parts (file uri / mime type regression)
 tests/smoke_test.py     offline end-to-end test
 ```
