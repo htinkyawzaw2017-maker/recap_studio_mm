@@ -111,6 +111,10 @@ ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → M
 
 ## 🚀 Deployment
 
+* **AWS EC2 (Instance Connect, port 80) — command တစ်ကြောင်းတည်း** — [docs/EC2_INSTANCE_CONNECT.md](docs/EC2_INSTANCE_CONNECT.md)
+  ```bash
+  curl -fsSL -o /tmp/recap_install.sh https://raw.githubusercontent.com/htinkyawzaw2017-maker/recap_studio_mm/arena/01a10175-recap-studio-mm/deploy/ec2_install.sh && sudo bash /tmp/recap_install.sh
+  ```
 * **AWS (ECS Fargate + ALB + EFS)** — [docs/AWS_DEPLOY.md](docs/AWS_DEPLOY.md)
 * **AWS ပေါ်ရှိ deployment ကို update လုပ်ရန်** — [docs/AWS_UPDATE.md](docs/AWS_UPDATE.md)
   (`python tests/verify_deployment.py https://your-domain.com` ဖြင့် စစ်နိုင်သည်)
@@ -150,6 +154,8 @@ recapstudio/
   jobs.py uploads.py fonts.py util.py
 static/                 index.html · app.js · styles.css · fonts/
 assets/fonts/           Noto Sans Myanmar (OFL) bundled
+deploy/ec2_install.sh   Ubuntu/EC2 one-shot installer + updater (systemd)
+docs/EC2_INSTANCE_CONNECT.md  EC2 (Instance Connect) အဆင့်ဆင့် လမ်းညွှန်
 docs/AWS_DEPLOY.md      AWS guide
 tests/smoke_test.py     offline end-to-end test
 ```
