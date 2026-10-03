@@ -192,7 +192,7 @@ curl -s http://localhost/healthz                # {"status":"ok", ...} ပြန
 ### Deploy တကယ် ရောက်/မရောက် အပြင်မှ စစ်ရန် (laptop မှ)
 
 ```bash
-curl -s http://13.212.45.67/healthz            # version ကို စစ်ပါ (4.1.0 ဖြစ်ရမည်)
+curl -s http://13.212.45.67/healthz            # version ကို စစ်ပါ (4.1.1 ဖြစ်ရမည်)
 python tests/verify_deployment.py http://13.212.45.67
 # access password ထည့်ထားလျှင်:
 python tests/verify_deployment.py http://13.212.45.67 --password သင့်လျှို့ဝှက်စာ
@@ -230,7 +230,7 @@ Installer ကိုပဲ ပြန် run လုပ်ခြင်းဖြင�
 | Disk ပြည့် | `df -h` | `sudo journalctl --vacuum-time=3d`; data TTL လျှော့ (`RECAP_WORKSPACE_TTL_HOURS=6`) |
 | ffmpeg မတွေ့ | `ffmpeg -version` | `sudo apt install -y ffmpeg` |
 | Font မလှ | `ls /usr/share/fonts/truetype/noto \| grep Myanmar` | `sudo apt install -y fonts-noto-core fonts-sil-padauk` |
-| Update ရောက်/မရောက် မသိ | `curl -s http://localhost/healthz` | version နှိုင်းယှဉ်ပါ (4.1.0) |
+| Update ရောက်/မရောက် မသိ | `curl -s http://localhost/healthz` | version နှိုင်းယှဉ်ပါ (4.1.1) |
 
 Log ကြည့်ရန် အတိုဆုံး command များ —
 

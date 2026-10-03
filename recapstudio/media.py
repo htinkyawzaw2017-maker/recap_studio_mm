@@ -264,6 +264,12 @@ def run_ffmpeg(
             proc.kill()
 
     stderr_tail = "".join(tail)[-2500:]
+    if proc.returncode != 0 and cancel and cancel():
+        # ffmpeg died *because* the job was cancelled (the job-level watchdog
+        # kills by owner) — report a cancel, never a crash: otherwise the
+        # renderer logs "retrying without burn-in" and starts a second encode
+        # for a job the user just stopped.
+        raise CancelledError("အလုပ်ကို ရပ်တန့်လိုက်ပါပြီ")
     if check and proc.returncode != 0:
         log.error("ffmpeg failed (%s): %s", proc.returncode, stderr_tail)
         raise RuntimeError(f"FFmpeg error: {stderr_tail}")

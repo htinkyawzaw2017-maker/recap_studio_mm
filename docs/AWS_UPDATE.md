@@ -41,7 +41,7 @@ sudo nano /opt/recap-studio/.env      # GEMINI_API_KEY_2 / _3 ဖြည့်
 sudo systemctl restart recap-studio
 
 # 3) စစ်ဆေး —
-curl -s http://localhost/healthz      # "version":"4.1.0" ဖြစ်ရမည်
+curl -s http://localhost/healthz      # "version":"4.1.1" ဖြစ်ရမည်
 ```
 
 Browser တွင် `http://<EC2-IP>` ဖွင့်ပြီး **Ctrl + Shift + R** (hard refresh) နှိပ်ပါ။

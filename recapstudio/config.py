@@ -177,7 +177,7 @@ class Settings:
     fake_tts: bool = _env_bool("RECAP_FAKE_TTS", False)            # beep instead of speech
     force_reencode: bool = _env_bool("RECAP_FORCE_REENCODE", False)
 
-    app_version: str = "4.1.0"
+    app_version: str = "4.1.1"
 
 
 settings = Settings()

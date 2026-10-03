@@ -45,6 +45,20 @@ Timeline အလိုက် အသံ ပေါင်းစပ် (drift-free) +
 ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → MP4 + SRT + MP3
 ```
 
+### 🔧 v4.1.1 — "file uri and mime_type are required" ပြင်ဆင်ချက် (အရေးကြီး)
+
+တကယ့် job များတွင် `AI request failed: file uri and mime_type are required.` ဖြင့်
+အပိုင်းတိုင်း ကျရှုံးခဲ့သည် — AI ထံ ဗီဒီယို ပေးပို့သည့် အပိုင်းတွင်
+`pathlib.Path` ကို တိုက်ရိုက် ပေးပို့နေခြင်းကြောင့် (google-genai 1.20+ တွင်
+လုံးဝ လက်မခံ၊ 1.0.x တွင် ဗီဒီယို ပျောက်သွား)။ ယခု
+`GeminiClient.build_media_part()` က 12 MB အောက် proxy များကို
+`inline_data` (video/mp4) အဖြစ် တိုက်ရိုက်၊ ကြီးသော ဖိုင်များကို Files API
++ အတိအကျ mime type ဖြင့် ပေးပို့သည်။ Demo mode ဖြင့် စမ်းသပ်စဉ် AI ခေါ်ဆိုမှု
+မရှိသဖြင့် ဤ အမှားကို ရှာမတွေ့နိုင်ခဲ့ပါ — `tests/test_ai_parts.py`
+(21 checks) က လက်တွေ့ HTTP body ကို စစ်ဆေးပေးသည်။
+
+ထို့အပြင် `run_ffmpeg()` သည် job cancel ကြောင့် ရပ်ခံရသော ffmpeg ကို `CancelledError` အဖြစ် တင်ပြသည် (ယခင် "FFmpeg error" အဖြစ် ပြပြီး စာတန်းမပါဘဲ ပြန်ရိုက်ရန် ကြိုးစားခဲ့သည်) — `tests/test_cancel.py`။
+
 ### 🆕 v4.1 — အသုံးပြုသူ တိုင်ကြားချက် ၇ ခုအတွက် ပြင်ဆင်ချက်များ
 
 | # | တိုင်ကြားချက် | အကြောင်းရင်း | ဖြေရှင်းချက် |
@@ -146,6 +160,8 @@ running job ကို refresh လုပ်လျှင် ပြန်ချိ�
 ```bash
 pip install -r requirements.txt
 python tests/smoke_test.py            # offline: pipeline + HTTP layer (69 checks)
+python tests/test_ai_parts.py        # AI ထံ ပေးပို့သော video part များ (21 checks, network မလိုပါ)
+python tests/test_cancel.py          # ⏹ ရပ်တန့်ခြင်း = CancelledError (5 checks, ~3s)
 python tests/test_key_ring.py         # API key ၃ ခု + quota failover (27 checks, network မလိုပါ)
 
 # Deploy လုပ်ပြီးသော server (AWS/Render) ကို စစ်ရန် — dependencies မလိုပါ
@@ -176,6 +192,8 @@ assets/fonts/           Noto Sans Myanmar (OFL) bundled
 deploy/ec2_install.sh   Ubuntu/EC2 one-shot installer + updater (systemd)
 docs/EC2_INSTANCE_CONNECT.md  EC2 (Instance Connect) အဆင့်ဆင့် လမ်းညွှန်
 docs/AWS_DEPLOY.md      AWS guide
+tests/test_cancel.py    cancel semantics (kill → CancelledError, not a crash)
+tests/test_ai_parts.py  AI content parts (file uri / mime type regression)
 tests/smoke_test.py     offline end-to-end test
 ```
 
