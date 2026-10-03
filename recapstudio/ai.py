@@ -46,6 +46,38 @@ _KEY_ERROR_MARKERS = (
 
 ProgressFn = Optional[Callable[[float, str], None]]
 
+#: Below this size the proxy is sent inline with the prompt (one request, no
+#: Files-API wait). Above it the Files API is used — uploads of small files
+#: used to be the source of the "file uri and mime_type are required" failure.
+INLINE_PART_LIMIT = 12 * 1024 * 1024
+
+#: extension -> mime for the (always mp4) proxies we build
+_VIDEO_MIMES = {
+    ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime",
+    ".webm": "video/webm", ".avi": "video/x-msvideo", ".mkv": "video/mp4",
+    ".ts": "video/mp4", ".flv": "video/mp4", ".3gp": "video/3gpp",
+}
+
+
+def video_mime(path: str | Path) -> str:
+    """Mime type for a video part.
+
+    The SDK only fills in ``mime_type`` when it can guess the extension, and a
+    part without one is rejected with *"file uri and mime_type are required."*
+    — so we always decide the mime ourselves.
+    """
+    suffix = Path(path).suffix.lower()
+    if suffix in _VIDEO_MIMES:
+        return _VIDEO_MIMES[suffix]
+    try:
+        import mimetypes
+        guess, _ = mimetypes.guess_type(str(path))
+        if guess and guess.startswith("video/"):
+            return guess
+    except Exception:
+        pass
+    return "video/mp4"
+
 MODEL_ALIASES = {
     "gemini-2.5-flash": "gemini-2.5-flash",
     "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
@@ -190,11 +222,70 @@ class GeminiClient:
         log.warning(message)
 
     # -- file handling -------------------------------------------------
+    def _log_upload(self, path, ref, mime: str) -> None:
+        uri = getattr(ref, "uri", "") or getattr(ref, "download_uri", "") or ""
+        ref_mime = getattr(ref, "mime_type", "") or ""
+        log.info("uploaded %s (%s) -> uri=%s mime=%s",
+                 Path(path).name, mime, "yes" if uri else "MISSING",
+                 ref_mime or f"MISSING (using {mime})")
+        if not uri:
+            log.warning("Files API returned no uri for %s — part will be retried inline",
+                        Path(path).name)
+
+    def build_media_part(self, path: str | Path, label: str = "",
+                         progress: ProgressFn = None) -> tuple[Any, Any]:
+        """``(part, ref)`` — a video part the SDK accepts on every version.
+
+        Small proxies go inline (fast, no Files-API round trip); bigger ones use
+        the Files API and the uri + mime type are re-checked, because passing
+        whatever the SDK happened to return is exactly what broke analysis:
+
+        * ``pathlib.Path`` as a part  → "Unsupported content part type" (or an
+          empty part on google-genai 1.0.x, i.e. the video silently vanished)
+        * ``File`` without ``mime_type`` → "file uri and mime_type are required."
+        """
+        path = Path(path)
+        mime = video_mime(path)
+        size = path.stat().st_size
+        if size <= INLINE_PART_LIMIT:
+            data = path.read_bytes()
+            if self.is_new:
+                types_mod = getattr(self.sdk, "types", None)
+                part = types_mod.Part(inline_data=types_mod.Blob(data=data, mime_type=mime))
+            else:  # legacy google-generativeai inline blob
+                part = {"mime_type": mime, "data": data}
+            log.info("inline part for %s (%.1f MB, %s)", path.name, size / 1048576, mime)
+            return part, None
+
+        ref = self.upload(path, progress, label)
+        uri = str(getattr(ref, "uri", "") or getattr(ref, "download_uri", "") or "").strip()
+        if self.is_new:
+            ref_mime = str(getattr(ref, "mime_type", "") or "").strip() or mime
+            if not uri:
+                raise RuntimeError(
+                    "Gemini Files API မှ file uri ပြန်မရပါ — google-genai ကို "
+                    "အသစ်တင်ပါ (pip install -U google-genai) သို့မဟုတ် ခေတ္တမျှ ပြန်စမ်းပါ")
+            types_mod = getattr(self.sdk, "types", None)
+            part = types_mod.Part(file_data=types_mod.FileData(file_uri=uri, mime_type=ref_mime))
+            return part, ref
+        return ref, ref
+
     def upload(self, path: str | Path, progress: ProgressFn = None, label: str = ""):
+        """Upload through the Files API and wait until it is ACTIVE.
+
+        The mime type is always passed explicitly — an upload whose response
+        lacks ``mime_type`` produced the *"file uri and mime_type are
+        required."* failure the moment the part was handed back to the SDK.
+        """
+        mime = video_mime(path)
         if progress:
             progress(8, f"📤 {label or 'ဗီဒီယို'} ကို AI server သို့ ပေးပို့နေပါသည်...")
         if self.is_new:
-            ref = self._client.files.upload(file=str(path))  # type: ignore[union-attr]
+            try:
+                ref = self._client.files.upload(  # type: ignore[union-attr]
+                    file=str(path), config={"mime_type": mime})
+            except TypeError:  # very old SDK without the config argument
+                ref = self._client.files.upload(file=str(path))  # type: ignore[union-attr]
             waited = 0.0
             while True:
                 ref = self._client.files.get(name=ref.name)  # type: ignore[union-attr]
@@ -208,6 +299,7 @@ class GeminiClient:
                         raise RuntimeError("AI server မှ ဗီဒီယို ပြင်ဆင်ချိန် ကြာလွန်းနေပါသည်")
                     continue
                 if "ACTIVE" in state or state == "":
+                    self._log_upload(path, ref, mime)
                     return ref
                 raise RuntimeError(f"AI server video processing failed: {state}")
         ref = self.sdk.upload_file(path=str(path))  # type: ignore[attr-defined]
@@ -222,6 +314,7 @@ class GeminiClient:
                     raise RuntimeError("AI server မှ ဗီဒီယို ပြင်ဆင်ချိန် ကြာလွန်းနေပါသည်")
                 continue
             if "ACTIVE" in state:
+                self._log_upload(path, ref, mime)
                 return ref
             raise RuntimeError(f"AI server video processing failed: {state}")
 
@@ -693,7 +786,9 @@ class TimelineExtractor:
             self.api_key, key_ring=self.key_ring,
             on_switch=lambda message: (self.key_switches.append(message), self.log(message)),
         )
-        self.log(f"🔑 Using Gemini key #{self.client.slot} • model {self.model}")
+        sdk_version = getattr(self.sdk, "__version__", "?")
+        self.log(f"🔑 Using Gemini key #{self.client.slot} • model {self.model} "
+                 f"• google-genai {sdk_version}")
         chunks = plan_chunks(duration)
         self.log(f"Analysis chunks: {len(chunks)} → {[f'{s:.0f}-{e:.0f}s' for s, e in chunks]}")
         self._emit(6, f"🧠 ဗီဒီယိုကို အပိုင်း {len(chunks)} ပိုင်းခွဲ၍ AI ဖြင့် စစ်ဆေးနေပါသည်...")
@@ -755,12 +850,10 @@ class TimelineExtractor:
         ref = None
         try:
             build_proxy(video_path, start, end, proxy)
-            # very small chunks can go inline (faster, no Files API wait)
-            part: Any = proxy
-            if proxy.stat().st_size > 18 * 1024 * 1024:
-                ref = self.client.upload(proxy, self.progress,
-                                         label=f"အပိုင်း {index + 1}/{total}")
-                part = ref
+            # inline for small proxies, Files API for big ones — build_media_part
+            # makes sure the SDK never sees a bare path or a file without mime
+            part, ref = self.client.build_media_part(
+                proxy, label=f"အပိုင်း {index + 1}/{total}", progress=self.progress)
             prompt = _chunk_prompt(start, end, self.lang, self.mode, self.fill_mode, duration)
             raw = self.client.generate_json(self.model, [part, prompt], DIALOGUE_SCHEMA,
                                             progress=self.progress, cancel=self.cancel)
@@ -824,11 +917,8 @@ class TimelineExtractor:
             temporary = True
         ref = None
         try:
-            part: Any = proxy_path
-            if proxy_path.stat().st_size > 18 * 1024 * 1024:
-                ref = self.client.upload(proxy_path, self.progress,
-                                         label=f"အပိုင်း {start:.0f}-{end:.0f}s")
-                part = ref
+            part, ref = self.client.build_media_part(
+                proxy_path, label=f"အပိုင်း {start:.0f}-{end:.0f}s", progress=self.progress)
             boundary_hint = (
                 f"\n\nIMPORTANT: only the window {start:.2f}s–{end:.2f}s is missing from the "
                 "timeline. Return entries that START inside this window and keep going until "
