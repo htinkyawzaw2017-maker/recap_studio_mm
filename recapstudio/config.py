@@ -12,6 +12,43 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+def _load_env_files() -> list[str]:
+    """Load .env files before any os.getenv() call.
+
+    systemd deployments pass variables via EnvironmentFile and docker via the
+    compose file, but a plain ``uvicorn app:app`` run (or the installer's tmux
+    fallback) would otherwise start *without* the API key the user saved in
+    ``.env`` — which is exactly the "key ပျောက်" report. Real environment
+    variables always win (override=False).
+    """
+    loaded: list[str] = []
+    try:
+        from dotenv import load_dotenv  # type: ignore
+    except Exception:  # python-dotenv not installed — env vars only
+        return loaded
+    root = Path(__file__).resolve().parent.parent
+    candidates = [
+        root / ".env",
+        Path(os.getenv("RECAP_DATA_DIR", str(root))) / ".env",
+        Path.cwd() / ".env",
+    ]
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            path = candidate.resolve()
+        except OSError:
+            continue
+        if path in seen or not path.is_file():
+            continue
+        seen.add(path)
+        if load_dotenv(path, override=False):
+            loaded.append(str(path))
+    return loaded
+
+
+ENV_FILES_LOADED = _load_env_files()
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:

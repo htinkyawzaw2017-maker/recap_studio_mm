@@ -180,6 +180,22 @@ def main() -> int:
           "" if is_new_ui else "old build served an inline page → deploy the fix")
     check("no leftover old UI", "cdn.tailwindcss.com" not in text,
           "still contains the old page" if "cdn.tailwindcss.com" in text else "")
+    # v4.1 markers — proves the *fixed* build is live, not just "some" new build
+    v41 = {
+        "connection banner (refresh no longer freezes)": 'id="conn-banner"',
+        "3-slot API key ring": 'id="cfg-key-3"',
+        "remember-key checkbox": 'id="cfg-remember"',
+        "splitter dropzone": 'id="split-dropzone"',
+        "cancel hint": 'id="cancel-hint"',
+    }
+    missing = [name for name, marker in v41.items() if marker not in text]
+    check("v4.1 UI features served", not missing,
+          "missing: " + ", ".join(missing) if missing else f"{len(v41)} markers found")
+    status, js = client.request("GET", "/static/app.js")
+    js_text = js.decode("utf-8", "replace") if status == 200 else ""
+    check("app.js has the resilient polling/upload code",
+          "pollErrors" in js_text and "received_chunks" in js_text,
+          "" if js_text else "app.js not readable")
     for asset in ("/static/app.js", "/static/styles.css",
                   "/static/fonts/NotoSansMyanmar-Regular.ttf"):
         status, blob = client.request("GET", asset)

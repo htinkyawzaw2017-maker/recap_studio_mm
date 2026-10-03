@@ -23,7 +23,7 @@ from . import media
 from .fonts import FONTS_DIR
 from .media import get_video_info, run_ffmpeg
 from .subtitles import ass_filter_arg
-from .util import get_logger
+from .util import CancelledError, get_logger
 
 log = get_logger("recap.render")
 
@@ -210,6 +210,11 @@ def render_master(input_video: str, narration_wav: str, output_video: str, *,
     try:
         run_ffmpeg(build_cmd(True), total_duration=duration, label="🎬 Render",
                    progress=progress, timeout=None, check=True, cancel=cancel, owner=owner)
+    except CancelledError:
+        # A user cancel (⏹ ရပ်မည်) must never trigger the "render again without
+        # subtitles" fallback — that would start a second ffmpeg run for a job
+        # the user just stopped, and the UI would look like cancel did nothing.
+        raise
     except Exception as exc:
         if not ass_path:
             raise
