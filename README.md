@@ -1,53 +1,168 @@
-# Recap Studio MM
+# Recap Studio MM Pro 🎬
 
-မြန်မာဘာသာကို ဦးစားပေးထားသော video recap, voice-over နှင့် subtitle Streamlit app ဖြစ်ပါတယ်။
+မြန်မာဘာသာ ဦးစားပေး **AI Movie/Video Recap + Zero-Drift Dubbing + Subtitle** စတူဒီယို။
+FastAPI backend၊ ffmpeg render engine နှင့် hand-written SPA (CDN မလိုအပ်) ဖြင့် တည်ဆောက်ထားပါသည်။
 
-## Run လုပ်ရန်
+---
 
-1. Terminal မှာ project folder ထဲဝင်ပါ။
+## ⚡ အမြန်စတင်ရန်
 
-       cd recap-studio-mm
+### Docker (အကောင်းဆုံး)
 
-2. Python virtual environment တစ်ခုဖန်တီးပြီး dependency များ install လုပ်ပါ။
+```bash
+cp .env.example .env         # GEMINI_API_KEY ထည့်ပါ
+docker compose up --build    # http://localhost:8000
+```
 
-       python3 -m venv .venv
-       source .venv/bin/activate
-       pip install -r requirements.txt
+### Local (Python 3.10+)
 
-3. FFmpeg ကို install လုပ်ထားကြောင်းစစ်ပါ။
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+sudo apt-get install -y ffmpeg fonts-noto-core     # macOS: brew install ffmpeg
+export GEMINI_API_KEY=AIza...
+uvicorn app:app --host 0.0.0.0 --port 8000
+```
 
-       ffmpeg -version
+စမ်းသပ်ရန် API key မလိုပါ — `RECAP_DEMO_MODE=1 RECAP_FAKE_TTS=1` ဖြင့် run ပါ (beep အသံဖြင့်
+flow တစ်ခုလုံးကို စမ်းနိုင်သည်)။
 
-4. App ကို run ပါ။
+---
 
-       streamlit run app.py
+## 🎯 အလုပ်လုပ်ပုံ (One-Click Flow)
 
-## Recap တစ်ခုလုပ်နည်း
+```
+ဗီဒီယို တင် (resumable chunked upload)
+      ↓
+1 fps proxy များအဖြစ် အပိုင်းခွဲ → Gemini ဖြင့် timeline ခွဲခြမ်းစိတ်ဖြာ (absolute timestamps)
+      ↓
+Coverage sweep — AI ကျန်ခဲ့သော အပိုင်းများကို ပြန်စစ်/ဖြည့်  → အစအဆုံး စကားပြောစာ ရရှိ
+      ↓
+edge-tts parallel အသံသွင်းခြင်း + time-fitting (rate boost → atempo → trim)
+      ↓
+Timeline အလိုက် အသံ ပေါင်းစပ် (drift-free) + loudnorm (I=-16 LUFS)
+      ↓
+ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → MP4 + SRT + MP3
+```
 
-1. Sidebar ရှိ AI settings မှာ Gemini API key ထည့်ပါ။
-2. Recap Builder မှာ video ဖိုင်တင်ပါ၊ သို့မဟုတ် public video link ကို sidebar ကနေ import လုပ်ပါ။
-3. အသံမှရေးမည် ကိုရွေးပြီး မူရင်းအသံဘာသာနှင့် narration tone ကိုရွေးပါ။
-4. Recap script ဖန်တီးပါ ကိုနှိပ်ပါ။ AI က မြန်မာ recap narration စနစ်ဖြင့် ပြန်ရေးပေးပါမယ်။
-5. Final narration ကို စစ်ပြီးလိုအပ်လျှင် edit လုပ်ပါ။ အရှိန်အဟုန်အတွက် [action], [sad], [happy], [whisper], [p] ကိုသာ အသုံးပြုပါ။
-6. Voice၊ delivery၊ speed၊ optional BGM ကိုရွေးပြီး MP3 သို့မဟုတ် MP4 export လုပ်ပါ။
+### ဒီ version တွင် ပြင်ဆင်ထားသော အဓိက bug များ
 
-## မြန်မာ narration quality rule
+| # | ပြဿနာ | အကြောင်းရင်း | ဖြေရှင်းချက် |
+|---|---|---|---|
+| 1 | **`pip install` / Docker build fail** | requirements.txt ထဲတွင် apt package နာမည်များ (`ffmpeg`, `fonts-*`) ပါနေသည် | pip-only requirements + packages.txt/Dockerfile ခွဲထားသည် |
+| 2 | **ဗီဒီယို/Logo "နှစ်ခါတင်ရ" ဖြစ်နေသည်** | input.value ကို reset မလုပ်သဖြင့် ဖိုင်တူပြန်ရွေးလျှင် change event မဖြစ်ပေါ် | reset + resumable chunked upload (8 MB) + retry + progress |
+| 3 | **အသံ အစအဆုံး မသွင်းပေးခြင်း** | လိုင်းတစ်ခု ကျော်လွန်လျှင် နောက်လိုင်းများကို 0.3s သာ ဖြတ်ထားခဲ့သည် | time-fitting mixer (မည့်လိုင်းမျှ မပျောက်) + coverage sweep |
+| 4 | **AI က အလယ်တွင် ရပ်သွားခြင်း** | `max_output_tokens=8192` + chunk မခွဲဘဲ တစ်ခါတည်း ခွဲခြမ်းစိတ်ဖြာ | parallel chunk analysis (absolute offset) + 32k tokens + JSON salvage |
+| 5 | **Render "ကြာနေ/ရပ်နေ" ဟု ထင်ရသည်** | progress မရှိ၊ TTS ကို တစ်လိုင်းချင်း sequential သွင်း | ffmpeg `-progress` live % + ETA + 8 parallel TTS + stream-copy fast path |
+| 6 | **မြန်မာစာလုံး လေးထပ်ကွက် (tofu)** | repo ထဲက `Pyidaungsu.ttf` သည် 1 byte ပျက်နေသည် | Noto Sans Myanmar (OFL) ကို `assets/fonts` တွင် bundle လုပ်ထားသည် |
+| 7 | **YouTube link import fail** | `url.split("?")[0]` က video id ကို ဖျက်ပစ်သည် | URL အပြည့်အစုံ + yt-dlp error အမှန်အတိုင်း ပြသည် |
+| 8 | **Logo overlay render error** | filtergraph က `[2:v]` ကို ညွှန်းသော်လည်း logo input မထည့် | input index ကို မှန်ကန်စွာ ထည့်သွင်းသည် |
+| 9 | **SRT/ASS/MP3 ဒေါင်းလုဒ် ပျောက်** | job store တွင် အဆိုပါ field များ မရှိ | `srt_url`, `ass_url`, `audio_url` ထည့်ထားသည် |
+| 10 | Security / Ops | `allow_origins=["*"]` + credentials, path traversal, cancel/health/disk check မရှိ | CORS ပြင်၊ traversal guard၊ `/healthz`၊ cancel၊ disk check၊ janitor |
 
-AI prompt ကို အောက်ပါ flow အတိုင်းအမြဲရေးရန်ပြင်ထားပါတယ်။
+---
 
-**စဖွင့်ချိတ်ဆက်ချက် → နောက်ခံ → ပြဿနာ → အလှည့်အပြောင်း → ရလဒ် → အဆုံးသတ်အနှစ်ချုပ်**
+## 🖥️ UI/UX
 
-လူအမည်၊ နေရာအမည်၊ ဂဏန်းနှင့်အဖြစ်အပျက်အစဉ်ကို transcript ကနေသာယူပြီး၊ scene description၊ camera direction၊ timestamp၊ မလိုအပ်သော ခန့်မှန်းချက် မထည့်ရန် ကန့်သတ်ထားပါတယ်။
+* ၆ ခုသော tab — **Studio · Timeline Editor · Thumbnail · Shorts Splitter · Jobs · Settings**
+* Drag & drop upload + **progress meter + cancel + auto-retry**
+* **Live Preview** — subtitle နှင့် logo ကို ပုံပေါ်တွင် တိုက်ရိုက် ဆွဲ၍ နေရာချန်
+* **Job Progress** — အဆင့် ၈ ဆင့်၏ အခြေအနေ၊ % ၊ ကျန်ချိန် ခန့်မှန်းချက်၊ live log
+* **Coverage panel** — ဘယ်အပိုင်း အသံထွက်ပြီး/မပြီး ကြည့်နိုင်သည်
+* **Timeline Editor** — လိုင်း ပြင်/ထည့်/ဖျက်၊ auto-fix overlaps၊ ပြန် render
+* Myanmar font ကို server မှ တိုက်ရိုက် load (offline တွင်လည်း စာလုံး မှန်ကန်)
+* Ctrl/⌘ + Enter = render စတင်
 
-## Subtitle
+---
 
-Subtitle Studio မှာ video ဖိုင်တင်ပြီး original subtitle သို့မဟုတ် fact-preserving မြန်မာဘာသာပြန် subtitle ထုတ်နိုင်ပါတယ်။ Result အဖြစ် burned-in MP4 နဲ့ SRT နှစ်မျိုးရပါမယ်။
+## 🔌 API (အဓိကအချက်များ)
 
-## လိုအပ်ချက်
+| Method | Path | ရည်ရွယ်ချက် |
+|---|---|---|
+| GET | `/healthz` | health check (ALB/ECS) |
+| GET | `/api/system` | ffmpeg/font/disk/voices/models |
+| POST | `/api/upload/init` → `/chunk` → `/complete` | resumable chunked upload |
+| POST | `/api/upload` · `/api/upload-logo` | simple upload / logo badge |
+| GET | `/api/asset?path=` | workspace ဖိုင် (Range support) |
+| POST | `/api/download-url` | YouTube/TikTok import |
+| POST | `/api/tasks` | recap job စတင် |
+| GET | `/api/tasks/{id}` | status (progress/stage/logs/ETA/coverage) |
+| POST | `/api/tasks/{id}/cancel` · `/rerender` · DELETE | ရပ် / ပြန် render / ဖျက် |
+| GET | `/api/download/{file}` | MP4 · SRT · ASS · MP3 |
+| POST | `/api/thumbnail` · `/api/split-video` · `/api/estimate-parts` | tools |
 
-- Python 3.10+
-- FFmpeg
-- Gemini API key (AI recap နှင့် ဘာသာပြန် subtitle အတွက်)
-- Internet connection (Gemini, Edge TTS နှင့် font download အတွက်)
+---
 
-Google Cloud TTS သုံးလိုပါက sidebar မှာ service account JSON ဖိုင်တင်ပါ။
+## ⚙️ Environment variables (အရေးကြီးသည်များ)
+
+| Variable | Default | အဓိပ္ပာယ် |
+|---|---|---|
+| `GEMINI_API_KEY` | — | AI timeline extraction အတွက် |
+| `RECAP_DATA_DIR` | app folder | workspace/output/tasks ထားမည့်နေရာ (AWS တွင် `/data`) |
+| `RECAP_ACCESS_PASSWORD` | — | public deployment အတွက် shared secret |
+| `RECAP_MAX_CONCURRENT_JOBS` | 2 | တစ်ချိန်တည်း render အရေအတွက် |
+| `RECAP_TTS_WORKERS` | 8 | parallel အသံသွင်း workers |
+| `RECAP_MAX_CHUNK_SECONDS` | 480 | Gemini သို့ ပေးပို့မည့် အပိုင်းအရှည် |
+| `RECAP_DEMO_MODE` / `RECAP_FAKE_TTS` | 0 | စမ်းသပ်ရန် (production တွင် မဖွင့်ပါနှင့်) |
+
+အားလုံးစာရင်း → `.env.example`
+
+---
+
+## 🚀 Deployment
+
+* **AWS EC2 (Instance Connect, port 80) — command တစ်ကြောင်းတည်း** — [docs/EC2_INSTANCE_CONNECT.md](docs/EC2_INSTANCE_CONNECT.md)
+  ```bash
+  cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10175-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
+  ```
+* **AWS (ECS Fargate + ALB + EFS)** — [docs/AWS_DEPLOY.md](docs/AWS_DEPLOY.md)
+* **AWS ပေါ်ရှိ deployment ကို update လုပ်ရန်** — [docs/AWS_UPDATE.md](docs/AWS_UPDATE.md)
+  (`python tests/verify_deployment.py https://your-domain.com` ဖြင့် စစ်နိုင်သည်)
+* **Render** — [RENDER_DEPLOY.md](RENDER_DEPLOY.md) (`render.yaml` အဆင်သင့်)
+* **Docker တစ်ခုတည်း** — `docker build -t recap . && docker run -p 8000:8000 -e GEMINI_API_KEY=... -v recap:/data recap`
+
+---
+
+## 🧪 Test
+
+```bash
+pip install -r requirements.txt
+python tests/smoke_test.py                    # offline: pipeline + HTTP layer (69 checks)
+
+# Deploy လုပ်ပြီးသော server (AWS/Render) ကို စစ်ရန် — dependencies မလိုပါ
+python tests/verify_deployment.py https://your-domain.com
+python tests/verify_deployment.py https://your-domain.com --video ./clip.mp4
+```
+
+`RECAP_DEMO_MODE=1 RECAP_FAKE_TTS=1` ဖြင့် run သည် — ခွန်အား/API key မလိုဘဲ
+timeline → အသံ → စာတန်းထိုး → render တစ်ခုလုံးကို အမှန် တည်ဆောက်စမ်းသပ်သည်။
+
+---
+
+## 📁 Project layout
+
+```
+app.py                  FastAPI routes + SPA serving
+recapstudio/
+  config.py             env-driven settings & paths
+  media.py              ffmpeg/ffprobe + progress parsing
+  ai.py                 chunked Gemini analysis + coverage sweep
+  tts.py                edge-tts parallel synthesis + time fitting
+  subtitles.py          ASS/SRT builder (libass-safe escaping)
+  render.py             single-pass master render (+ fast copy path)
+  pipeline.py           orchestration / splitter / thumbnail
+  jobs.py uploads.py fonts.py util.py
+static/                 index.html · app.js · styles.css · fonts/
+assets/fonts/           Noto Sans Myanmar (OFL) bundled
+deploy/ec2_install.sh   Ubuntu/EC2 one-shot installer + updater (systemd)
+docs/EC2_INSTANCE_CONNECT.md  EC2 (Instance Connect) အဆင့်ဆင့် လမ်းညွှန်
+docs/AWS_DEPLOY.md      AWS guide
+tests/smoke_test.py     offline end-to-end test
+```
+
+---
+
+## 📄 License
+
+MIT — see [LICENSE](LICENSE). Bundled Noto Sans Myanmar font is SIL OFL 1.1
+(`assets/fonts/OFL.txt`).

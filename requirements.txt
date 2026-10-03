@@ -1,7 +1,19 @@
-fastapi
-uvicorn
-python-multipart
-edge-tts
-pillow
-yt-dlp
-google-genai
+# ── Recap Studio MM — Python dependencies (pip only) ────────────────────────
+# NOTE: the previous requirements.txt listed *apt* package names
+# ("ffmpeg", "fonts-sil-padauk", "fonts-noto-core"). Those do not exist on
+# PyPI, so `pip install -r requirements.txt` aborted - which is why Docker /
+# Render builds failed. System packages live in packages.txt + Dockerfile.
+
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9        # multipart uploads (chunked upload endpoints)
+pydantic>=2.7
+
+edge-tts>=6.1                  # neural voices (Microsoft Edge TTS endpoint)
+google-genai>=1.0              # Gemini video understanding (timeline extraction)
+yt-dlp>=2024.8.6               # public video link import
+Pillow>=10.2                   # thumbnails + logo badge
+numpy>=1.26                    # vectorised logo background removal
+
+# tests / tooling (optional, safe to install in production)
+httpx>=0.27                    # Starlette TestClient

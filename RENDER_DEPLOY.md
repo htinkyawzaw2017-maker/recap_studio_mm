@@ -25,11 +25,18 @@ GitHub မှာ private repository အသစ်တစ်ခုဖန်တီ�
 4. Render က repository root ရှိ render.yaml ကိုတွေ့ပြီး Recap Studio MM service ကိုပြပေးပါမယ်။
 5. Apply သို့မဟုတ် Create Blueprint ကိုနှိပ်ပါ။
 
-render.yaml က Docker runtime, Singapore region, 1 CPU / 2 GB RAM plan နှင့် auto deploy ကို ကြိုတင်သတ်မှတ်ထားပါတယ်။ Whisper နှင့် video processing ကြောင့် Free 512 MB plan မသုံးရန်အကြံပြုပါတယ်။
+render.yaml က Docker runtime, Singapore region, auto deploy, `/healthz` health check နှင့်
+**20 GB persistent disk (`/data`)** ကို ကြိုတင်သတ်မှတ်ထားပါတယ်။
+ffmpeg encode အတွက် **Standard plan (2 CPU / 4 GB) အထက်ကို သုံးပါ** — Free 512 MB plan သည်
+render လုပ်ရန် လုံးဝ မလုံလောက်ပါ။
+
+Disk မရှိသော plan များတွင် `RECAP_DATA_DIR` ကို ချန်ထားပါက container ပြန်စတင်တိုင်း
+တင်ထားသော ဗီဒီယိုများ ပျောက်သွားပါမည် (Render Disk ကို အသုံးပြုပါ)။
 
 ## 3. First deploy ကိုစောင့်ပါ
 
-Build လုပ်စဉ်မှာ Python, FFmpeg, Whisper နှင့် PyTorch packages များ install လုပ်ရသဖြင့် ပထမအကြိမ်အချိန်ယူနိုင်ပါတယ်။
+Build လုပ်စဉ်မှာ Python packages နှင့် FFmpeg (Dockerfile မှ) install လုပ်သဖြင့် ပထမအကြိမ်
+၃-၅ မိနစ်ခန့် အချိန်ယူနိုင်ပါတယ်။ Build ပြီးလျှင် `/healthz` ကို Render က အလိုအလျောက် စစ်ဆေးပါမည်။
 
 Deploy အောင်မြင်လျှင် Render က onrender.com URL တစ်ခုပေးပါမယ်။ URL ကိုဖွင့်ပြီး Recap Studio MM page ပေါ်လာရင် deployment အောင်မြင်ပါပြီ။
 

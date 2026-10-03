@@ -1,0 +1,25 @@
+# secrets & local config
+.env
+.recap_config.json
+*.pem
+*.json.key
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# runtime data (never commit renders / uploads)
+workspace/
+output/
+data/
+logs/
+fonts.conf
+*.log
+
+# media scratch
+*.part
+tmp/

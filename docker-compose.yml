@@ -1,0 +1,22 @@
+services:
+  recap-studio:
+    build: .
+    image: recap-studio-mm:latest
+    ports:
+      - "8000:8000"
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      RECAP_DEFAULT_MODEL: ${RECAP_DEFAULT_MODEL:-gemini-2.5-flash}
+      RECAP_DATA_DIR: /data
+      RECAP_MAX_CONCURRENT_JOBS: ${RECAP_MAX_CONCURRENT_JOBS:-2}
+      RECAP_ACCESS_PASSWORD: ${RECAP_ACCESS_PASSWORD:-}
+      # set to 1 only for a key-less UI demo
+      RECAP_DEMO_MODE: ${RECAP_DEMO_MODE:-0}
+      RECAP_FAKE_TTS: ${RECAP_FAKE_TTS:-0}
+    volumes:
+      - recap-data:/data
+    shm_size: "512m"
+    restart: unless-stopped
+
+volumes:
+  recap-data:

@@ -3,7 +3,21 @@ services:
     name: recap-studio-mm
     runtime: docker
     region: singapore
-    plan: 1c-2g
+    plan: standard            # 2 CPU / 4 GB — Free 512 MB is far too small for ffmpeg
     dockerfilePath: ./Dockerfile
     dockerContext: .
     autoDeployTrigger: commit
+    healthCheckPath: /healthz
+    envVars:
+      - key: RECAP_DATA_DIR
+        value: /data
+      - key: RECAP_MAX_CONCURRENT_JOBS
+        value: "1"
+      - key: RECAP_ACCESS_PASSWORD   # optional shared secret for public links
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+    disk:
+      name: recap-data
+      mountPath: /data
+      sizeGB: 20

@@ -1,3 +1,5 @@
+# System packages (Render / Heroku buildpacks read this file).
+# On Docker / EC2 / ECS these are installed by the Dockerfile instead.
 ffmpeg
-fonts-sil-padauk
 fonts-noto-core
+fonts-sil-padauk
