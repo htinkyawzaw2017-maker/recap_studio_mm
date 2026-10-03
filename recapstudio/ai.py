@@ -786,7 +786,7 @@ class TimelineExtractor:
             self.api_key, key_ring=self.key_ring,
             on_switch=lambda message: (self.key_switches.append(message), self.log(message)),
         )
-        sdk_version = getattr(self.sdk, "__version__", "?")
+        sdk_version = getattr(getattr(self.client, "sdk", None), "__version__", "?")
         self.log(f"🔑 Using Gemini key #{self.client.slot} • model {self.model} "
                  f"• google-genai {sdk_version}")
         chunks = plan_chunks(duration)
