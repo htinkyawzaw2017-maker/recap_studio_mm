@@ -21,6 +21,7 @@ model left empty so the narration really does run from 0 s to the end.
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 import uuid
@@ -30,10 +31,18 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
 from . import config
+from .keys import KeyRing, key_ring as default_key_ring
 from .media import run_ffmpeg
-from .util import estimate_speech_seconds, get_logger
+from .util import CancelledError, estimate_speech_seconds, get_logger
 
 log = get_logger("recap.ai")
+
+#: errors that mean "this key cannot be used right now" → try the next slot
+_KEY_ERROR_MARKERS = (
+    "api key not valid", "api_key_invalid", "invalid api key", "permission denied",
+    "permission_denied", "unauthenticated", "401", "403", "quota", "resource_exhausted",
+    "429", "rate limit", "billing",
+)
 
 ProgressFn = Optional[Callable[[float, str], None]]
 
@@ -128,16 +137,57 @@ def _load_sdk():
 
 
 class GeminiClient:
-    """Thin wrapper handling both the new and legacy Google SDKs."""
+    """Thin wrapper handling both the new and legacy Google SDKs.
 
-    def __init__(self, api_key: str):
-        if not api_key:
-            raise ValueError("Gemini API Key ထည့်သွင်းပေးရန် လိုအပ်ပါသည် ချင်ဗျာ။")
-        self.api_key = api_key
+    When a :class:`~recapstudio.keys.KeyRing` is supplied the client can also
+    **switch keys at runtime**: a 429/quota/permission error puts the current
+    slot on cooldown and the next key takes over, so a long recap survives a
+    key that runs out mid-job (previously the job simply failed).
+    """
+
+    def __init__(self, api_key: str = "", key_ring: KeyRing | None = None,
+                 on_switch: Optional[Callable[[str], None]] = None):
         self.sdk, self.is_new = _load_sdk()
-        self._client = self.sdk.Client(api_key=api_key) if self.is_new else None
+        self.key_ring = key_ring or (default_key_ring if not api_key else None)
+        self.on_switch = on_switch
+        self.switches: list[str] = []
+        key, slot = self._pick_initial_key(api_key)
+        if not key:
+            raise ValueError("Gemini API Key ထည့်သွင်းပေးရန် လိုအပ်ပါသည်။ "
+                             "⚙️ Settings တွင် Key #1-#3 ထည့်နိုင်ပါသည်။")
+        self._apply_key(key, slot)
+
+    def _pick_initial_key(self, api_key: str) -> tuple[str, int]:
+        if self.key_ring and self.key_ring.has_key():
+            key, slot = self.key_ring.active_key()
+            return key, slot or 1
+        return (api_key or "").strip(), 1
+
+    def _apply_key(self, key: str, slot: int) -> None:
+        self.api_key = key
+        self.slot = slot
+        self._client = self.sdk.Client(api_key=key) if self.is_new else None  # type: ignore[union-attr]
         if not self.is_new:
-            self.sdk.configure(api_key=api_key)  # type: ignore[attr-defined]
+            self.sdk.configure(api_key=key)  # type: ignore[attr-defined]
+
+    def rotate_key(self, error: Exception) -> bool:
+        """Move to the next healthy key. Returns True when one was found."""
+        if not self.key_ring:
+            return False
+        nxt = self.key_ring.rotate_after_failure(self.slot, str(error), message_fn=self._announce)
+        if not nxt:
+            return False
+        self._apply_key(nxt, self.key_ring.active_index + 1)
+        self.switches.append(f"slot {self.slot}")
+        return True
+
+    def _announce(self, message: str) -> None:
+        if self.on_switch:
+            try:
+                self.on_switch(message)
+            except Exception:
+                pass
+        log.warning(message)
 
     # -- file handling -------------------------------------------------
     def upload(self, path: str | Path, progress: ProgressFn = None, label: str = ""):
@@ -193,10 +243,11 @@ class GeminiClient:
         model = MODEL_ALIASES.get(model, model)
         max_tokens = max_tokens or config.settings.ai_max_output_tokens
         attempt = 0
+        key_switches = 0
         last_error: Exception | None = None
-        while attempt < config.settings.ai_retries:
+        while attempt < config.settings.ai_retries + key_switches:
             if cancel and cancel():
-                raise RuntimeError("cancelled")
+                raise CancelledError("အလုပ်ကို ရပ်တန့်လိုက်ပါပြီ")
             try:
                 if self.is_new:
                     cfg: dict[str, Any] = {"temperature": temperature, "max_output_tokens": max_tokens}
@@ -223,9 +274,16 @@ class GeminiClient:
             except Exception as exc:
                 last_error = exc
                 msg = str(exc).lower()
+                is_key_error = any(k in msg for k in _KEY_ERROR_MARKERS)
+                # 1) a dead / quota-limited key is swapped out immediately
+                if is_key_error and key_switches < 3 and self.rotate_key(exc):
+                    key_switches += 1
+                    if progress:
+                        progress(20, f"🔑 Key #{self.slot} ဖြင့် ပြန်စမ်းနေပါသည်...")
+                    continue
                 retryable = any(k in msg for k in ("503", "unavailable", "429", "quota", "overloaded",
                                                    "deadline", "timeout", "500", "internal"))
-                if not retryable or attempt == config.settings.ai_retries - 1:
+                if not retryable or attempt >= config.settings.ai_retries - 1:
                     break
                 wait = min(30, 4 * (attempt + 1) + (attempt * 2))
                 if progress:
@@ -412,8 +470,14 @@ ends at {chunk_end:.2f}s (total video length = {duration:.2f}s).
 MANDATORY RULES
 1. TIMESTAMPS ARE ABSOLUTE: use seconds counted from the START OF THE FULL VIDEO.
    The first second of this clip is {chunk_start:.2f}s (NOT 0). The last is {chunk_end:.2f}s.
-2. COVER THE WHOLE CLIP: keep producing entries until the clip's final seconds.
-   Do not stop early, do not summarise the ending, do not skip the middle.
+2. COVER THE WHOLE CLIP — THIS IS THE MOST IMPORTANT RULE:
+   * The FIRST entry must start at or before {chunk_start + 4:.2f}s.
+   * The LAST entry must start after {max(chunk_start, chunk_end - 8):.2f}s and end at
+     {chunk_end:.2f}s (or later) — never finish the clip early.
+   * No silent window longer than 4 seconds anywhere between {chunk_start:.2f}s and
+     {chunk_end:.2f}s: where nothing is spoken, write short narration describing what is
+     visibly happening so the voice-over never stops.
+   * Do not stop early, do not summarise the ending, do not skip the middle.
 3. Write every line in {lang_instruction}. Keep each line short enough to speak inside its window
    (about 12-16 Burmese characters per second of window). Long windows get 2-3 shorter lines.
 4. NO double quotes inside text. Use single quotes if needed. No timestamps, no scene directions,
@@ -451,8 +515,9 @@ WINDOWS TO FILL:
 {gap_block}
 
 Rules:
-1. Write ONE line per window, exactly the requested speaking length (about 13 Burmese characters
-   per second for Burmese, 15 characters per second for English). Never exceed the window.
+1. Write ONE line per window that fits the requested speaking length (about 9-10 Burmese
+   characters per second for Burmese, 13 for English) and never exceeds the window - the line is
+   spoken by a narrator whose speed cannot be stretched far.
 2. Continue the story smoothly from the surrounding lines. You may summarise or connect what the
    surrounding lines already established, but do NOT invent new names, numbers or events.
 3. Plain {lang_word} only: no quotes, no brackets, no timestamps, no stage directions.
@@ -523,6 +588,35 @@ def normalise(dialogues: Iterable[dict], duration: float) -> list[dict]:
     return merged
 
 
+def split_gaps(gaps: list[dict], max_len: float = 8.0,
+                min_len: float = 1.2) -> list[dict]:
+    """Break long silent windows into speakable chunks.
+
+    One line can only cover a few seconds of speech: asking for a single line
+    in a 40 s hole left the rest of the hole silent ("အသံ အစအဆုံး မသွင်းတဲ့
+    ပြသာနာ"). A long window is therefore split into ~8 s slots, each getting
+    its own short line, so the narrator keeps talking through the whole hole.
+    """
+    out: list[dict] = []
+    for gap in gaps:
+        start = float(gap["start"])
+        end = float(gap["end"])
+        length = end - start
+        if length <= max_len:
+            if length >= min_len:
+                out.append({"start": round(start, 2), "end": round(end, 2)})
+            continue
+        count = max(2, int(math.ceil(length / max_len)))
+        step = length / count
+        for index in range(count):
+            sub_start = start + index * step
+            sub_end = end if index == count - 1 else start + (index + 1) * step
+            if sub_end - sub_start < min_len:
+                continue
+            out.append({"start": round(sub_start, 2), "end": round(sub_end, 2)})
+    return out
+
+
 def find_gaps(dialogues: list[dict], duration: float, min_gap: float,
               include_head_tail: bool = True) -> list[dict]:
     gaps: list[dict] = []
@@ -539,12 +633,16 @@ def find_gaps(dialogues: list[dict], duration: float, min_gap: float,
 class TimelineExtractor:
     """Full pipeline: chunked analysis + coverage sweep."""
 
-    def __init__(self, api_key: str, model: str, target_language: str = "my",
+    def __init__(self, api_key: str = "", model: str = "", target_language: str = "my",
                  mode: str = "auto", fill_mode: str = "continuous",
                  progress: ProgressFn = None, cancel: Optional[Callable[[], bool]] = None,
-                 log_fn: Optional[Callable[[str], None]] = None):
+                 log_fn: Optional[Callable[[str], None]] = None,
+                 key_ring: KeyRing | None = None, keys: Optional[list[str]] = None):
         self.api_key = api_key
-        self.model = MODEL_ALIASES.get(model, model)
+        self.key_ring = key_ring
+        self.keys = [k for k in (keys or []) if k]
+        self.model = MODEL_ALIASES.get(model or config.settings.default_model,
+                                       model or config.settings.default_model)
         self.lang = target_language
         self.mode = mode
         self.fill_mode = fill_mode
@@ -555,17 +653,27 @@ class TimelineExtractor:
         # key must never silently produce a fake beep-narrated video.
         self.demo = bool(config.settings.demo_mode)
         self.client: Optional[GeminiClient] = None
+        self.key_switches: list[str] = []
 
     def _emit(self, pct: float, message: str) -> None:
         if self.progress:
             try:
                 self.progress(pct, message)
+            except CancelledError:
+                raise
             except Exception:
                 pass
 
     def _check_cancel(self) -> None:
         if self.cancel and self.cancel():
-            raise RuntimeError("cancelled")
+            raise CancelledError("အလုပ်ကို ရပ်တန့်လိုက်ပါပြီ")
+
+    def has_key(self) -> bool:
+        if self.api_key:
+            return True
+        if self.key_ring and self.key_ring.has_key():
+            return True
+        return bool(self.keys)
 
     # ── main entry ─────────────────────────────────────────────────────
     def run(self, video_path: str, duration: float) -> dict:
@@ -576,12 +684,16 @@ class TimelineExtractor:
             return {"hook_line1": data["hook_line1"], "hook_line2": data["hook_line2"],
                     "dialogues": data["dialogues"], "coverage": report}
 
-        if not self.api_key:
+        if not self.has_key():
             raise ValueError(
-                "Gemini API Key မထည့်ရသေးပါ။ Settings tab မှ API Key ထည့်သွင်းပေးပါ "
-                "(သို့မဟုတ် စမ်းသပ်ရန် RECAP_DEMO_MODE=1 ဖြင့် run ပါ)။"
+                "Gemini API Key မထည့်ရသေးပါ။ ⚙️ Settings tab မှ Key #1 တွင် ထည့်သွင်းပေးပါ "
+                "(Key #2/#3 ထည့်ထားပါက quota ပြည့်ချိန် အလိုအလျောက် ကူးပေးပါမည်)။"
             )
-        self.client = GeminiClient(self.api_key)
+        self.client = GeminiClient(
+            self.api_key, key_ring=self.key_ring,
+            on_switch=lambda message: (self.key_switches.append(message), self.log(message)),
+        )
+        self.log(f"🔑 Using Gemini key #{self.client.slot} • model {self.model}")
         chunks = plan_chunks(duration)
         self.log(f"Analysis chunks: {len(chunks)} → {[f'{s:.0f}-{e:.0f}s' for s, e in chunks]}")
         self._emit(6, f"🧠 ဗီဒီယိုကို အပိုင်း {len(chunks)} ပိုင်းခွဲ၍ AI ဖြင့် စစ်ဆေးနေပါသည်...")
@@ -670,96 +782,275 @@ class TimelineExtractor:
                 shifted.append({"start": line_start, "end": line_end,
                                 "speaker": line.get("speaker", ""), "text": line["text"]})
             payload["dialogues"] = shifted
+
+            # ── tail pass: never let a clip end in silence ─────────────
+            # Models like to "summarise" the ending, so the last line often
+            # stops far before the clip does and the dub fell silent there.
+            if config.settings.ai_tail_pass and shifted:
+                last_end = max(l["end"] for l in shifted)
+                missing_tail = end - last_end
+                if missing_tail > max(6.0, (end - start) * 0.12) and end - start > 12.0:
+                    tail_start = max(start + 0.5, last_end - 1.0)
+                    self.log(f"↻ chunk {index + 1}: tail {tail_start:.0f}-{end:.0f}s "
+                             f"မပါသေးပါ — ပြန်မေးနေပါသည်")
+                    try:
+                        extra = self._ask_region(proxy, video_path, tail_start, end, duration,
+                                                 focus=True)
+                        before = len(shifted)
+                        shifted.extend(extra)
+                        self.log(f"✓ tail pass recovered {len(shifted) - before} lines "
+                                 f"({tail_start:.0f}-{end:.0f}s)")
+                    except CancelledError:
+                        raise
+                    except Exception as exc:
+                        self.log(f"⚠️ tail pass failed ({start:.0f}-{end:.0f}s): {exc}")
+            payload["dialogues"] = shifted
             return payload, len(shifted)
         finally:
             if ref is not None:
                 self.client.delete(ref)
             proxy.unlink(missing_ok=True)
 
+    def _ask_region(self, proxy: Path, video_path: str, start: float, end: float,
+                    duration: float, focus: bool = False) -> list[dict]:
+        """Ask the model about one window (used for tails and re-analysis)."""
+        assert self.client is not None
+        proxy_path = proxy
+        temporary = False
+        if not focus:
+            # a fresh proxy because the caller's clip covers a wider window
+            proxy_path = Path(config.TMP_DIR) / f"proxy_{uuid.uuid4().hex[:8]}.mp4"
+            build_proxy(video_path, start, end, proxy_path)
+            temporary = True
+        ref = None
+        try:
+            part: Any = proxy_path
+            if proxy_path.stat().st_size > 18 * 1024 * 1024:
+                ref = self.client.upload(proxy_path, self.progress,
+                                         label=f"အပိုင်း {start:.0f}-{end:.0f}s")
+                part = ref
+            boundary_hint = (
+                f"\n\nIMPORTANT: only the window {start:.2f}s–{end:.2f}s is missing from the "
+                "timeline. Return entries that START inside this window and keep going until "
+                f"{end:.2f}s."
+            )
+            prompt = _chunk_prompt(start, end, self.lang, self.mode, self.fill_mode,
+                                   duration, boundary_hint=boundary_hint)
+            raw = self.client.generate_json(self.model, [part, prompt], DIALOGUE_SCHEMA,
+                                            progress=self.progress, cancel=self.cancel)
+            payload = parse_dialogues(raw)
+            clip_len = max(0.5, end - start)
+            lines = payload["dialogues"]
+            looks_relative = bool(lines) and max(l["start"] for l in lines) < clip_len - 0.5
+            out: list[dict] = []
+            for line in lines:
+                if looks_relative:
+                    line_start = min(duration, start + line["start"])
+                    line_end = min(duration, start + line["end"])
+                else:
+                    line_start = min(duration, max(start - 1.0, line["start"]))
+                    line_end = min(duration, max(line_start + 0.5, line["end"]))
+                out.append({"start": line_start, "end": line_end,
+                            "speaker": line.get("speaker", ""), "text": line["text"]})
+            return out
+        finally:
+            if ref is not None:
+                self.client.delete(ref)
+            if temporary:
+                proxy_path.unlink(missing_ok=True)
+
     # ── gap filling ────────────────────────────────────────────────────
+    def _min_gap(self) -> float:
+        return 2.5 if self.fill_mode == "continuous" else 8.0
+
     def _coverage_sweep(self, dialogues: list[dict], duration: float,
                         video_path: str) -> tuple[list[dict], int, float]:
-        min_gap = 2.5 if self.fill_mode == "continuous" else 8.0
+        """Make sure narration runs from the first to the last second.
+
+        Three passes, each one cheaper than the last:
+          1. big holes → re-analyse that piece of *video* (the model simply
+             skipped a scene, text alone would invent things),
+          2. remaining holes → short connective lines written in batches,
+          3. anything the model still refuses to fill → a deterministic
+             fallback line so continuous mode never goes silent.
+        """
+        min_gap = self._min_gap()
         gaps = find_gaps(dialogues, duration, min_gap)
         longest = max((g["end"] - g["start"] for g in gaps), default=0.0)
         if not gaps or self.demo:
             return dialogues, 0, longest
 
         self._emit(72, f"🧩 လွတ်နေသော အပိုင်း {len(gaps)} ခုကို ဖြည့်စွက်နေပါသည်...")
-        # Large gaps usually mean the model skipped a whole scene: re-analyse
-        # that region's video instead of guessing from text alone.
-        big_gaps = [g for g in gaps if (g["end"] - g["start"]) > 25.0][:4]
+
+        # 1) large gaps → re-analyse the region (up to 6, longest first)
+        big_gaps = sorted([g for g in gaps if (g["end"] - g["start"]) > 20.0],
+                          key=lambda g: g["start"] - g["end"])[:6]
         region_lines: list[dict] = []
         for gap in big_gaps:
             self._check_cancel()
             try:
-                payload, count = self._analyze_chunk(video_path, gap["start"], gap["end"],
-                                                     duration, -1, -1)
-                region_lines.extend(payload["dialogues"])
-                self.log(f"↻ re-analysed {gap['start']:.0f}-{gap['end']:.0f}s → {count} lines")
+                lines = self._ask_region(Path(""), video_path, gap["start"], gap["end"],
+                                         duration, focus=False)
+                region_lines.extend(lines)
+                self.log(f"↻ re-analysed {gap['start']:.0f}-{gap['end']:.0f}s → {len(lines)} lines")
+            except CancelledError:
+                raise
             except Exception as exc:
                 self.log(f"⚠️ region re-analysis failed ({gap['start']:.0f}s): {exc}")
         if region_lines:
             dialogues = normalise(dialogues + region_lines, duration)
 
-        # remaining gaps → short connective narration (text only, fast)
-        gaps = [g for g in find_gaps(dialogues, duration, min_gap) if (g["end"] - g["start"]) <= 40.0]
+        # 2) connective narration for everything that is still empty
         filled = 0
-        if gaps:
-            filled = self._fill_gaps_with_text(dialogues, gaps, duration)
-            if filled:
+        for attempt in range(3):
+            gaps = find_gaps(dialogues, duration, min_gap)
+            if not gaps:
+                break
+            self._emit(74 + attempt * 2,
+                       f"🧩 လွတ်နေသော နေရာ {len(gaps)} ခု အတွက် စကားပြောစာ ရေးနေပါသည်...")
+            added = self._fill_gaps_with_text(dialogues, gaps, duration,
+                                              allow_fallback=attempt > 0, split=True)
+            filled += added
+            if added:
                 dialogues = normalise(dialogues, duration)
-        longest = max((g["end"] - g["start"] for g in find_gaps(dialogues, duration, 3.0)), default=0.0)
+            if not added:
+                break
+
+        # 3) final safety net: continuous mode must not fall silent
+        remaining = find_gaps(dialogues, duration, max(min_gap, 6.0))
+        if remaining and self.fill_mode == "continuous":
+            filled += self._fallback_fill(dialogues, split_gaps(remaining), duration)
+            dialogues = normalise(dialogues, duration)
+
+        longest = max((g["end"] - g["start"] for g in find_gaps(dialogues, duration, 3.0)),
+                      default=0.0)
         return dialogues, filled, longest
 
-    def _fill_gaps_with_text(self, dialogues: list[dict], gaps: list[dict],
-                             duration: float) -> int:
-        assert self.client is not None
-        payload_gaps = []
-        context: list[dict] = []
-        for idx, gap in enumerate(gaps[:40]):
-            length = gap["end"] - gap["start"]
-            payload_gaps.append({
-                "index": idx,
-                "start": gap["start"],
-                "end": gap["end"],
-                "chars": max(10, int(length * (12 if self.lang == "my" else 14))),
-            })
-            before = [d for d in dialogues if d["end"] <= gap["start"]][-2:]
-            after = [d for d in dialogues if d["start"] >= gap["end"]][:2]
-            for item in before + after:
-                context.append({"start": item["start"], "text": item["text"]})
-        context = context[-24:]
-        prompt = _gap_fill_prompt(payload_gaps, self.lang, context)
-        try:
-            raw = self.client.generate_json(self.model, [prompt], GAP_FILL_SCHEMA,
-                                            temperature=0.4, max_tokens=8192,
-                                            progress=self.progress, cancel=self.cancel)
-            data = json.loads(raw[raw.find("{"): raw.rfind("}") + 1])
-        except Exception as exc:
-            self.log(f"⚠️ gap fill failed: {exc}")
-            return 0
+    #: neutral connectors used only when the AI cannot answer (keeps the voice
+    #: track continuous instead of leaving the viewer with silence)
+    _FALLBACK_LINES = (
+        "ဒီအခိုက်အတန့်မှာ ဇာတ်လမ်းက ဆက်လက် ဖြစ်ပျက်နေပါတယ်။",
+        "ဆက်ပြီးတော့ ဘာတွေ ဖြစ်လာမလဲ ကြည့်ရအောင်ဗျာ။",
+        "ဒီနေရာမှာ အရေးကြီးတဲ့ အပြောင်းအလဲ တစ်ခု ရှိလာပါတယ်။",
+        "ဇာတ်ကောင်တွေ ဆက်ပြီး ဘယ်လို ရင်ဆိုင်မလဲ ဆက်ကြည့်ရအောင်။",
+        "အခုတော့ နောက်ထပ် အရေးကြီးတဲ့ အခိုက်အတန့်တစ်ခု ရောက်လာပါပြီ။",
+    )
+
+    def _fallback_fill(self, dialogues: list[dict], gaps: list[dict],
+                       duration: float) -> int:
         added = 0
-        for item in data.get("lines", []):
-            try:
-                gap = payload_gaps[int(item["index"])]
-            except (KeyError, ValueError, IndexError, TypeError):
+        gaps = split_gaps(gaps)
+        for idx, gap in enumerate(gaps[:30]):
+            window = gap["end"] - gap["start"]
+            if window < 3.0:
                 continue
-            text = re.sub(r"\s+", " ", str(item.get("text", ""))).strip()
+            text = self._FALLBACK_LINES[idx % len(self._FALLBACK_LINES)]
+            est = estimate_speech_seconds(text, self.lang)
+            if est > window:
+                keep = max(12, int(len(text) * (window / est)))
+                text = text[:keep].rstrip(" ။၊,")
             if not text:
                 continue
-            est = estimate_speech_seconds(text, self.lang)
-            if est > (gap["end"] - gap["start"]) + 1.0:
-                text = text[: max(10, int(len(text) * (gap["end"] - gap["start"]) / est))]
-            dialogues.append({"start": gap["start"], "end": gap["end"], "speaker": "Recap",
-                              "text": text})
+            dialogues.append({"start": gap["start"], "end": gap["end"],
+                              "speaker": "Recap", "text": text})
             added += 1
+        if added:
+            self.log(f"↳ AI မဖြည့်နိုင်သော ကွက် {added} ခုကို အလိုအလျောက် ဖြည့်လိုက်ပါသည်")
+        return added
+
+    def fill_windows(self, gaps: list[dict], duration: float) -> list[dict]:
+        """Public helper for the TTS repair loop (pipeline).
+
+        Given windows that ended up silent after synthesis, ask the model for
+        one short line per window and return ready-to-use dialogue entries.
+        Falls back to neutral connectors when the AI cannot answer.
+        """
+        if not gaps:
+            return []
+        self._check_cancel()
+        if self.client is None and not self.demo:
+            return []
+        out: list[dict] = []
+        windows = split_gaps(gaps)
+        if not self.demo and self.client is not None:
+            try:
+                created = self._fill_gaps_with_text(out, windows, duration,
+                                                    allow_fallback=False, log_prefix=True,
+                                                    split=False)
+                if created:
+                    self.log(f"🧩 silence repair: AI wrote {created} lines")
+            except CancelledError:
+                raise
+            except Exception as exc:
+                self.log(f"⚠️ silence repair AI call failed: {exc}")
+        got = {round(d["start"], 1) for d in out}
+        missing = [g for g in windows if round(g["start"], 1) not in got]
+        if missing:
+            before = len(out)
+            self._fallback_fill(out, missing, duration)
+            self.log(f"↳ silence repair fallback added {len(out) - before} lines")
+        return out
+
+    def _fill_gaps_with_text(self, dialogues: list[dict], gaps: list[dict],
+                             duration: float, allow_fallback: bool = False,
+                             log_prefix: bool = False, split: bool = False) -> int:
+        """Write one short line per gap (batched so long videos work too)."""
+        assert self.client is not None
+        if split:
+            gaps = split_gaps(gaps)
+        added = 0
+        batch_size = 20
+        for start_index in range(0, min(len(gaps), 120), batch_size):
+            batch = gaps[start_index:start_index + batch_size]
+            payload_gaps = []
+            context: list[dict] = []
+            for idx, gap in enumerate(batch):
+                length = gap["end"] - gap["start"]
+                payload_gaps.append({
+                    "index": idx,
+                    "start": gap["start"],
+                    "end": gap["end"],
+                    "chars": max(8, int(length * (9.5 if self.lang == "my" else 13.5))),
+                })
+                before = [d for d in dialogues if d["end"] <= gap["start"]][-2:]
+                after = [d for d in dialogues if d["start"] >= gap["end"]][:2]
+                for item in before + after:
+                    context.append({"start": item["start"], "text": item["text"]})
+            context = context[-24:]
+            prompt = _gap_fill_prompt(payload_gaps, self.lang, context)
+            try:
+                raw = self.client.generate_json(self.model, [prompt], GAP_FILL_SCHEMA,
+                                                temperature=0.4, max_tokens=8192,
+                                                progress=self.progress, cancel=self.cancel)
+                data = json.loads(raw[raw.find("{"): raw.rfind("}") + 1])
+            except CancelledError:
+                raise
+            except Exception as exc:
+                self.log(f"⚠️ gap fill failed ({start_index + 1}-{start_index + len(batch)}): {exc}")
+                if allow_fallback:
+                    added += self._fallback_fill(dialogues, batch, duration)
+                continue
+            for item in data.get("lines", []):
+                try:
+                    gap = payload_gaps[int(item["index"])]
+                except (KeyError, ValueError, IndexError, TypeError):
+                    continue
+                text = re.sub(r"\s+", " ", str(item.get("text", ""))).strip()
+                if not text:
+                    continue
+                est = estimate_speech_seconds(text, self.lang)
+                if est > (gap["end"] - gap["start"]) + 1.0:
+                    text = text[: max(10, int(len(text) * (gap["end"] - gap["start"]) / est))]
+                dialogues.append({"start": gap["start"], "end": gap["end"], "speaker": "Recap",
+                                  "text": text})
+                added += 1
         # also cover the first couple of seconds if the recap opens silent
-        if not any(d["start"] < 1.0 for d in dialogues) and duration > 6:
+        if dialogues and not any(d["start"] < 1.0 for d in dialogues) and duration > 6:
             dialogues.append({"start": 0.2, "end": min(4.0, duration), "speaker": "Recap",
                               "text": "ဒီဇာတ်လမ်းကို အခုပဲ ကြည့်လိုက်ရအောင်။"})
             added += 1
-        self.log(f"Coverage sweep added {added} narration lines")
+        if not log_prefix:
+            self.log(f"Coverage sweep added {added} narration lines")
         return added
 
     def _coverage(self, dialogues: list[dict], duration: float, filled: int,
@@ -777,10 +1068,37 @@ def extract_timeline(api_key: str, video_path: str, duration: float, *,
                      language: str = "my", mode: str = "auto", fill_mode: str = "continuous",
                      model: str = None, progress: ProgressFn = None,
                      cancel: Optional[Callable[[], bool]] = None,
-                     log_fn: Optional[Callable[[str], None]] = None) -> dict:
+                     log_fn: Optional[Callable[[str], None]] = None,
+                     key_ring: KeyRing | None = None,
+                     keys: Optional[list[str]] = None) -> dict:
     extractor = TimelineExtractor(
         api_key=api_key, model=model or config.settings.default_model,
         target_language=language, mode=mode, fill_mode=fill_mode,
         progress=progress, cancel=cancel, log_fn=log_fn,
+        key_ring=key_ring, keys=keys,
     )
     return extractor.run(video_path, duration)
+
+
+def repair_timeline(video_path: str, duration: float, *, language: str = "my",
+                    mode: str = "auto", fill_mode: str = "continuous",
+                    model: str = "", gaps: list[dict] | None = None,
+                    progress: ProgressFn = None,
+                    cancel: Optional[Callable[[], bool]] = None,
+                    log_fn: Optional[Callable[[str], None]] = None,
+                    key_ring: KeyRing | None = None) -> list[dict]:
+    """Second AI pass used by the pipeline when synthesis left silences.
+
+    Reuses the same extractor (and therefore the same key ring / failover) but
+    only asks for the windows that are actually silent in the finished audio.
+    """
+    extractor = TimelineExtractor(
+        api_key="", model=model or config.settings.default_model,
+        target_language=language, mode=mode, fill_mode=fill_mode,
+        progress=progress, cancel=cancel, log_fn=log_fn, key_ring=key_ring,
+    )
+    if not extractor.has_key() or extractor.demo:
+        return []
+    extractor.client = GeminiClient(key_ring=key_ring,
+                                    on_switch=lambda m: extractor.log(m))
+    return extractor.fill_windows(gaps or [], duration)

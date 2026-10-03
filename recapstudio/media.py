@@ -16,11 +16,13 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Callable, Iterable, Optional, Sequence
 
-from .util import get_logger, human_time
+from . import config
+from .util import CancelledError, get_logger, human_time
 
 log = get_logger("recap.media")
 
@@ -84,6 +86,53 @@ def _run(cmd: Sequence[str], timeout: int | None = 300, check: bool = False) -> 
     return proc
 
 
+class ProcessRegistry:
+    """Live ffmpeg processes, so a cancel can kill them immediately.
+
+    Previously "ရပ်မည်" only set a flag that was checked between pipeline
+    stages: a 40 minute render kept burning CPU and the button looked broken.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._procs: dict[int, subprocess.Popen] = {}
+        self._owners: dict[int, str] = {}
+
+    def add(self, proc: subprocess.Popen, owner: str = "") -> None:
+        with self._lock:
+            self._procs[proc.pid] = proc
+            self._owners[proc.pid] = owner
+
+    def remove(self, proc: subprocess.Popen) -> None:
+        with self._lock:
+            self._procs.pop(proc.pid, None)
+            self._owners.pop(proc.pid, None)
+
+    def kill_owner(self, owner: str) -> int:
+        """Kill every process belonging to ``owner`` (a job id). Returns count."""
+        if not owner:
+            return 0
+        with self._lock:
+            targets = [(pid, proc) for pid, proc in self._procs.items()
+                       if self._owners.get(pid) == owner]
+        killed = 0
+        for pid, proc in targets:
+            try:
+                proc.kill()
+                killed += 1
+                log.info("killed ffmpeg pid=%s for job %s", pid, owner)
+            except Exception:
+                continue
+        return killed
+
+    def count(self) -> int:
+        with self._lock:
+            return len(self._procs)
+
+
+process_registry = ProcessRegistry()
+
+
 def run_ffmpeg(
     args: Iterable[str],
     *,
@@ -92,13 +141,22 @@ def run_ffmpeg(
     progress: ProgressFn = None,
     timeout: int | None = None,
     check: bool = True,
+    cancel: Optional[Callable[[], bool]] = None,
+    owner: str = "",
 ) -> subprocess.CompletedProcess:
-    """Run ffmpeg while streaming progress to ``progress`` (0-100, message)."""
+    """Run ffmpeg while streaming progress to ``progress`` (0-100, message).
+
+    ``cancel`` is polled on every progress line (and at least every 2 s), so a
+    cancelled job stops the encoder within a couple of seconds.
+    ``owner`` links the process to a job id for the ProcessRegistry.
+    """
     # ``-progress pipe:1`` is what makes a long encode observable: ffmpeg
     # writes machine readable key=value blocks (out_time_us / speed) to
     # stdout, which we translate into a live percentage + ETA.
-    cmd = [FFMPEG, "-hide_banner", "-nostdin", "-progress", "pipe:1",
-           *[str(a) for a in args]]
+    threads = config.settings.ffmpeg_threads
+    thread_args = ["-threads", str(threads)] if threads and threads > 0 else []
+    cmd = [FFMPEG, "-hide_banner", "-nostdin", *thread_args,
+           "-progress", "pipe:1", *[str(a) for a in args]]
     started = time.time()
     try:
         proc = subprocess.Popen(
@@ -111,14 +169,57 @@ def run_ffmpeg(
             "(packages.txt / Dockerfile)။"
         ) from exc
 
+    process_registry.add(proc, owner)
     tail: list[str] = []
     last_emit = 0.0
+    stall_seconds = max(120, int(config.settings.ffmpeg_stall_seconds))
+    state = {"last_output": time.time(), "stalled": False, "cancelled": False, "stop": False}
+
+    def _watchdog() -> None:
+        """Kills a hung encoder (and answers cancel) even when ffmpeg writes
+        no output at all — without this the read loop below could block
+        forever and the job would look frozen at e.g. 73%."""
+        while not state["stop"] and proc.poll() is None:
+            time.sleep(1.0)
+            if state["stop"]:
+                return
+            if cancel and cancel():
+                state["cancelled"] = True
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                return
+            if time.time() - state["last_output"] > stall_seconds:
+                state["stalled"] = True
+                log.error("ffmpeg produced no output for %ss - killing pid %s",
+                          stall_seconds, proc.pid)
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                return
+
+    watchdog = threading.Thread(target=_watchdog, daemon=True,
+                                name=f"ffmpeg-watchdog-{proc.pid}")
+    watchdog.start()
     try:
         assert proc.stdout is not None
         for line in proc.stdout:
+            state["last_output"] = time.time()
             tail.append(line)
             if len(tail) > 120:
                 del tail[:60]
+
+            if state["cancelled"] or (cancel and cancel()):
+                proc.kill()
+                raise CancelledError("အလုပ်ကို ရပ်တန့်လိုက်ပါပြီ")
+            if state["stalled"]:
+                raise RuntimeError(
+                    f"FFmpeg သည် {stall_seconds}s ကြာ တုံ့ပြန်မှု မရှိပါ - ရပ်လိုက်ပါသည် "
+                    "(ဖိုင် ပျက်နိုင်/disk ပြည့်နိုင်)။"
+                )
+
             if not progress or total_duration <= 0:
                 continue
             now = time.time()
@@ -141,15 +242,24 @@ def run_ffmpeg(
                 eta = f" • ~{human_time((total_duration - seconds) / speed)} ကျန်ပါသည်"
             last_emit = now
             msg = f"{label} {pct:.0f}%{eta}" if label else f"{pct:.0f}%{eta}"
-            try:
+            if progress:
+                # A cancel raised inside the callback must abort the encode -
+                # swallowing it here is why "ရပ်မည်" used to do nothing.
                 progress(round(pct, 1), msg)
-            except Exception:
-                pass
         proc.wait(timeout=timeout)
+        if state["cancelled"]:
+            raise CancelledError("အလုပ်ကို ရပ်တန့်လိုက်ပါပြီ")
+        if state["stalled"]:
+            raise RuntimeError(
+                f"FFmpeg သည် {stall_seconds}s ကြာ တုံ့ပြန်မှု မရှိပါ - ရပ်လိုက်ပါသည် "
+                "(ဖိုင် ပျက်နိုင်/disk ပြည့်နိုင်)။"
+            )
     except subprocess.TimeoutExpired:
         proc.kill()
         raise RuntimeError(f"ffmpeg timed out after {timeout}s")
     finally:
+        state["stop"] = True
+        process_registry.remove(proc)
         if proc.poll() is None:
             proc.kill()
 

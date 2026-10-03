@@ -142,6 +142,7 @@ def render_master(input_video: str, narration_wav: str, output_video: str, *,
                   duration: float | None = None,
                   progress: ProgressFn = None,
                   cancel: Optional[Callable[[], bool]] = None,
+                  owner: str = "",
                   force_reencode: bool = False) -> dict:
     """Render the final MP4. Returns metadata incl. whether subs were burned."""
     preset = QUALITY_PRESETS.get(quality, QUALITY_PRESETS["balanced"])
@@ -174,7 +175,7 @@ def render_master(input_video: str, narration_wav: str, output_video: str, *,
         ]
         log.info("render: stream-copy fast path (no visual changes requested)")
         run_ffmpeg(cmd, total_duration=duration, label="🎬 Video copy", progress=progress,
-                   timeout=3600, check=True)
+                   timeout=3600, check=True, cancel=cancel, owner=owner)
         return {"path": output_video, "duration": duration, "burned_subtitles": False,
                 "fast_path": True, "warnings": warnings}
 
@@ -208,7 +209,7 @@ def render_master(input_video: str, narration_wav: str, output_video: str, *,
 
     try:
         run_ffmpeg(build_cmd(True), total_duration=duration, label="🎬 Render",
-                   progress=progress, timeout=None, check=True)
+                   progress=progress, timeout=None, check=True, cancel=cancel, owner=owner)
     except Exception as exc:
         if not ass_path:
             raise
@@ -219,7 +220,7 @@ def render_master(input_video: str, narration_wav: str, output_video: str, *,
         )
         burned_subs = False
         run_ffmpeg(build_cmd(False), total_duration=duration, label="🎬 Render (no subs)",
-                   progress=progress, timeout=None, check=True)
+                   progress=progress, timeout=None, check=True, cancel=cancel, owner=owner)
 
     return {
         "path": output_video,

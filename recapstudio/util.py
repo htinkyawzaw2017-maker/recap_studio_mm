@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import sys
+import threading
 import time
 import unicodedata
 from pathlib import Path
@@ -14,6 +15,15 @@ from typing import Any, Iterable
 from . import config
 
 _LOG_CONFIGURED = False
+
+
+class CancelledError(Exception):
+    """Raised when the user stops a job.
+
+    Defined here (not in ``jobs``) so low level modules such as ``media`` can
+    abort a running ffmpeg process without importing the task store, while the
+    pipeline still recognises it as a user cancellation instead of a crash.
+    """
 
 
 def setup_logging(level: str | None = None) -> None:
@@ -180,20 +190,69 @@ def dir_size_bytes(directory: Path | str) -> int:
     return total
 
 
+# Directories can hold tens of thousands of files (uploads, renders, proxies).
+# Walking them on every /api/system poll kept the request open long enough for
+# the UI to look frozen, so results are memoised briefly - and refreshed in a
+# background thread so a request never waits for the walk.
+_DIR_SIZE_CACHE: dict[str, tuple[float, int]] = {}
+_DIR_SIZE_LOCK = threading.Lock()
+
+
+def cached_dir_size(directory: Path | str, ttl: float = 60.0, blocking: bool = False) -> int:
+    """Size of ``directory`` with a short TTL.
+
+    ``blocking=False`` (default) returns the last known value immediately and
+    refreshes it in a worker thread when the entry is stale, so an HTTP handler
+    never blocks on a large directory tree.
+    """
+    key = str(Path(directory))
+    now = time.time()
+    with _DIR_SIZE_LOCK:
+        cached = _DIR_SIZE_CACHE.get(key)
+    if cached and now - cached[0] < ttl:
+        return cached[1]
+    if blocking or cached is None:
+        size = dir_size_bytes(key)
+        with _DIR_SIZE_LOCK:
+            _DIR_SIZE_CACHE[key] = (time.time(), size)
+        return size
+    if not any(t.name == f"dirsize-{abs(hash(key))}" for t in threading.enumerate()):
+        def _refresh() -> None:
+            try:
+                size = dir_size_bytes(key)
+                with _DIR_SIZE_LOCK:
+                    _DIR_SIZE_CACHE[key] = (time.time(), size)
+            except Exception:
+                pass
+        threading.Thread(target=_refresh, daemon=True,
+                         name=f"dirsize-{abs(hash(key))}").start()
+    return cached[1]
+
+
 def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
-def estimate_speech_seconds(text: str, lang: str = "my", chars_per_second: float = 0.0) -> float:
-    """Rough spoken-length estimate used before/without synthesis.
+#: Characters spoken per second by the neural voices we use. Burmese packs a
+#: whole syllable into 2-4 glyphs, so it lands lower than Latin text - using a
+#: single optimistic number made the model write lines that did not fit their
+#: window, which is one of the reasons narration ran out of sync.
+CHARS_PER_SECOND = {"my": 9.5, "en": 13.5}
 
-    Burmese script packs more meaning per character than Latin text, so a
-    Burmese line is estimated at ~13 glyphs/second while English around
-    ~15 characters/second (≈ 2.6 words/second at 5.8 chars/word).
-    """
+
+def estimate_speech_seconds(text: str, lang: str = "my", chars_per_second: float = 0.0) -> float:
+    """Rough spoken-length estimate used before/without synthesis."""
     text = (text or "").strip()
     if not text:
         return 0.0
-    rate = chars_per_second or (13.0 if lang == "my" else 15.0)
+    if chars_per_second:
+        rate = chars_per_second
+    else:
+        import os as _os
+        env_rate = _os.getenv("RECAP_MM_CHARS_PER_SEC" if lang == "my" else "RECAP_EN_CHARS_PER_SEC")
+        try:
+            rate = float(env_rate) if env_rate else CHARS_PER_SECOND.get(lang, 12.0)
+        except (TypeError, ValueError):
+            rate = CHARS_PER_SECOND.get(lang, 12.0)
     # Digits / punctuation are spoken differently but this is only a hint.
-    return max(0.6, len(text) / rate)
+    return max(0.6, len(text) / max(1.0, rate))

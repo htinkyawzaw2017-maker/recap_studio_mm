@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import config
-from .util import atomic_write_json, get_logger, human_time, read_json
+from .util import CancelledError, atomic_write_json, get_logger, human_time, read_json
 
 log = get_logger("recap.jobs")
 
@@ -69,9 +69,11 @@ class Job:
         data = asdict(self)
         data["eta_seconds"] = self.eta_seconds()
         data["elapsed_seconds"] = self.elapsed_seconds()
+        # keep cancel_requested: the UI needs it to show "ရပ်နေသည်…" instead of
+        # a progress bar that looks stuck while ffmpeg winds down
+        data["cancelling"] = bool(self.cancel_requested) and self.status in {"queued", "running"}
         if not include_logs:
             data.pop("logs", None)
-        data.pop("cancel_requested", None)
         return data
 
     def elapsed_seconds(self) -> float:
@@ -91,11 +93,16 @@ class Job:
 
 
 class JobStore:
-    def __init__(self, directory: Path | str = config.TASK_DIR, max_logs: int = 250):
+    def __init__(self, directory: Path | str = config.TASK_DIR, max_logs: int = 250,
+                 persist_interval: float = 1.5):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.max_logs = max_logs
+        #: Progress ticks arrive ~3x/second; rewriting a 100 kB task file that
+        #: often wasted disk I/O on EBS and slowed the whole app down.
+        self.persist_interval = max(0.0, float(persist_interval))
         self._jobs: dict[str, Job] = {}
+        self._last_persist: dict[str, float] = {}
         self._lock = threading.RLock()
         self._load_from_disk()
 
@@ -119,8 +126,13 @@ class JobStore:
             except Exception as exc:
                 log.warning("skipping unreadable task file %s: %s", entry, exc)
 
-    def _persist(self, job: Job) -> None:
-        atomic_write_json(self._path(job.id), job.to_dict())
+    def _persist(self, job: Job, force: bool = False) -> None:
+        now = time.time()
+        last = self._last_persist.get(job.id, 0.0)
+        if not force and self.persist_interval and (now - last) < self.persist_interval:
+            return
+        self._last_persist[job.id] = now
+        atomic_write_json(self._path(job.id), job.to_dict(include_logs=False))
 
     # ── CRUD ───────────────────────────────────────────────────────────
     def create(self, kind: str = "recap", request: Optional[dict] = None,
@@ -211,7 +223,9 @@ class JobStore:
                 if hasattr(job, key):
                     setattr(job, key, value)
             if persist:
-                self._persist(job)
+                # status transitions are important enough to always hit the
+                # disk (a restarted container must not resurrect a dead job)
+                self._persist(job, force=status is not None or progress is None)
             return job
 
     def log(self, job_id: str, message: str) -> None:
@@ -225,15 +239,25 @@ class JobStore:
                 del job.logs[: len(job.logs) - self.max_logs]
             log.info("[%s] %s", job_id, message)
 
-    def request_cancel(self, job_id: str) -> bool:
+    def request_cancel(self, job_id: str, kill_processes: bool = True) -> bool:
         with self._lock:
             job = self.get(job_id)
             if job is None or job.status in {"completed", "failed", "cancelled"}:
                 return False
             job.cancel_requested = True
-            job.message = "ရပ်တန့်ရန် တောင်းဆိုထားပါသည်..."
-            self._persist(job)
-            return True
+            job.message = "⏹️ ရပ်တန့်ရန် တောင်းဆိုထားပါသည် — ffmpeg ကို ရပ်နေပါသည်..."
+            self._persist(job, force=True)
+        if kill_processes:
+            # Cancel must be instant: an encode can run for 30+ minutes and
+            # only checking a flag between stages felt like "cancel မရဘူး".
+            try:
+                from .media import process_registry
+                killed = process_registry.kill_owner(job_id)
+                if killed:
+                    self.log(job_id, f"⏹️ ffmpeg process {killed} ခု ရပ်လိုက်ပါသည်")
+            except Exception as exc:  # never break the API on a kill error
+                log.debug("kill on cancel failed: %s", exc)
+        return True
 
     def is_cancelled(self, job_id: str) -> bool:
         with self._lock:
@@ -245,8 +269,13 @@ class JobStore:
             raise JobCancelled("အလုပ်ကို ရပ်တန့်လိုက်ပါပြီ။")
 
 
-class JobCancelled(Exception):
-    """Raised inside the pipeline when the user cancels a job."""
+class JobCancelled(CancelledError):
+    """Raised inside the pipeline when the user cancels a job.
+
+    Subclasses :class:`recapstudio.util.CancelledError` so a cancellation that
+    bubbles up from ffmpeg (media layer) is recognised as a *user cancel*
+    rather than reported as a crash.
+    """
 
 
 class StageProgress:
