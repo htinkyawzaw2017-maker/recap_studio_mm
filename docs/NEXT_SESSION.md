@@ -33,6 +33,48 @@ gh pr create --base arena/01a105ed-recap-studio-mm --head <ထို-branch> --f
 
 ---
 
+## 1b. ⚠️ v4.3.5 (`6a6d49d`) — ဤ repo/sandbox တွင် **မရှိပါ** (2026-10-04 စစ်ပြီး)
+
+> v4.3.3 နှင့် အတူတူပင် — v4.3.5 သည် သင့် local machine တွင်သာ ရှိပြီး GitHub သို့ မရောက်သေးဟု ယူဆရသည်။
+
+| စစ်ဆေးချက် | ရလဒ် |
+|---|---|
+| `/home/user/downloads/` | **မရှိပါ** (`No such file or directory`) |
+| `/home/user/recap_studio_mm/release/` | **မရှိပါ** (`No such file or directory`) |
+| `recap-studio-mm-v4.3.5.bundle` (filesystem တစ်ခုလုံး `find`) | **မတွေ့ပါ** — `.bundle` ဖိုင် တစ်ဖိုင်မှ မရှိ |
+| `git cat-file -t 6a6d49d` | `fatal: Not a valid object name 6a6d49d` |
+| git object အားလုံး (၉၇ ခု) တွင် `6a6d49d` / `4.3.5` ရှာခြင်း | **0 hit** (repo အတွင်း အမြင့်ဆုံး version = **v4.3.4**) |
+| `git fsck --full --lost-found --dangling` | dangling/lost object **မရှိပါ** |
+| `gh api .../commits/6a6d49d` | `422 — No commit found for SHA: 6a6d49d` |
+| GitHub branches | `main`, `arena/01a10175`, `arena/01a105ed`, `arena/01a10790` — **`v4.3.5` မရှိပါ** |
+| GitHub tags / releases | **ဗလာ** (tag တစ်ခုမှ မရှိပါ) |
+
+**အနက်အဓိပ္ပာယ်** — push လုပ်စရာ commit/bundle မရှိသဖြင့် `v4.3.5` branch ကို ဖန်တီး၍ မရပါ။
+ထို့အပြင် ဤ sandbox session သည် `arena/01a1081f-recap-studio-mm` branch တစ်ခုတည်းတွင်သာ
+push လုပ်နိုင်သည် (အခြား branch အသစ် `v4.3.5` ကို ဤနေရာမှ push၍ မရပါ)။
+
+**သင့် local မှ push လုပ်နည်း (Windows)** —
+
+```cmd
+cd C:\path\to\recap_studio_mm
+git log --oneline -5                      :: 6a6d49d ကို မြင်ရမည်
+git show --stat 6a6d49d | more            :: ဘယ်ဖိုင် ပြင်ထားလဲ စစ်
+git branch --contains 6a6d49d             :: ဘယ် branch ပေါ် ရှိလဲ စစ်
+git branch v4.3.5 6a6d49d                 :: v4.3.5 branch အသစ် ဖန်တီး
+git push -u origin v4.3.5                 :: GitHub သို့ push
+gh pr create --base main --head v4.3.5 --fill
+```
+
+သို့မဟုတ် bundle ဖြင့် ဤ sandbox ဆီ ပို့လိုလျှင် —
+
+```cmd
+git bundle create recap-studio-mm-v4.3.5.bundle main..6a6d49d
+```
+ထိုဖိုင်ကို ဤ chat သို့ upload လုပ်ပါ → ဤနေရာမှ `arena/01a1081f-recap-studio-mm` ပေါ်သို့
+fetch/merge လုပ်ပြီး PR တင်ပေးနိုင်သည်။
+
+---
+
 ## 2. ဤ session တွင် ပြီးစီးသွားသည် — v4.3.4 (bug ၄ ချက်)
 
 ### Bug 1 — "AI analysis failed" သည် အမှား ဖော်ပြချက် ဖြစ်နေသည်
