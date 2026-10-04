@@ -497,3 +497,112 @@ input[type=file].hidden-input { display: none; }
 /* tab panels fade in so switching tabs feels deliberate */
 .tab-panel { animation: fadein .18s ease; }
 @keyframes fadein { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: none } }
+
+/* ══════════════════════════════════════════════════════════════════════
+   Phase 2 — authentication overlay, account chip, admin table
+   ══════════════════════════════════════════════════════════════════════ */
+.account-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 12px;
+}
+.account-box.hidden { display: none; }
+
+.auth-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: radial-gradient(1200px 600px at 50% -10%, rgba(0, 242, 254, .10), transparent 60%),
+              rgba(6, 10, 20, .94);
+  backdrop-filter: blur(6px);
+  overflow-y: auto;
+}
+.auth-overlay.hidden { display: none; }
+
+.auth-card {
+  width: min(460px, 100%);
+  background: var(--panel, #0f1726);
+  border: 1px solid rgba(255, 255, 255, .10);
+  border-radius: 18px;
+  padding: 28px 26px 22px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, .55);
+}
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.auth-brand h2 {
+  margin: 0;
+  font-size: 19px;
+  letter-spacing: .06em;
+}
+.auth-brand .sub {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--text-dim, #93a4bf);
+}
+.auth-card .field { margin-bottom: 12px; }
+.auth-card .btn.big {
+  width: 100%;
+  justify-content: center;
+  padding: 12px 16px;
+  font-size: 15px;
+  margin-top: 4px;
+}
+.auth-card #auth-toggle { width: 100%; margin-top: 10px; }
+.auth-error {
+  background: rgba(255, 86, 86, .12);
+  border: 1px solid rgba(255, 86, 86, .45);
+  color: #ffb4b4;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  margin-bottom: 14px;
+  line-height: 1.6;
+}
+.auth-error.hidden { display: none; }
+.auth-foot {
+  margin: 14px 0 0;
+  font-size: 11.5px;
+  color: var(--text-dim, #93a4bf);
+  text-align: center;
+  line-height: 1.7;
+}
+#auth-hint { margin-top: 12px; }
+
+.user-table { display: flex; flex-direction: column; gap: 8px; }
+.user-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .02);
+}
+.user-row .uname { font-weight: 600; }
+.user-row .umeta { font-size: 12px; color: var(--text-dim, #93a4bf); }
+.user-row .spacer { flex: 1 1 auto; }
+.user-row.is-disabled { opacity: .55; }
+.user-row .badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, .18);
+}
+.user-row .badge.admin { border-color: rgba(0, 242, 254, .5); color: #7ef0ff; }
+.audit-log {
+  max-height: 230px;
+  overflow-y: auto;
+  font-size: 11.5px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+}

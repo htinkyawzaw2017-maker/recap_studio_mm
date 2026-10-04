@@ -34,7 +34,10 @@
     splitJobId: null,
     logoPos: { x: 82, y: 4 },
     subPosPercent: 22,
-    accessOk: true
+    accessOk: true,
+    auth: null,              // /api/auth/me payload
+    authReady: false,
+    users: []
   };
 
   // Fallback catalog so the Studio is usable while /api/system is loading
@@ -71,13 +74,29 @@
   // ── api helper ───────────────────────────────────────────────────────
   function accessKey() { return LS.get('rs_access', '') || ''; }
 
+  // CSRF: the server sets a readable `recap_csrf` cookie next to the
+  // HttpOnly session cookie; every unsafe request must echo it back.
+  function csrfToken() {
+    const match = document.cookie.match(/(?:^|;\s*)recap_csrf=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : '';
+  }
+
+  function authHeaders(method = 'GET') {
+    const headers = {};
+    if (accessKey()) headers['X-Access-Key'] = accessKey();
+    const token = csrfToken();
+    if (token && !['GET', 'HEAD', 'OPTIONS'].includes(String(method).toUpperCase())) {
+      headers['X-CSRF-Token'] = token;
+    }
+    return headers;
+  }
+
   class ApiError extends Error {
     constructor(message, status) { super(message); this.status = status; }
   }
 
   async function api(path, { method = 'GET', body, form, signal, timeout = 30000, retries = 0 } = {}) {
-    const headers = {};
-    if (accessKey()) headers['X-Access-Key'] = accessKey();
+    const headers = authHeaders(method);
     let payload = form;
     if (body !== undefined) {
       headers['Content-Type'] = 'application/json';
@@ -93,12 +112,18 @@
       }
       const timer = setTimeout(() => ctrl.abort(), timeout);
       try {
-        const res = await fetch(path, { method, headers, body: payload, signal: ctrl.signal });
+        const res = await fetch(path, {
+          method, headers, body: payload, signal: ctrl.signal, credentials: 'same-origin'
+        });
         const text = await res.text();
         let data = null;
         try { data = text ? JSON.parse(text) : null; } catch { data = null; }
         if (!res.ok) {
           const detail = (data && (data.detail || data.message)) || text || `HTTP ${res.status}`;
+          // session expired / signed out elsewhere → back to the login screen
+          if (res.status === 401 && state.authReady && !path.startsWith('/api/auth/')) {
+            onSessionLost();
+          }
           throw new ApiError(typeof detail === 'string' ? detail : JSON.stringify(detail), res.status);
         }
         return data;
@@ -262,7 +287,8 @@
             activeUpload = xhr;
             xhr.open('POST', '/api/upload/chunk');
             xhr.timeout = 180000;
-            if (accessKey()) xhr.setRequestHeader('X-Access-Key', accessKey());
+            xhr.withCredentials = true;
+            Object.entries(authHeaders('POST')).forEach(([k, v]) => xhr.setRequestHeader(k, v));
             if (signal) signal.addEventListener('abort', () => { try { xhr.abort(); } catch { /* ignore */ } }, { once: true });
             xhr.upload.onprogress = (e) => {
               if (!onProgress) return;
@@ -934,7 +960,8 @@
     try {
       const res = await fetch('/api/thumbnail', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(accessKey() ? { 'X-Access-Key': accessKey() } : {}) },
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', ...authHeaders('POST') },
         body: JSON.stringify({
           video_path: source.path,
           timestamp: Number($('thumb-sec').value) || 2.5,
@@ -1449,7 +1476,7 @@
     if (saved && saved.path) {
       try {
         const res = await fetch(`/api/asset?path=${encodeURIComponent(saved.path)}`, {
-          method: 'HEAD', headers: accessKey() ? { 'X-Access-Key': accessKey() } : {}
+          method: 'HEAD', credentials: 'same-origin', headers: authHeaders('HEAD')
         });
         if (res.ok) {
           state.video = saved;
@@ -1496,20 +1523,313 @@
     } catch { /* offline: the key stays in the browser and is retried later */ }
   }
 
-  let initDone = false;
-  async function init() {
-    if (initDone) return;           // DOMContentLoaded + readyState race guard
-    initDone = true;
-    restoreUiState();
-    bindUiSync();
-    styleSubtitleOverlay();
-    updateHookOverlay();
-    renderPreviewMeta();
-    $('original-audio-row').classList.toggle('hidden', $('mute-original').checked);
+  // ══════════════════════════════════════════════════════════════════
+  // Authentication (Phase 2) — login gate, account chip, admin panel
+  // ══════════════════════════════════════════════════════════════════
+  let authMode = 'open';
+  let signupView = false;
 
-    // 1) paint the UI immediately from the built-in catalog …
-    renderModels();
-    renderVoices();
+  function showAuthError(message) {
+    const box = $('auth-error');
+    if (!box) return;
+    if (!message) { box.classList.add('hidden'); box.textContent = ''; return; }
+    box.textContent = message;
+    box.classList.remove('hidden');
+  }
+
+  function renderAuthForm() {
+    const state_ = state.auth || {};
+    const legacy = state_.mode === 'legacy';
+    const firstRun = state_.mode === 'users' && !state_.has_users;
+    const canSignup = Boolean(state_.signup_enabled) || firstRun;
+    signupView = firstRun ? true : signupView;
+
+    $('auth-access-row').classList.toggle('hidden', !legacy);
+    $('auth-username').closest('.field').classList.toggle('hidden', legacy);
+    $('auth-password').closest('.field').classList.toggle('hidden', legacy);
+    $('auth-confirm-row').classList.toggle('hidden', legacy || !signupView);
+    $('auth-invite-row').classList.toggle('hidden',
+      legacy || !signupView || firstRun || !state_.signup_code_required);
+    $('auth-toggle').classList.toggle('hidden', legacy || !canSignup || firstRun);
+    $('auth-toggle').textContent = signupView
+      ? '← ရှိပြီးသား အကောင့်ဖြင့် ဝင်မည်' : 'အကောင့် အသစ် ဖွင့်မည်';
+
+    if (legacy) {
+      $('auth-subtitle').textContent = 'ဤ server တွင် Access Key လိုအပ်ပါသည်';
+      $('auth-submit').textContent = '🔓 ချိတ်ဆက်မည်';
+      $('auth-hint').textContent = 'Server ၏ .env ထဲက RECAP_ACCESS_PASSWORD ကို ထည့်ပါ။';
+    } else if (firstRun) {
+      $('auth-subtitle').textContent = 'ပထမဆုံး အကောင့် (admin) ကို ဖန်တီးပါ';
+      $('auth-submit').textContent = '🚀 Admin အကောင့် ဖန်တီးမည်';
+      $('auth-hint').textContent =
+        'ဤ server တွင် အကောင့် မရှိသေးပါ — ယခု ဖန်တီးသူသည် admin ဖြစ်ပါမည်။';
+    } else if (signupView) {
+      $('auth-subtitle').textContent = 'အကောင့် အသစ် ဖွင့်ရန်';
+      $('auth-submit').textContent = '➕ အကောင့် ဖွင့်မည်';
+      $('auth-hint').textContent =
+        `စကားဝှက် အနည်းဆုံး ${state_.password_min_length || 10} လုံး — စာလုံးနှင့် ဂဏန်း ရောပါရမည်။`;
+    } else {
+      $('auth-subtitle').textContent = 'ဆက်လက် အသုံးပြုရန် အကောင့်ဖြင့် ဝင်ပါ';
+      $('auth-submit').textContent = '🔓 ဝင်မည် (Sign in)';
+      $('auth-hint').textContent = 'အကောင့် မရှိသေးပါက server admin ထံ တောင်းဆိုပါ။';
+    }
+  }
+
+  function showAuthOverlay(show) {
+    const overlay = $('auth-overlay');
+    if (!overlay) return;
+    overlay.classList.toggle('hidden', !show);
+    document.body.style.overflow = show ? 'hidden' : '';
+    if (show) {
+      renderAuthForm();
+      setTimeout(() => {
+        const field = (state.auth && state.auth.mode === 'legacy')
+          ? $('auth-access') : $('auth-username');
+        field && field.focus();
+      }, 60);
+    }
+  }
+
+  function renderAccountChip() {
+    const box = $('account-box');
+    const chip = $('chip-account');
+    const user = state.auth && state.auth.user;
+    if (!box || !chip) return;
+    if (!user || authMode === 'open') { box.classList.add('hidden'); return; }
+    box.classList.remove('hidden');
+    const role = user.role === 'admin' ? ' · admin' : '';
+    chip.textContent = `👤 ${user.username}${role}`;
+    $('account-card') && $('account-card').classList.toggle('hidden', authMode !== 'users');
+    $('acct-role') && ($('acct-role').textContent = user.role || '—');
+    const isAdmin = Boolean(user.is_admin) && authMode === 'users';
+    $('admin-card') && $('admin-card').classList.toggle('hidden', !isAdmin);
+    if (isAdmin) loadUsers();
+  }
+
+  function onSessionLost() {
+    state.auth = { ...(state.auth || {}), authenticated: false, user: null };
+    stopPolling();
+    renderAccountChip();
+    showAuthOverlay(true);
+    showAuthError('Session ကုန်ဆုံးသွားပါပြီ — ပြန်လည် ဝင်ပေးပါ။');
+  }
+
+  async function refreshAuth() {
+    try {
+      const me = await api('/api/auth/me', { timeout: 15000, retries: 1 });
+      state.auth = me;
+      authMode = me.mode || 'open';
+      state.authReady = true;
+      renderAccountChip();
+      return me;
+    } catch (err) {
+      state.auth = { mode: 'open', required: false, authenticated: true };
+      authMode = 'open';
+      state.authReady = true;
+      return state.auth;
+    }
+  }
+
+  async function submitAuth(event) {
+    event && event.preventDefault();
+    showAuthError('');
+    const btn = $('auth-submit');
+    btn.disabled = true;
+    try {
+      if (authMode === 'legacy') {
+        const key = $('auth-access').value.trim();
+        LS.set('rs_access', key);
+        await api('/api/auth/login', { body: { access_key: key }, method: 'POST' });
+      } else {
+        const username = $('auth-username').value.trim();
+        const password = $('auth-password').value;
+        if (signupView) {
+          if (password !== $('auth-password2').value) {
+            throw new ApiError('စကားဝှက် နှစ်ခု မတူညီပါ', 400);
+          }
+          await api('/api/auth/register', {
+            method: 'POST',
+            body: { username, password, invite_code: $('auth-invite').value.trim() }
+          });
+        } else {
+          await api('/api/auth/login', { method: 'POST', body: { username, password } });
+        }
+      }
+      $('auth-password').value = '';
+      $('auth-password2').value = '';
+      await refreshAuth();
+      showAuthOverlay(false);
+      toast(`မင်္ဂလာပါ ${state.auth.user ? state.auth.user.username : ''} 👋`, 'ok', 4000);
+      await bootApp();
+    } catch (err) {
+      showAuthError(err.message || 'ဝင်၍ မရပါ');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function doLogout() {
+    try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* ignore */ }
+    LS.del('rs_access');
+    stopPolling();
+    state.auth = { ...(state.auth || {}), authenticated: false, user: null };
+    renderAccountChip();
+    showAuthOverlay(true);
+    toast('ထွက်ပြီးပါပြီ', 'ok', 3000);
+  }
+
+  async function changePassword() {
+    const current = $('pw-current').value;
+    const next = $('pw-new').value;
+    if (next !== $('pw-new2').value) { toast('စကားဝှက် အသစ် နှစ်ခု မတူညီပါ', 'err'); return; }
+    try {
+      const res = await api('/api/auth/password', {
+        method: 'POST', body: { current_password: current, new_password: next }
+      });
+      toast(res.message || 'စကားဝှက် ပြောင်းပြီးပါပြီ', 'ok');
+      ['pw-current', 'pw-new', 'pw-new2'].forEach((id) => { $(id).value = ''; });
+      setTimeout(() => { onSessionLost(); }, 800);
+    } catch (err) { toast(err.message, 'err'); }
+  }
+
+  async function revokeSessions() {
+    try {
+      await api('/api/auth/sessions/revoke', { method: 'POST' });
+      toast('Device အားလုံးမှ ထွက်ပြီးပါပြီ', 'ok');
+      setTimeout(() => onSessionLost(), 600);
+    } catch (err) { toast(err.message, 'err'); }
+  }
+
+  // ── admin panel ────────────────────────────────────────────────────
+  function userRow(user) {
+    const row = document.createElement('div');
+    row.className = `user-row${user.status === 'disabled' ? ' is-disabled' : ''}`;
+    const last = user.last_login_at
+      ? new Date(user.last_login_at * 1000).toLocaleString() : 'မဝင်ဖူးသေးပါ';
+    row.innerHTML = `
+      <span class="uname">${escapeHtml(user.username)}</span>
+      <span class="badge ${user.role === 'admin' ? 'admin' : ''}">${escapeHtml(user.role)}</span>
+      <span class="umeta">နောက်ဆုံးဝင်: ${escapeHtml(last)} · job/24h: ${user.jobs_today || 0}
+        · disk: ${fmtBytes(user.disk_used || 0)}</span>
+      <span class="spacer"></span>`;
+    const mk = (label, title, handler) => {
+      const btn = document.createElement('button');
+      btn.className = 'btn small ghost';
+      btn.textContent = label;
+      btn.title = title;
+      btn.onclick = handler;
+      row.appendChild(btn);
+      return btn;
+    };
+    mk('🔑', 'စကားဝှက် reset', async () => {
+      const pw = prompt(`'${user.username}' အတွက် စကားဝှက် အသစ် (အနည်းဆုံး 10 လုံး):`);
+      if (!pw) return;
+      try {
+        await api(`/api/admin/users/${user.id}`, { method: 'PATCH', body: { password: pw } });
+        toast('စကားဝှက် ပြောင်းပြီးပါပြီ', 'ok');
+        loadUsers();
+      } catch (err) { toast(err.message, 'err'); }
+    });
+    mk(user.status === 'active' ? '🚫' : '✅',
+       user.status === 'active' ? 'အကောင့် ပိတ်မည်' : 'ပြန်ဖွင့်မည်', async () => {
+      try {
+        await api(`/api/admin/users/${user.id}`, {
+          method: 'PATCH',
+          body: { status: user.status === 'active' ? 'disabled' : 'active' }
+        });
+        loadUsers();
+      } catch (err) { toast(err.message, 'err'); }
+    });
+    mk(user.role === 'admin' ? '⬇️' : '⬆️',
+       user.role === 'admin' ? 'admin ဖြုတ်မည်' : 'admin ပေးမည်', async () => {
+      try {
+        await api(`/api/admin/users/${user.id}`, {
+          method: 'PATCH', body: { role: user.role === 'admin' ? 'user' : 'admin' }
+        });
+        loadUsers();
+      } catch (err) { toast(err.message, 'err'); }
+    });
+    mk('🗑️', 'အကောင့် ဖျက်မည်', async () => {
+      if (!confirm(`'${user.username}' ကို ဖျက်မည် — သေချာပါသလား?`)) return;
+      try {
+        await api(`/api/admin/users/${user.id}`, { method: 'DELETE' });
+        toast('ဖျက်ပြီးပါပြီ', 'ok');
+        loadUsers();
+      } catch (err) { toast(err.message, 'err'); }
+    });
+    return row;
+  }
+
+  async function loadUsers() {
+    const host = $('user-table');
+    if (!host) return;
+    try {
+      const data = await api('/api/admin/users', { timeout: 20000 });
+      state.users = data.users || [];
+      host.innerHTML = '';
+      if (!state.users.length) {
+        host.innerHTML = '<p class="help">အကောင့် မရှိသေးပါ။</p>';
+      } else {
+        state.users.forEach((user) => host.appendChild(userRow(user)));
+      }
+      const audit = await api('/api/admin/audit?limit=40', { timeout: 20000 });
+      $('audit-log').textContent = (audit.entries || []).map((e) => {
+        const when = new Date(e.created_at * 1000).toLocaleString();
+        return `${when}  ${e.action}  ${e.username || '-'}  ${e.target || ''} ${e.detail || ''}`
+          .trim();
+      }).join('\n') || 'မှတ်တမ်း မရှိသေးပါ';
+    } catch (err) {
+      host.innerHTML = `<p class="help">အသုံးပြုသူစာရင်း မရယူနိုင်ပါ — ${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  async function createUser() {
+    const username = $('new-username').value.trim();
+    const password = $('new-password').value;
+    try {
+      await api('/api/admin/users', {
+        method: 'POST',
+        body: { username, password, admin: $('new-admin').checked, must_change_password: false }
+      });
+      toast(`'${username}' အကောင့် ဖန်တီးပြီးပါပြီ`, 'ok');
+      $('new-username').value = '';
+      $('new-password').value = '';
+      $('new-admin').checked = false;
+      loadUsers();
+    } catch (err) { toast(err.message, 'err'); }
+  }
+
+  function randomPassword() {
+    const chars = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%&*-_';
+    const bytes = new Uint32Array(18);
+    (window.crypto || window.msCrypto).getRandomValues(bytes);
+    const pw = Array.from(bytes, (b) => chars[b % chars.length]).join('');
+    $('new-password').value = pw;
+    $('new-password').type = 'text';
+    toast('စကားဝှက် ကျပန်း ထုတ်ပြီးပါပြီ — မှတ်သားထားပါ', 'warn', 9000);
+  }
+
+  function bindAuthUi() {
+    $('auth-form') && ($('auth-form').onsubmit = submitAuth);
+    $('auth-toggle') && ($('auth-toggle').onclick = () => {
+      signupView = !signupView;
+      showAuthError('');
+      renderAuthForm();
+    });
+    $('btn-logout') && ($('btn-logout').onclick = doLogout);
+    $('btn-change-pw') && ($('btn-change-pw').onclick = changePassword);
+    $('btn-revoke-sessions') && ($('btn-revoke-sessions').onclick = revokeSessions);
+    $('btn-refresh-users') && ($('btn-refresh-users').onclick = loadUsers);
+    $('btn-create-user') && ($('btn-create-user').onclick = createUser);
+    $('btn-random-pw') && ($('btn-random-pw').onclick = randomPassword);
+  }
+
+  let initDone = false;
+  let appBooted = false;
+
+  async function bootApp() {
+    if (appBooted) return;
+    appBooted = true;
     // 2) … then upgrade from the server (never blocks the page)
     refreshSystem();
     restoreKeys();
@@ -1527,6 +1847,31 @@
       } catch { /* stale id */ }
     }
     setInterval(refreshSystem, 120000);   // keep the top bar (key/disk) fresh
+  }
+
+  async function init() {
+    if (initDone) return;           // DOMContentLoaded + readyState race guard
+    initDone = true;
+    restoreUiState();
+    bindUiSync();
+    bindAuthUi();
+    styleSubtitleOverlay();
+    updateHookOverlay();
+    renderPreviewMeta();
+    $('original-audio-row').classList.toggle('hidden', $('mute-original').checked);
+
+    // 1) paint the UI immediately from the built-in catalog …
+    renderModels();
+    renderVoices();
+
+    // 2) is a sign-in required on this deployment?
+    const me = await refreshAuth();
+    if (me.required && !me.authenticated) {
+      showAuthOverlay(true);
+      return;                       // the rest boots after a successful login
+    }
+    showAuthOverlay(false);
+    await bootApp();
   }
 
   window.addEventListener('beforeunload', stopPolling);

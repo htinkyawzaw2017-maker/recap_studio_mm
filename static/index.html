@@ -21,7 +21,60 @@
   <div class="chips" id="status-chips">
     <span class="chip muted" id="chip-engine"><span class="spinner"></span> Engine စစ်ဆေးနေသည်…</span>
   </div>
+  <div class="account-box hidden" id="account-box">
+    <span class="chip" id="chip-account" title="လက်ရှိ အကောင့်">👤 —</span>
+    <button class="btn small ghost" id="btn-logout" title="ထွက်မည်">🚪 ထွက်မည်</button>
+  </div>
 </header>
+
+<!-- ── sign-in gate (multi-user mode only) ───────────────────────────── -->
+<div class="auth-overlay hidden" id="auth-overlay">
+  <div class="auth-card">
+    <div class="auth-brand">
+      <div class="brand-mark">🎬</div>
+      <div>
+        <h2>RECAP STUDIO MM</h2>
+        <p class="sub" id="auth-subtitle">ဆက်လက် အသုံးပြုရန် အကောင့်ဖြင့် ဝင်ပါ</p>
+      </div>
+    </div>
+
+    <div class="auth-error hidden" id="auth-error"></div>
+
+    <form id="auth-form" autocomplete="on">
+      <label class="field">
+        <span>အသုံးပြုသူအမည် (Username)</span>
+        <input type="text" id="auth-username" name="username" autocomplete="username"
+               placeholder="ဥပမာ — kyaw" required>
+      </label>
+      <label class="field">
+        <span>စကားဝှက် (Password)</span>
+        <input type="password" id="auth-password" name="password"
+               autocomplete="current-password" placeholder="••••••••••" required>
+      </label>
+      <label class="field hidden" id="auth-confirm-row">
+        <span>စကားဝှက် အတည်ပြုရန်</span>
+        <input type="password" id="auth-password2" autocomplete="new-password"
+               placeholder="••••••••••">
+      </label>
+      <label class="field hidden" id="auth-invite-row">
+        <span>Invite code</span>
+        <input type="text" id="auth-invite" placeholder="admin ထံမှ ရယူပါ">
+      </label>
+      <label class="field hidden" id="auth-access-row">
+        <span>Server Access Key (RECAP_ACCESS_PASSWORD)</span>
+        <input type="password" id="auth-access" placeholder="shared key">
+      </label>
+      <button class="btn primary big" id="auth-submit" type="submit">🔓 ဝင်မည် (Sign in)</button>
+    </form>
+
+    <p class="help" id="auth-hint">
+      အကောင့် မရှိသေးပါက server admin ထံ တောင်းဆိုပါ။
+    </p>
+    <button class="btn ghost small hidden" id="auth-toggle">အကောင့် အသစ် ဖွင့်မည်</button>
+    <p class="auth-foot">🔒 Session cookie သည် HttpOnly ဖြစ်ပြီး စကားဝှက်များကို PBKDF2 ဖြင့် hash
+      လုပ်၍သာ သိမ်းပါသည်။</p>
+  </div>
+</div>
 
 <!-- never blocks the page: shown only when something needs the user's input -->
 <div class="banner hidden" id="conn-banner">
@@ -579,6 +632,54 @@
           </ul>
         </div>
       </div>
+      <div class="card hidden" id="account-card">
+        <div class="card-head">
+          <div class="head-text">
+            <h3>🛡️ ကျွန်ုပ်၏ အကောင့်</h3>
+            <p class="sub">စကားဝှက် ပြောင်းခြင်း · အခြား device များမှ ထွက်ခြင်း</p>
+          </div>
+          <span class="chip muted" id="acct-role">—</span>
+        </div>
+        <label class="field"><span>လက်ရှိ စကားဝှက်</span>
+          <input type="password" id="pw-current" placeholder="current password"></label>
+        <label class="field"><span>စကားဝှက် အသစ်</span>
+          <input type="password" id="pw-new" placeholder="အနည်းဆုံး 10 လုံး — စာလုံး+ဂဏန်း"></label>
+        <label class="field"><span>အတည်ပြုရန်</span>
+          <input type="password" id="pw-new2" placeholder="repeat"></label>
+        <div class="btn-row">
+          <button class="btn primary" id="btn-change-pw">🔑 စကားဝှက် ပြောင်းမည်</button>
+          <button class="btn ghost" id="btn-revoke-sessions">🚪 device အားလုံးမှ ထွက်မည်</button>
+        </div>
+        <p class="help">စကားဝှက် ပြောင်းပြီးလျှင် device အားလုံးမှ အလိုအလျောက် ထွက်သွားပါမည်။</p>
+      </div>
+
+      <div class="card hidden" id="admin-card">
+        <div class="card-head">
+          <div class="head-text">
+            <h3>👥 အသုံးပြုသူ စီမံခန့်ခွဲမှု (Admin)</h3>
+            <p class="sub">အကောင့် ဖန်တီး · ပိတ် · စကားဝှက် reset · quota</p>
+          </div>
+          <button class="btn small ghost" id="btn-refresh-users" style="margin-left:auto">🔄 Refresh</button>
+        </div>
+        <div class="user-table" id="user-table"></div>
+        <div class="divider"></div>
+        <div class="grid two">
+          <label class="field"><span>Username အသစ်</span>
+            <input type="text" id="new-username" placeholder="editor1"></label>
+          <label class="field"><span>စကားဝှက်</span>
+            <input type="password" id="new-password" placeholder="အနည်းဆုံး 10 လုံး"></label>
+        </div>
+        <label class="check"><input type="checkbox" id="new-admin">
+          <span>Admin အခွင့်အရေး ပေးမည်</span></label>
+        <div class="btn-row">
+          <button class="btn primary" id="btn-create-user">➕ အကောင့် ဖန်တီးမည်</button>
+          <button class="btn ghost" id="btn-random-pw">🎲 စကားဝှက် ကျပန်း</button>
+        </div>
+        <div class="divider"></div>
+        <h4 style="margin:0 0 6px">🧾 Security log</h4>
+        <div class="mono audit-log" id="audit-log" style="color:var(--text-dim)"></div>
+      </div>
+
       <div class="card">
         <div class="card-head">
           <div class="head-text">

@@ -3,6 +3,13 @@
 Route map
 ---------
 GET  /                          → SPA shell (static/index.html)
+POST /api/auth/login|logout     → session login (cookie + CSRF token)
+GET  /api/auth/me               → current account (or 401)
+POST /api/auth/register         → self sign-up (RECAP_ALLOW_SIGNUP=1)
+POST /api/auth/password         → change own password
+GET  /api/admin/users           → account list (admin)
+POST /api/admin/users           → create / update / disable accounts (admin)
+GET  /api/admin/audit           → audit trail (admin)
 GET  /healthz                   → ALB / ECS health check
 GET  /api/system                → capabilities, fonts, ffmpeg, disk, defaults
 GET  /api/config   POST         → API key / model persistence (multi-key ring)
@@ -38,23 +45,30 @@ from typing import Any, Callable, Optional
 
 import uvicorn
 from fastapi import (BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException,
-                     Query, UploadFile)
+                     Query, Request, Response, UploadFile)
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from recapstudio import config, fonts
+from recapstudio import auth, config, db, fonts, webauth
+from recapstudio.auth import Principal
 from recapstudio.config import ensure_dirs
 from recapstudio.jobs import JobStore
-from recapstudio.keys import key_ring, validate_key
+from recapstudio.keys import key_ring, mask as mask_key, validate_key
 from recapstudio.media import (ffmpeg_available, ffmpeg_version, ffprobe_available,
                                get_video_info, process_registry)
 from recapstudio.pipeline import RecapPipeline
 from recapstudio.tts import VOICE_CATALOG
 from recapstudio.uploads import upload_manager
+from recapstudio.uploads import VIDEO_EXT
 from recapstudio.util import (cached_dir_size, free_disk_bytes, get_logger, human_bytes,
                               prune_old_files, read_json, safe_unlink, setup_logging)
+
+
+def _crypto_backend() -> str:
+    from recapstudio.crypto import encryption_backend
+    return encryption_backend()
 
 setup_logging()
 log = get_logger("recap.app")
@@ -127,6 +141,54 @@ def job_pool_state() -> dict:
     }
 
 
+# ── security middleware (Phase 2) ────────────────────────────────────────
+_api_limiter = auth.RateLimiter(config.settings.api_rate_limit or 10_000, 60.0)
+_login_limiter = auth.RateLimiter(config.settings.login_rate_limit or 10_000, 60.0)
+
+
+@app.middleware("http")
+async def _security_middleware(request: Request, call_next):
+    """Host allow-list, rate limiting and hardening headers in one place."""
+    hosts = config.settings.trusted_hosts
+    if hosts:
+        host = (request.headers.get("host", "").split(":")[0] or "").lower()
+        if host and host not in hosts:
+            return JSONResponse({"detail": "Host header ကို လက်မခံပါ"}, status_code=400)
+
+    path = request.url.path
+    if path.startswith("/api/") and config.settings.api_rate_limit:
+        ident = webauth.client_ip(request) or "anon"
+        limiter = _login_limiter if path.startswith("/api/auth/login") else _api_limiter
+        allowed, retry_after = limiter.check(f"{ident}:{'login' if limiter is _login_limiter else 'api'}")
+        if not allowed:
+            return JSONResponse(
+                {"detail": "တောင်းဆိုမှု များလွန်းပါသည် — ခဏစောင့်ပြီး ပြန်ကြိုးစားပါ "
+                           "(rate limit)"},
+                status_code=429, headers={"Retry-After": str(int(retry_after) + 1)})
+
+    response = await call_next(request)
+
+    if config.settings.security_headers:
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        response.headers.setdefault("X-XSS-Protection", "0")
+        response.headers.setdefault("Permissions-Policy",
+                                    "camera=(), microphone=(), geolocation=()")
+        frames = (config.settings.frame_ancestors or "self").lower()
+        if frames in {"none", "self"}:
+            response.headers.setdefault("X-Frame-Options",
+                                        "DENY" if frames == "none" else "SAMEORIGIN")
+            response.headers.setdefault("Content-Security-Policy",
+                                        f"frame-ancestors '{frames}'")
+        if path.startswith("/api/"):
+            response.headers.setdefault("Cache-Control", "no-store")
+        if config.settings.hsts_seconds and webauth.request_is_https(request):
+            response.headers.setdefault(
+                "Strict-Transport-Security",
+                f"max-age={int(config.settings.hsts_seconds)}; includeSubDomains")
+    return response
+
+
 # ── helpers ──────────────────────────────────────────────────────────────
 def _access_ok(key: Optional[str]) -> bool:
     """True when the caller may use the (optional) shared secret gate."""
@@ -140,17 +202,120 @@ def _check_access(key: Optional[str]) -> None:
     """Optional shared-secret gate for public AWS deployments."""
     if _access_ok(key):
         return
-    raise HTTPException(status_code=401,
-                        detail="Access Key မှန်ကန်မှု မရှိပါ — ⚙️ Settings → Server Access Key "
-                               "တွင် server ၏ RECAP_ACCESS_PASSWORD ကို ထည့်ပါ")
+    raise HTTPException(status_code=401, detail=webauth.ACCESS_KEY_REQUIRED)
 
 
-def guard(x_access_key: Optional[str] = Header(default=None)) -> None:
-    _check_access(x_access_key)
+#: FastAPI dependencies — every /api route that touches data uses one of these
+guard = webauth.require_principal
+admin_guard = webauth.require_admin
 
 
 def _json_error(exc: Exception, status: int = 400) -> HTTPException:
     return HTTPException(status_code=status, detail=str(exc))
+
+
+def _scope(principal: Principal) -> str:
+    """Ownership scope: the account id in multi-user mode, else "shared"."""
+    return principal.scope
+
+
+def _owned_job(task_id: str, principal: Principal):
+    """Fetch a job the caller is allowed to touch (404 otherwise).
+
+    Returning 404 (not 403) for somebody else's task is deliberate: it does
+    not confirm that the id exists.
+    """
+    job = store.get(task_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Task ရှာမတွေ့ပါ")
+    if principal.mode != "users" or principal.is_admin:
+        return job
+    if (job.user_id or "shared") != principal.scope:
+        raise HTTPException(status_code=404, detail="Task ရှာမတွေ့ပါ")
+    return job
+
+
+def _resolve_owned(raw_path: str, principal: Principal) -> Path:
+    """Path inside DATA_DIR *and* inside the caller's sandbox."""
+    try:
+        if principal.mode == "users" and not principal.is_admin:
+            return config.resolve_owned(raw_path, principal.scope)
+        return config.resolve(raw_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _effective_api_key(principal: Principal, payload: dict[str, Any]) -> str:
+    """The Gemini key a job should run with (personal key wins)."""
+    if payload.get("api_key"):
+        return str(payload["api_key"])
+    if principal.mode == "users":
+        keys = auth.get_user_keys(principal.user_id)
+        if keys:
+            return keys[0]
+    return ""
+
+
+def _enforce_job_quota(principal: Principal) -> None:
+    """Per-account concurrency / daily limits (multi-user fairness)."""
+    if principal.mode != "users":
+        return
+    user = auth.get_user(principal.user_id) or {}
+    limits = auth.user_limits(user)
+    max_concurrent = limits["max_concurrent_jobs"]
+    if max_concurrent:
+        active = store.count_active(principal.scope)
+        if active >= max_concurrent:
+            raise HTTPException(
+                status_code=429,
+                detail=f"သင့်အကောင့်တွင် တစ်ပြိုင်နက် job {max_concurrent} ခုသာ run နိုင်ပါသည် — "
+                       "လက်ရှိ job ပြီးအောင် စောင့်ပါ သို့မဟုတ် ရပ်လိုက်ပါ")
+    daily = limits["daily_job_limit"]
+    if daily and auth.jobs_today(principal.user_id) >= daily:
+        raise HTTPException(status_code=429,
+                            detail=f"ယနေ့အတွက် job {daily} ခု ကန့်သတ်ချက် ပြည့်သွားပါပြီ")
+    quota = limits["quota_bytes"]
+    if quota:
+        used = (cached_dir_size(config.user_workspace_dir(principal.scope), blocking=False)
+                + cached_dir_size(config.user_output_dir(principal.scope), blocking=False))
+        if used >= quota:
+            raise HTTPException(
+                status_code=507,
+                detail=f"သိမ်းဆည်းမှု ကန့်သတ်ချက် ({human_bytes(quota)}) ပြည့်သွားပါပြီ — "
+                       "Jobs tab မှ အဟောင်းများ ဖျက်ပါ")
+
+
+def _owner_filter(principal: Principal) -> Optional[str]:
+    """Which jobs this caller may list (None = every job, admins only)."""
+    if principal.mode != "users":
+        return None
+    return principal.scope
+
+
+def _download_target(safe_name: str, principal: Principal) -> Optional[Path]:
+    """Resolve a download inside the caller's output sandbox.
+
+    Admins (and single-user installs) may also read the shared output root;
+    a normal account can only reach files produced by its own jobs.
+    """
+    candidates = [config.user_output_dir(_scope(principal), create=False) / safe_name]
+    if principal.mode != "users" or principal.is_admin:
+        candidates.append(config.OUTPUT_DIR / safe_name)
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if config.OUTPUT_DIR.resolve() not in resolved.parents:
+            continue
+        if resolved.exists() and resolved.is_file():
+            return resolved
+    return None
+
+
+def _register_job(job, principal: Principal) -> None:
+    try:
+        auth.register_job(job.id, job.user_id or "shared", job.kind, job.status)
+    except Exception as exc:  # the DB must never block a render
+        log.debug("job index write failed: %s", exc)
+    auth.audit("job_create", principal=principal, target=job.id, detail=job.kind)
 
 
 # ── static SPA ───────────────────────────────────────────────────────────
@@ -174,8 +339,262 @@ def healthz() -> dict:
     }
 
 
+# ── authentication (Phase 2 — #12) ───────────────────────────────────────
+def _login_payload(principal: Principal, extra: Optional[dict] = None) -> dict:
+    data = {"status": "ok", "auth": _auth_state(principal)}
+    if extra:
+        data.update(extra)
+    return data
+
+
+def _auth_state(principal: Optional[Principal]) -> dict:
+    mode = auth.auth_mode()
+    state = {
+        "mode": mode,
+        "required": mode != "open",
+        "signup_enabled": bool(config.settings.allow_signup) and mode == "users",
+        "signup_code_required": bool(config.settings.signup_code),
+        "authenticated": principal is not None,
+        "user": principal.to_public() if principal else None,
+        "password_min_length": config.settings.password_min_length,
+        "has_users": auth.user_count() > 0,
+    }
+    return state
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request) -> dict:
+    """Who am I? — always 200 so the SPA can decide what to render."""
+    principal = webauth.optional_principal(request)
+    return {"status": "ok", **_auth_state(principal)}
+
+
+@app.post("/api/auth/login")
+def auth_login(payload: dict[str, Any], request: Request, response: Response) -> dict:
+    mode = auth.auth_mode()
+    ip = webauth.client_ip(request)
+    if mode == "open":
+        return {"status": "ok", "auth": _auth_state(
+            Principal(user_id="public", username="public", role="admin", mode="open"))}
+    if mode == "legacy":
+        key = str(payload.get("access_key") or payload.get("password") or "")
+        if not _access_ok(key):
+            auth.audit("login_failed", target="shared", ip=ip, ok=False,
+                       detail="legacy access key")
+            raise HTTPException(status_code=401, detail=webauth.ACCESS_KEY_REQUIRED)
+        auth.audit("login", target="shared", ip=ip, detail="legacy access key")
+        return {"status": "ok", "legacy": True,
+                "auth": _auth_state(Principal(user_id="shared", username="shared",
+                                              role="admin", mode="legacy"))}
+
+    username = str(payload.get("username", "")).strip()
+    password = str(payload.get("password", ""))
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="Username နှင့် Password ထည့်ပါ")
+    user, error = auth.authenticate(username, password, ip)
+    if not user:
+        auth.audit("login_failed", target=username, ip=ip, ok=False, detail=error)
+        raise HTTPException(status_code=401, detail=error)
+    session = auth.create_session(user["id"], ip, request.headers.get("user-agent", ""))
+    webauth.set_session_cookie(response, request, session["token"], session["csrf_token"],
+                               int(max(60.0, config.settings.session_ttl_hours * 3600)))
+    principal = Principal(user_id=user["id"], username=user["username"],
+                          role=user.get("role", "user"), mode="users",
+                          session_token=session["token"], via_cookie=True,
+                          must_change_password=bool(user.get("must_change_password")))
+    auth.audit("login", principal=principal, target=user["username"], ip=ip)
+    log.info("login: %s (%s)", user["username"], ip)
+    return _login_payload(principal, {"csrf_token": session["csrf_token"],
+                                      "expires_at": session["expires_at"],
+                                      # for API clients that cannot keep cookies
+                                      "token": session["token"]})
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request, response: Response) -> dict:
+    principal = webauth.optional_principal(request)
+    if principal and principal.session_token:
+        auth.revoke_token(principal.session_token)
+        auth.audit("logout", principal=principal, ip=webauth.client_ip(request))
+    webauth.clear_session_cookie(response)
+    return {"status": "ok"}
+
+
+@app.post("/api/auth/register")
+def auth_register(payload: dict[str, Any], request: Request, response: Response) -> dict:
+    """Self sign-up — off unless RECAP_ALLOW_SIGNUP=1.
+
+    The very first account is always allowed (and becomes the admin) so a
+    fresh install can be claimed from the browser instead of SSH.
+    """
+    mode = auth.auth_mode()
+    ip = webauth.client_ip(request)
+    first_account = auth.user_count() == 0 and mode != "legacy"
+    if not first_account and not (config.settings.allow_signup and mode == "users"):
+        raise HTTPException(status_code=403,
+                            detail="အကောင့် အသစ်ဖွင့်ခြင်းကို ပိတ်ထားပါသည် — admin ထံ ဆက်သွယ်ပါ")
+    if config.settings.signup_code and not first_account:
+        if str(payload.get("invite_code", "")) != config.settings.signup_code:
+            raise HTTPException(status_code=403, detail="Invite code မမှန်ကန်ပါ")
+    username = str(payload.get("username", "")).strip()
+    password = str(payload.get("password", ""))
+    try:
+        user = auth.create_user(username, password,
+                                role="admin" if first_account else "user",
+                                display_name=str(payload.get("display_name", "")).strip())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session = auth.create_session(user["id"], ip, request.headers.get("user-agent", ""))
+    webauth.set_session_cookie(response, request, session["token"], session["csrf_token"],
+                               int(max(60.0, config.settings.session_ttl_hours * 3600)))
+    principal = Principal(user_id=user["id"], username=user["username"],
+                          role=user.get("role", "user"), mode="users",
+                          session_token=session["token"], via_cookie=True)
+    auth.audit("register", principal=principal, target=user["username"], ip=ip,
+               detail="first admin" if first_account else "self signup")
+    log.info("account created: %s (%s)", user["username"],
+             "admin" if first_account else "user")
+    return _login_payload(principal, {"csrf_token": session["csrf_token"],
+                                      "first_admin": first_account})
+
+
+@app.post("/api/auth/password")
+def auth_change_password(payload: dict[str, Any], request: Request, response: Response,
+                         principal: Principal = Depends(guard)) -> dict:
+    if principal.mode != "users":
+        raise HTTPException(status_code=400,
+                            detail="Account mode မဟုတ်သဖြင့် စကားဝှက် မပြောင်းနိုင်ပါ")
+    try:
+        auth.change_own_password(principal.user_id,
+                                 str(payload.get("current_password", "")),
+                                 str(payload.get("new_password", "")))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    auth.audit("password_change", principal=principal, ip=webauth.client_ip(request))
+    webauth.clear_session_cookie(response)       # every device must sign in again
+    return {"status": "ok", "message": "စကားဝှက် ပြောင်းပြီးပါပြီ — ပြန်လည် login ဝင်ပါ"}
+
+
+@app.get("/api/auth/sessions")
+def auth_sessions(principal: Principal = Depends(guard)) -> dict:
+    if principal.mode != "users":
+        return {"status": "ok", "sessions": []}
+    return {"status": "ok", "sessions": auth.list_sessions(principal.user_id)}
+
+
+@app.post("/api/auth/sessions/revoke")
+def auth_revoke_sessions(request: Request, response: Response,
+                         principal: Principal = Depends(guard)) -> dict:
+    if principal.mode != "users":
+        return {"status": "ok", "revoked": 0}
+    revoked = auth.revoke_user_sessions(principal.user_id)
+    auth.audit("sessions_revoked", principal=principal, detail=str(revoked),
+               ip=webauth.client_ip(request))
+    webauth.clear_session_cookie(response)
+    return {"status": "ok", "revoked": revoked}
+
+
+# ── admin: accounts & audit ──────────────────────────────────────────────
+@app.get("/api/admin/users")
+def admin_list_users(principal: Principal = Depends(admin_guard)) -> dict:
+    if principal.mode != "users":
+        return {"status": "ok", "users": [], "mode": principal.mode,
+                "hint": "အကောင့်စနစ် မဖွင့်ရသေးပါ — 'useradmin create' ဖြင့် စတင်ပါ"}
+    users = auth.list_users()
+    for user in users:
+        user["active_jobs"] = store.count_active(user["id"])
+        user["jobs_today"] = auth.jobs_today(user["id"])
+        user["disk_used"] = (cached_dir_size(config.user_workspace_dir(user["id"]), blocking=False)
+                             + cached_dir_size(config.user_output_dir(user["id"]), blocking=False))
+    return {"status": "ok", "users": users, "mode": principal.mode,
+            "defaults": {
+                "max_concurrent_jobs": config.settings.user_max_concurrent_jobs,
+                "daily_job_limit": config.settings.user_daily_jobs,
+                "quota_bytes": config.settings.user_quota_bytes,
+            }}
+
+
+@app.post("/api/admin/users")
+def admin_create_user(payload: dict[str, Any], request: Request,
+                      principal: Principal = Depends(admin_guard)) -> dict:
+    if principal.mode != "users":
+        raise HTTPException(status_code=400,
+                            detail="အကောင့်စနစ် မဖွင့်ရသေးပါ (CLI: python -m recapstudio.useradmin create)")
+    try:
+        user = auth.create_user(
+            str(payload.get("username", "")).strip(),
+            str(payload.get("password", "")),
+            role="admin" if payload.get("admin") else "user",
+            display_name=str(payload.get("display_name", "")).strip(),
+            must_change_password=bool(payload.get("must_change_password", True)),
+            quota_bytes=int(payload.get("quota_bytes") or 0),
+            max_concurrent_jobs=int(payload.get("max_concurrent_jobs") or 0),
+            daily_job_limit=int(payload.get("daily_job_limit") or 0),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    auth.audit("user_create", principal=principal, target=user["username"],
+               ip=webauth.client_ip(request), detail=user["role"])
+    return {"status": "ok", "user": user}
+
+
+@app.patch("/api/admin/users/{user_id}")
+def admin_update_user(user_id: str, payload: dict[str, Any], request: Request,
+                      principal: Principal = Depends(admin_guard)) -> dict:
+    if principal.mode != "users":
+        raise HTTPException(status_code=400, detail="အကောင့်စနစ် မဖွင့်ရသေးပါ")
+    if not auth.get_user(user_id):
+        raise HTTPException(status_code=404, detail="အကောင့် ရှာမတွေ့ပါ")
+    try:
+        if payload.get("password"):
+            auth.set_password(user_id, str(payload["password"]),
+                              must_change=bool(payload.get("must_change_password", True)))
+        if payload.get("status"):
+            auth.set_status(user_id, str(payload["status"]))
+        if payload.get("role"):
+            auth.set_role(user_id, str(payload["role"]))
+        if any(k in payload for k in ("quota_bytes", "max_concurrent_jobs", "daily_job_limit")):
+            auth.set_limits(
+                user_id,
+                quota_bytes=int(payload["quota_bytes"]) if "quota_bytes" in payload else None,
+                max_concurrent_jobs=int(payload["max_concurrent_jobs"])
+                if "max_concurrent_jobs" in payload else None,
+                daily_job_limit=int(payload["daily_job_limit"])
+                if "daily_job_limit" in payload else None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    auth.audit("user_update", principal=principal, target=user_id,
+               ip=webauth.client_ip(request),
+               detail=",".join(k for k in payload if k != "password"))
+    return {"status": "ok", "user": auth.get_user(user_id)}
+
+
+@app.delete("/api/admin/users/{user_id}")
+def admin_delete_user(user_id: str, request: Request,
+                      principal: Principal = Depends(admin_guard)) -> dict:
+    if principal.mode != "users":
+        raise HTTPException(status_code=400, detail="အကောင့်စနစ် မဖွင့်ရသေးပါ")
+    if user_id == principal.user_id:
+        raise HTTPException(status_code=400, detail="ကိုယ့်အကောင့်ကိုယ် မဖျက်နိုင်ပါ")
+    try:
+        auth.delete_user(user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    auth.audit("user_delete", principal=principal, target=user_id,
+               ip=webauth.client_ip(request))
+    return {"status": "ok"}
+
+
+@app.get("/api/admin/audit")
+def admin_audit(limit: int = Query(default=100, ge=1, le=1000),
+                principal: Principal = Depends(admin_guard)) -> dict:
+    return {"status": "ok", "entries": auth.recent_audit(limit),
+            "security": auth.security_report()}
+
+
 @app.get("/api/system")
-def system_info(x_access_key: Optional[str] = Header(default=None),
+def system_info(request: Request,
+                x_access_key: Optional[str] = Header(default=None),
                 fast: bool = Query(default=True)) -> dict:
     """Capabilities + defaults for the SPA.
 
@@ -187,7 +606,8 @@ def system_info(x_access_key: Optional[str] = Header(default=None),
     walking a potentially huge tree — that walk was what made the top bar sit
     at "Engine စစ်ဆေးနေသည်…" on a busy server.
     """
-    access_ok = _access_ok(x_access_key)
+    principal = webauth.optional_principal(request)
+    access_ok = principal is not None
     try:
         fonts_info = fonts.font_status()
     except Exception as exc:  # never let diagnostics break the page
@@ -195,11 +615,17 @@ def system_info(x_access_key: Optional[str] = Header(default=None),
         fonts_info = {"family": "", "regular": None, "bold": None, "ok": False,
                       "fonts_dir": "", "bundled_ok": False, "error": str(exc)[:200]}
     try:
-        disk_used = (cached_dir_size(config.WORKSPACE_DIR, blocking=not fast)
-                     + cached_dir_size(config.OUTPUT_DIR, blocking=not fast))
+        if principal and principal.mode == "users" and not principal.is_admin:
+            disk_used = (cached_dir_size(config.user_workspace_dir(principal.scope),
+                                         blocking=not fast)
+                         + cached_dir_size(config.user_output_dir(principal.scope),
+                                           blocking=not fast))
+        else:
+            disk_used = (cached_dir_size(config.WORKSPACE_DIR, blocking=not fast)
+                         + cached_dir_size(config.OUTPUT_DIR, blocking=not fast))
     except Exception:
         disk_used = 0
-    ring = key_ring.describe()
+    ring = _keys_payload(principal) if principal else key_ring.describe()
     payload = {
         "version": config.settings.app_version,
         "ffmpeg": {"available": ffmpeg_available(), "version": ffmpeg_version(),
@@ -235,11 +661,14 @@ def system_info(x_access_key: Optional[str] = Header(default=None),
         "has_api_key": bool(ring["any_key"]),
         "access_required": bool(config.settings.access_password),
         "access_ok": access_ok,
+        "auth": _auth_state(principal),
         "api_keys": ring if access_ok else {"any_key": ring["any_key"], "keys": [],
                                             "max_keys": ring["max_keys"],
                                             "active_slot": 0,
-                                            "failover": ring["failover"]},
+                                            "failover": ring.get("failover", True)},
     }
+    if principal and principal.is_admin:
+        payload["security"] = auth.security_report()
     return payload
 
 
@@ -253,32 +682,36 @@ def load_api_key() -> str:
 
 
 @app.get("/api/config")
-def get_config(x_access_key: Optional[str] = Header(default=None)) -> dict:
-    """Settings payload — also readable before the access key is entered."""
-    access_ok = _access_ok(x_access_key)
+def get_config(request: Request) -> dict:
+    """Settings payload — also readable before sign-in (masked)."""
+    principal = webauth.optional_principal(request)
+    access_ok = principal is not None
     saved = read_json(config.CONFIG_FILE, {}) or {}
-    ring = key_ring.describe()
+    ring = _keys_payload(principal) if principal else key_ring.describe()
     data = {
         "gemini_api_key_set": bool(ring["any_key"]),
         "model": saved.get("model", config.settings.default_model),
         "access_required": bool(config.settings.access_password),
         "access_ok": access_ok,
+        "auth": _auth_state(principal),
     }
     if access_ok:
         data.update({
-            "gemini_api_key_masked": ring["masked"],
+            "gemini_api_key_masked": ring.get("masked", ""),
             "api_keys": ring,
             "max_api_keys": ring["max_keys"],
             "defaults": saved.get("defaults", {}),
         })
     else:
         data["api_keys"] = {"keys": [], "active_slot": 0,
-                            "max_keys": ring["max_keys"], "failover": ring["failover"]}
+                            "max_keys": ring["max_keys"],
+                            "failover": ring.get("failover", True)}
     return data
 
 
 @app.post("/api/config")
-def save_config(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
+def save_config(payload: dict[str, Any],
+                principal: Principal = Depends(guard)) -> dict:
     saved = read_json(config.CONFIG_FILE, {}) or {}
     changed_keys: list[dict] = []
     # new multi-key format: {"api_keys": [{"slot": 1, "key": "AIza…"}, …]}
@@ -287,7 +720,12 @@ def save_config(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
     if "gemini_api_key" in payload and str(payload["gemini_api_key"]).strip():
         changed_keys.append({"slot": 1, "key": str(payload["gemini_api_key"]).strip()})
     if changed_keys:
-        key_ring.update(changed_keys)
+        _save_keys_for(principal, changed_keys)
+    # server-wide defaults stay admin-only once accounts exist
+    if principal.mode == "users" and not principal.is_admin:
+        if "model" in payload or "defaults" in payload:
+            raise HTTPException(status_code=403,
+                                detail="Server default settings ကို admin သာ ပြောင်းနိုင်ပါသည်")
     if "model" in payload:
         saved["model"] = str(payload["model"]).strip()
     if "defaults" in payload and isinstance(payload["defaults"], dict):
@@ -297,18 +735,61 @@ def save_config(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
     saved.pop("gemini_api_keys", None)
     saved.pop("active_key_index", None)
     atomic_write_json(config.CONFIG_FILE, saved)
-    return {"status": "ok", "gemini_api_key_set": bool(key_ring.has_key()),
-            "api_keys": key_ring.describe()}
+    ring = _keys_payload(principal)
+    return {"status": "ok", "gemini_api_key_set": bool(ring["any_key"]),
+            "api_keys": ring}
 
 
 # ── API key ring (Key #1 … #3) ───────────────────────────────────────────
+def _keys_payload(principal: Optional[Principal]) -> dict:
+    """Server ring for shared installs, the caller's own keys otherwise.
+
+    In multi-user mode one account must never see (or spend) another
+    account's Gemini quota, so personal keys are stored encrypted per user
+    and the server keys (from .env) are only offered as a read-only
+    fallback.
+    """
+    ring = key_ring.describe()
+    if principal is None or principal.mode != "users":
+        return ring
+    personal = auth.describe_user_keys(principal.user_id)
+    server_keys = [k for k in ring["keys"] if k["set"]]
+    return {
+        "keys": personal["keys"],
+        "any_key": personal["any_key"] or bool(server_keys),
+        "max_keys": personal["max_keys"],
+        "active_slot": next((k["slot"] for k in personal["keys"] if k["set"]), 0),
+        "failover": ring.get("failover", True),
+        "masked": next((k["masked"] for k in personal["keys"] if k["set"]), ""),
+        "personal": True,
+        "server_fallback": bool(server_keys),
+        "server_keys": len(server_keys),
+    }
+
+
+def _save_keys_for(principal: Principal, entries: list[dict]) -> None:
+    if principal.mode != "users":
+        key_ring.update(entries)
+        return
+    for entry in entries or []:
+        try:
+            slot = int(entry.get("slot", 0))
+        except (TypeError, ValueError):
+            continue
+        if slot < 1:
+            continue
+        auth.set_user_key(principal.user_id, slot, str(entry.get("key", "")).strip())
+    auth.audit("api_keys_update", principal=principal,
+               detail=f"{len(entries)} slot(s)")
+
+
 @app.get("/api/keys")
-def list_keys(_: None = Depends(guard)) -> dict:
-    return {"status": "ok", **key_ring.describe()}
+def list_keys(principal: Principal = Depends(guard)) -> dict:
+    return {"status": "ok", **_keys_payload(principal)}
 
 
 @app.post("/api/keys")
-def save_keys(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
+def save_keys(payload: dict[str, Any], principal: Principal = Depends(guard)) -> dict:
     """Save slots and/or switch the active one.
 
     Body: ``{"keys": [{"slot": 2, "key": "AIza…"}], "active_slot": 2}``
@@ -316,26 +797,34 @@ def save_keys(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
     """
     try:
         if isinstance(payload.get("keys"), list):
-            key_ring.update(payload["keys"])
-        if payload.get("active_slot") is not None:
+            _save_keys_for(principal, payload["keys"])
+        if payload.get("active_slot") is not None and principal.mode != "users":
             key_ring.activate(int(payload["active_slot"]))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise _json_error(exc) from exc
-    return {"status": "ok", **key_ring.describe()}
+    return {"status": "ok", **_keys_payload(principal)}
 
 
 @app.post("/api/keys/test")
 def test_keys(payload: dict[str, Any] | None = None,
-              _: None = Depends(guard)) -> dict:
+              principal: Principal = Depends(guard)) -> dict:
     """Validate one key (``{"slot": 2}`` or ``{"key": "AIza…"}``) or all of them."""
     payload = payload or {}
     results: list[dict] = []
     if payload.get("key"):
         ok, message = validate_key(str(payload["key"]))
         results.append({"slot": int(payload.get("slot") or 0), "ok": ok, "message": message,
-                        "masked": (str(payload["key"])[:6] + "••••")})
+                        "masked": mask_key(str(payload["key"]))})
+    elif principal.mode == "users":
+        for index, key in enumerate(auth.get_user_keys(principal.user_id), start=1):
+            ok, message = validate_key(key)
+            results.append({"slot": index, "ok": ok, "message": message,
+                            "masked": mask_key(key)})
+        if not results:
+            results.append({"slot": 1, "ok": False, "message": "Key မထည့်ရသေးပါ",
+                            "masked": ""})
     else:
         wanted = payload.get("slots")
         for slot in key_ring.slots:
@@ -350,7 +839,7 @@ def test_keys(payload: dict[str, Any] | None = None,
                 key_ring.clear_cooldown(slot.index)
             results.append({"slot": slot.index, "ok": ok, "message": message,
                             "masked": slot.to_public()["masked"]})
-    return {"status": "ok", "results": results, "api_keys": key_ring.describe()}
+    return {"status": "ok", "results": results, "api_keys": _keys_payload(principal)}
 
 
 # ── uploads ──────────────────────────────────────────────────────────────
@@ -358,13 +847,16 @@ def test_keys(payload: dict[str, Any] | None = None,
 # assembly). Running that on the event loop froze *every* other request -
 # which is what made the whole site look crashed during a big upload.
 @app.post("/api/upload/init")
-async def upload_init(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
+async def upload_init(payload: dict[str, Any],
+                      principal: Principal = Depends(guard)) -> dict:
     try:
         session = await run_in_threadpool(
             upload_manager.init,
             str(payload.get("filename", "video.mp4")),
             int(payload.get("size", 0)),
             str(payload.get("kind", "video")),
+            True,
+            _scope(principal),
         )
         return {"status": "ok", **session.to_dict()}
     except Exception as exc:
@@ -372,9 +864,14 @@ async def upload_init(payload: dict[str, Any], _: None = Depends(guard)) -> dict
 
 
 @app.get("/api/upload/status")
-async def upload_status(upload_id: str = Query(...), _: None = Depends(guard)) -> dict:
+async def upload_status(upload_id: str = Query(...),
+                        principal: Principal = Depends(guard)) -> dict:
     """Resume support: which chunks does the server already have?"""
-    session = await run_in_threadpool(upload_manager.session_state, upload_id)
+    try:
+        session = await run_in_threadpool(upload_manager.session_state, upload_id,
+                                          _scope(principal))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     if session is None:
         raise HTTPException(status_code=404, detail="Upload session ရှာမတွေ့ပါ")
     return {"status": "ok", **session}
@@ -385,12 +882,15 @@ async def upload_chunk(
     upload_id: str = Form(...),
     index: int = Form(...),
     chunk: UploadFile = File(...),
-    _: None = Depends(guard),
+    principal: Principal = Depends(guard),
 ) -> dict:
     try:
-        session = await run_in_threadpool(upload_manager.save_chunk, upload_id, index, chunk.file)
+        session = await run_in_threadpool(upload_manager.save_chunk, upload_id, index,
+                                          chunk.file, _scope(principal))
         await chunk.close()
         return {"status": "ok", **session.to_dict()}
+    except PermissionError as exc:
+        raise _json_error(exc, 403) from exc
     except KeyError as exc:
         raise _json_error(exc, 404) from exc
     except Exception as exc:
@@ -398,10 +898,14 @@ async def upload_chunk(
 
 
 @app.post("/api/upload/complete")
-async def upload_complete(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
+async def upload_complete(payload: dict[str, Any],
+                          principal: Principal = Depends(guard)) -> dict:
     try:
         return await run_in_threadpool(upload_manager.complete,
-                                       str(payload.get("upload_id", "")))
+                                       str(payload.get("upload_id", "")),
+                                       _scope(principal))
+    except PermissionError as exc:
+        raise _json_error(exc, 403) from exc
     except KeyError as exc:
         raise _json_error(exc, 404) from exc
     except Exception as exc:
@@ -409,11 +913,15 @@ async def upload_complete(payload: dict[str, Any], _: None = Depends(guard)) -> 
 
 
 @app.post("/api/upload")
-async def upload_simple(video: UploadFile = File(...), _: None = Depends(guard)) -> dict:
+async def upload_simple(video: UploadFile = File(...),
+                        principal: Principal = Depends(guard)) -> dict:
     """Small-file convenience endpoint (kept for compatibility)."""
     try:
         ext = Path(video.filename or "video.mp4").suffix.lower() or ".mp4"
-        target = config.WORKSPACE_DIR / f"input_{int(time.time())}_{uuid.uuid4().hex[:6]}{ext}"
+        if ext not in VIDEO_EXT:
+            raise ValueError(f"'{ext}' ဗီဒီယိုဖိုင် အမျိုးအစား မဟုတ်ပါ")
+        target = (config.user_workspace_dir(_scope(principal))
+                  / f"input_{int(time.time())}_{uuid.uuid4().hex[:6]}{ext}")
         size = 0
         with open(target, "wb") as fh:
             while True:
@@ -439,13 +947,15 @@ async def upload_simple(video: UploadFile = File(...), _: None = Depends(guard))
 
 
 @app.post("/api/upload-logo")
-async def upload_logo(logo: UploadFile = File(...), _: None = Depends(guard)) -> dict:
+async def upload_logo(logo: UploadFile = File(...),
+                      principal: Principal = Depends(guard)) -> dict:
     try:
         name = logo.filename or "logo.png"
         ext = Path(name).suffix.lower()
         if ext not in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".avif", ".tif", ".tiff"}:
             raise ValueError("Logo အတွက် ပုံဖိုင် (PNG/JPG/WEBP) သာ ပံ့ပိုးပါသည်")
-        raw = config.LOGO_DIR / f"raw_{int(time.time())}_{uuid.uuid4().hex[:6]}{ext}"
+        raw = (config.user_logo_dir(_scope(principal))
+               / f"raw_{int(time.time())}_{uuid.uuid4().hex[:6]}{ext}")
         size = 0
         with open(raw, "wb") as fh:
             while True:
@@ -459,7 +969,7 @@ async def upload_logo(logo: UploadFile = File(...), _: None = Depends(guard)) ->
         await logo.close()
         if size == 0:
             raise ValueError("Logo ဖိုင် အလွတ် ဖြစ်နေပါသည်")
-        assets = upload_manager.logo_assets(raw)
+        assets = upload_manager.logo_assets(raw, owner=_scope(principal))
         safe_unlink(raw)
         return {"status": "ok", "filename": name, **assets}
     except Exception as exc:
@@ -467,25 +977,24 @@ async def upload_logo(logo: UploadFile = File(...), _: None = Depends(guard)) ->
 
 
 @app.get("/api/asset")
-def serve_asset(path: str = Query(...), _: None = Depends(guard)) -> FileResponse:
+def serve_asset(path: str = Query(...),
+                principal: Principal = Depends(guard)) -> FileResponse:
     """Workspace file server.
 
     ``FileResponse`` implements HTTP Range requests, which is what the in-page
     video preview needs to seek/scrub; adding a short-lived cache header keeps
     reloads snappy without holding stale renders forever.
     """
-    try:
-        target = config.resolve(path)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    target = _resolve_owned(path, principal)
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="ဖိုင် ရှာမတွေ့ပါ")
-    headers = {"Cache-Control": "public, max-age=600", "Accept-Ranges": "bytes"}
+    headers = {"Cache-Control": "private, max-age=600", "Accept-Ranges": "bytes"}
     return FileResponse(str(target), headers=headers)
 
 
 @app.post("/api/download-url")
-def import_from_url(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
+def import_from_url(payload: dict[str, Any],
+                    principal: Principal = Depends(guard)) -> dict:
     """yt-dlp import.
 
     The previous implementation passed ``url.split("?")[0]`` which *removes
@@ -504,7 +1013,8 @@ def import_from_url(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
     if not _shutil.which("yt-dlp"):
         raise HTTPException(status_code=500, detail="yt-dlp မထည့်သွင်းထားပါ (pip install yt-dlp)")
 
-    out_tmpl = str(config.WORKSPACE_DIR / f"ytdl_{int(time.time())}_{uuid.uuid4().hex[:6]}.%(ext)s")
+    work_dir = config.user_workspace_dir(_scope(principal))
+    out_tmpl = str(work_dir / f"ytdl_{int(time.time())}_{uuid.uuid4().hex[:6]}.%(ext)s")
     cmd = [
         "yt-dlp", "--no-playlist", "--no-warnings", "--newline",
         "--restrict-filenames", "--merge-output-format", "mp4",
@@ -524,7 +1034,7 @@ def import_from_url(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
     output = (proc.stdout or "").strip().splitlines()
     downloaded = [Path(line.strip()) for line in output if line.strip().endswith((".mp4", ".mkv", ".webm"))]
     if not downloaded or not downloaded[-1].exists():
-        candidates = sorted(config.WORKSPACE_DIR.glob("ytdl_*"), key=lambda p: p.stat().st_mtime)
+        candidates = sorted(work_dir.glob("ytdl_*"), key=lambda p: p.stat().st_mtime)
         if not candidates:
             tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-6:]
             hint = ""
@@ -537,7 +1047,7 @@ def import_from_url(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
         downloaded = [candidates[-1]]
 
     path = downloaded[-1]
-    final = config.WORKSPACE_DIR / f"import_{int(time.time())}{path.suffix}"
+    final = work_dir / f"import_{int(time.time())}{path.suffix}"
     path.replace(final)
     info = get_video_info(final)
     return {
@@ -551,21 +1061,27 @@ def import_from_url(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
 
 # ── jobs ─────────────────────────────────────────────────────────────────
 @app.post("/api/tasks")
-def start_task(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
+def start_task(payload: dict[str, Any], principal: Principal = Depends(guard)) -> dict:
     if not payload.get("input_video"):
         raise HTTPException(status_code=400, detail="ဗီဒီယိုဖိုင် အရင်တင်ပေးပါ")
-    try:
-        video_path = config.resolve(payload["input_video"])
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    video_path = _resolve_owned(str(payload["input_video"]), principal)
     if not video_path.exists():
         raise HTTPException(status_code=400,
                             detail="တင်ထားသော ဗီဒီယိုဖိုင် ရှာမတွေ့ပါ — ပြန်တင်ပေးပါ")
+    if payload.get("logo_path"):
+        _resolve_owned(str(payload["logo_path"]), principal)
+    _enforce_job_quota(principal)
+    # personal key (multi-user) → payload key → server ring
+    personal_key = _effective_api_key(principal, payload)
+    if personal_key:
+        payload["api_key"] = personal_key
     if not payload.get("api_key") and not key_ring.has_key() and not config.settings.demo_mode:
         raise HTTPException(status_code=400,
                             detail="Gemini API Key မထည့်ရသေးပါ — ⚙️ Settings → API Keys "
                                    "တွင် Key #1 ထည့်ပါ (Key #2/#3 က quota failover အတွက်)")
-    job = store.create(kind="recap", request=payload)
+    job = store.create(kind="recap", request=payload, user_id=_scope(principal),
+                       username=principal.username)
+    _register_job(job, principal)
     store.update(job.id, input_video=payload.get("input_video", ""))
     store.log(job.id, f"queued (mode={payload.get('mode')}, lang={payload.get('lang')}, "
                       f"voice={payload.get('voice')}, fill={payload.get('fill_mode')}, "
@@ -578,34 +1094,34 @@ def start_task(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
 
 @app.get("/api/tasks")
 def list_tasks(limit: int = Query(default=30, ge=1, le=200),
-               _: None = Depends(guard)) -> dict:
-    jobs = [job.to_dict(include_logs=False) for job in store.list(limit)]
-    return {"status": "ok", "tasks": jobs, "runtime": job_pool_state()}
+               all_users: bool = Query(default=False, alias="all"),
+               principal: Principal = Depends(guard)) -> dict:
+    scope = None if (principal.is_admin and all_users) else _owner_filter(principal)
+    jobs = [job.to_dict(include_logs=False) for job in store.list(limit, user_id=scope)]
+    return {"status": "ok", "tasks": jobs, "runtime": job_pool_state(),
+            "scope": "all" if scope is None else scope}
 
 
 @app.get("/api/tasks/active")
-def active_task(_: None = Depends(guard)) -> dict:
+def active_task(principal: Principal = Depends(guard)) -> dict:
     """Newest running/queued job — lets the UI re-attach after a page reload."""
-    for job in store.list(50):
+    for job in store.list(50, user_id=_owner_filter(principal)):
         if job.status in {"running", "queued"}:
             return {"status": "ok", "task": job.to_dict()}
     return {"status": "ok", "task": None}
 
 
 @app.get("/api/tasks/{task_id}")
-def task_status(task_id: str, _: None = Depends(guard)) -> dict:
-    job = store.get(task_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Task ရှာမတွေ့ပါ")
+def task_status(task_id: str, principal: Principal = Depends(guard)) -> dict:
+    job = _owned_job(task_id, principal)
     data = job.to_dict()
     data["runtime"] = job_pool_state()
     return data
 
 
 @app.post("/api/tasks/{task_id}/cancel")
-def cancel_task(task_id: str, _: None = Depends(guard)) -> dict:
-    if store.get(task_id) is None:
-        raise HTTPException(status_code=404, detail="Task ရှာမတွေ့ပါ")
+def cancel_task(task_id: str, principal: Principal = Depends(guard)) -> dict:
+    _owned_job(task_id, principal)
     if not store.request_cancel(task_id):
         raise HTTPException(status_code=400,
                             detail="ရပ်တန့်၍ မရပါ (ပြီးဆုံးသွားပြီ ဖြစ်နိုင်ပါသည်) — "
@@ -614,18 +1130,21 @@ def cancel_task(task_id: str, _: None = Depends(guard)) -> dict:
 
 
 @app.post("/api/tasks/{task_id}/rerender")
-def rerender_task(task_id: str, payload: dict[str, Any], _: None = Depends(guard)) -> dict:
-    if store.get(task_id) is None:
-        raise HTTPException(status_code=404, detail="Task ရှာမတွေ့ပါ")
+def rerender_task(task_id: str, payload: dict[str, Any],
+                  principal: Principal = Depends(guard)) -> dict:
+    _owned_job(task_id, principal)
+    _enforce_job_quota(principal)
+    personal_key = _effective_api_key(principal, payload)
+    if personal_key:
+        payload["api_key"] = personal_key
+    auth.audit("job_rerender", principal=principal, target=task_id)
     submit_job(pipeline.run_rerender, task_id, payload)
     return {"status": "ok", "task_id": task_id}
 
 
 @app.delete("/api/tasks/{task_id}")
-def delete_task(task_id: str, _: None = Depends(guard)) -> dict:
-    job = store.get(task_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Task ရှာမတွေ့ပါ")
+def delete_task(task_id: str, principal: Principal = Depends(guard)) -> dict:
+    job = _owned_job(task_id, principal)
     for rel in (job.output_video,):
         if rel:
             try:
@@ -633,16 +1152,18 @@ def delete_task(task_id: str, _: None = Depends(guard)) -> dict:
             except Exception:
                 pass
     store.delete(task_id)
+    auth.forget_job(task_id)
+    auth.audit("job_delete", principal=principal, target=task_id)
     return {"status": "ok"}
 
 
 @app.get("/api/download/{filename}")
-def download_file(filename: str, _: None = Depends(guard)) -> FileResponse:
+def download_file(filename: str, principal: Principal = Depends(guard)) -> FileResponse:
     safe_name = os.path.basename(filename)
     if safe_name != filename or not safe_name:
         raise HTTPException(status_code=400, detail="ဖိုင်အမည် မမှန်ကန်ပါ")
-    target = (config.OUTPUT_DIR / safe_name).resolve()
-    if config.OUTPUT_DIR.resolve() not in target.parents or not target.exists():
+    target = _download_target(safe_name, principal)
+    if target is None:
         raise HTTPException(status_code=404, detail="ဖိုင် ရှာမတွေ့ပါ")
     media_type = "video/mp4"
     if target.suffix == ".mp3":
@@ -654,17 +1175,16 @@ def download_file(filename: str, _: None = Depends(guard)) -> FileResponse:
 
 # ── tools ────────────────────────────────────────────────────────────────
 @app.post("/api/thumbnail")
-def thumbnail(payload: dict[str, Any], _: None = Depends(guard)) -> FileResponse:
+def thumbnail(payload: dict[str, Any],
+              principal: Principal = Depends(guard)) -> FileResponse:
     raw_path = str(payload.get("video_path", ""))
     if not raw_path:
         raise HTTPException(status_code=400, detail="ဗီဒီယိုဖိုင် အရင်ရွေးပါ")
-    try:
-        video_path = str(config.resolve(raw_path))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    video_path = str(_resolve_owned(raw_path, principal))
     if not Path(video_path).exists():
         raise HTTPException(status_code=404, detail="ဗီဒီယိုဖိုင် ရှာမတွေ့ပါ")
-    out_path = config.OUTPUT_DIR / f"thumb_{int(time.time())}_{uuid.uuid4().hex[:6]}.jpg"
+    out_path = (config.user_output_dir(_scope(principal))
+                / f"thumb_{int(time.time())}_{uuid.uuid4().hex[:6]}.jpg")
     try:
         pipeline.generate_thumbnail(
             video_path=video_path,
@@ -681,7 +1201,8 @@ def thumbnail(payload: dict[str, Any], _: None = Depends(guard)) -> FileResponse
 
 
 @app.post("/api/estimate-parts")
-def estimate_parts(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
+def estimate_parts(payload: dict[str, Any],
+                   principal: Principal = Depends(guard)) -> dict:
     import math
     duration = float(payload.get("duration", 0) or 0)
     slice_sec = max(5, int(payload.get("slice_sec", 60) or 60))
@@ -692,7 +1213,8 @@ def estimate_parts(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
 
 
 @app.post("/api/split-video")
-def split_video(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
+def split_video(payload: dict[str, Any],
+                principal: Principal = Depends(guard)) -> dict:
     """Shorts splitter.
 
     ``async: true`` (what the UI sends) returns a task id immediately and the
@@ -703,15 +1225,15 @@ def split_video(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
     raw_path = str(payload.get("video_path", ""))
     if not raw_path:
         raise HTTPException(status_code=400, detail="ဗီဒီယိုဖိုင် အရင်ရွေးပါ")
-    try:
-        video_path = config.resolve(raw_path)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    video_path = _resolve_owned(raw_path, principal)
     if not video_path.exists():
         raise HTTPException(status_code=404, detail="ဗီဒီယိုဖိုင် ရှာမတွေ့ပါ")
 
     if payload.get("async"):
-        job = store.create(kind="split", request=payload)
+        _enforce_job_quota(principal)
+        job = store.create(kind="split", request=payload, user_id=_scope(principal),
+                           username=principal.username)
+        _register_job(job, principal)
         store.update(job.id, input_video=config.rel(video_path))
         store.log(job.id, f"split queued (slice={payload.get('slice_sec')}s, "
                           f"aspect={payload.get('aspect')})")
@@ -723,6 +1245,7 @@ def split_video(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
             video_path=str(video_path),
             slice_sec=int(payload.get("slice_sec", 60)),
             aspect=str(payload.get("aspect", "9:16")),
+            out_dir=config.user_output_dir(_scope(principal)),
         )
     except Exception as exc:
         raise _json_error(exc) from exc
@@ -732,28 +1255,24 @@ def split_video(payload: dict[str, Any], _: None = Depends(guard)) -> dict:
 # ── legacy aliases (older front-ends / bookmarks keep working) ───────────
 @app.post("/api/start-task", include_in_schema=False)
 def legacy_start(payload: dict[str, Any],
-                 x_access_key: Optional[str] = Header(default=None)) -> dict:
-    _check_access(x_access_key)
-    return start_task(payload, None)
+                 principal: Principal = Depends(guard)) -> dict:
+    return start_task(payload, principal)
 
 
 @app.get("/api/task-status/{task_id}", include_in_schema=False)
-def legacy_status(task_id: str, x_access_key: Optional[str] = Header(default=None)) -> dict:
-    _check_access(x_access_key)
-    return task_status(task_id, None)
+def legacy_status(task_id: str, principal: Principal = Depends(guard)) -> dict:
+    return task_status(task_id, principal)
 
 
 @app.post("/api/rerender-task/{task_id}", include_in_schema=False)
 def legacy_rerender(task_id: str, payload: dict[str, Any],
-                    x_access_key: Optional[str] = Header(default=None)) -> dict:
-    _check_access(x_access_key)
-    return rerender_task(task_id, payload, None)
+                    principal: Principal = Depends(guard)) -> dict:
+    return rerender_task(task_id, payload, principal)
 
 
 @app.post("/api/generate-thumbnail", include_in_schema=False)
-def legacy_thumbnail(payload: dict[str, Any], x_access_key: Optional[str] = Header(default=None)):
-    _check_access(x_access_key)
-    return thumbnail(payload, None)
+def legacy_thumbnail(payload: dict[str, Any], principal: Principal = Depends(guard)):
+    return thumbnail(payload, principal)
 
 
 # ── housekeeping ─────────────────────────────────────────────────────────
@@ -762,7 +1281,13 @@ def _janitor_loop() -> None:
         try:
             time.sleep(max(60, config.settings.janitor_interval_seconds))
             removed = prune_old_files(config.WORKSPACE_DIR, config.settings.workspace_ttl_hours,
-                                      keep_names={"cache", "tasks", "logos", "uploads", "incoming", "tmp"})
+                                      keep_names={"cache", "tasks", "logos", "uploads",
+                                                  "incoming", "tmp", "users"})
+            # per-account upload sandboxes expire on the same schedule
+            for user_dir in config.USERS_DIR.glob("*"):
+                if user_dir.is_dir():
+                    removed += prune_old_files(user_dir, config.settings.workspace_ttl_hours,
+                                               keep_names={"logos"})
             removed += prune_old_files(config.CACHE_DIR, config.settings.workspace_ttl_hours * 2)
             removed += prune_old_files(config.TMP_DIR, 6)
             removed += upload_manager.cleanup_stale()
@@ -775,8 +1300,8 @@ def _janitor_loop() -> None:
                     url = getattr(job, url_key, "")
                     if isinstance(url, str) and url:
                         live_outputs.add(Path(url).name)
-            for entry in config.OUTPUT_DIR.glob("*"):
-                if entry.name in live_outputs:
+            for entry in config.OUTPUT_DIR.rglob("*"):
+                if entry.name in live_outputs or entry.is_dir():
                     continue
                 try:
                     if entry.is_file() and (time.time() - entry.stat().st_mtime) > config.settings.output_ttl_hours * 3600:
@@ -796,6 +1321,19 @@ def _startup() -> None:
     ensure_dirs()
     log.info("Recap Studio %s starting • data dir=%s • free disk=%s",
              config.settings.app_version, config.DATA_DIR, human_bytes(free_disk_bytes()))
+    # ── accounts / sessions / audit DB (Phase 2) ──────────────────────
+    try:
+        version = db.init()
+        result = auth.bootstrap()
+        mode = auth.auth_mode()
+        log.info("Auth: mode=%s • accounts=%d • db=%s (schema v%d) • secrets=%s",
+                 mode, auth.user_count(), config.DB_PATH, version,
+                 _crypto_backend())
+        for warning in result.warnings:
+            log.warning("%s", warning)
+    except Exception as exc:  # the studio must still start without the DB
+        log.error("auth/database init failed: %s — falling back to %s mode",
+                  exc, "legacy" if config.settings.access_password else "open")
     if not ffmpeg_available() or not ffprobe_available():
         log.error("ffmpeg/ffprobe not found on PATH - rendering will fail. "
                   "Install ffmpeg (see Dockerfile / packages.txt).")

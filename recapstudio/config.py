@@ -8,6 +8,7 @@ change required.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -87,11 +88,19 @@ TASK_DIR = WORKSPACE_DIR / "tasks"
 LOGO_DIR = WORKSPACE_DIR / "logos"
 TMP_DIR = WORKSPACE_DIR / "tmp"
 
+USERS_DIR = WORKSPACE_DIR / "users"          # per-account upload sandbox
 STATIC_DIR = APP_ROOT / "static"
 ASSETS_DIR = APP_ROOT / "assets"
 BUNDLED_FONT_DIR = ASSETS_DIR / "fonts"
 
 CONFIG_FILE = DATA_DIR / ".recap_config.json"
+#: accounts / sessions / audit log (Phase 2). Created with mode 0600.
+DB_PATH = Path(os.getenv("RECAP_DB_PATH", str(DATA_DIR / "recap.db")))
+if not DB_PATH.is_absolute():
+    DB_PATH = (DATA_DIR / DB_PATH).resolve()
+#: auto-generated server secret (encrypts stored API keys) when
+#: RECAP_SECRET_KEY is not provided.
+SECRET_FILE = DATA_DIR / ".recap_secret"
 
 
 @dataclass(frozen=True)
@@ -172,12 +181,55 @@ class Settings:
     ytdlp_cookies_file: str = os.getenv("RECAP_YTDLP_COOKIES", "")
     ytdlp_proxy: str = os.getenv("RECAP_YTDLP_PROXY", "")
 
+    # ── Auth / accounts / multi-user (Phase 2 — #12) ──────────────────────
+    #: auto = accounts when the DB has any, else the shared key, else open.
+    #: users | legacy | open force one specific mode.
+    auth_mode: str = os.getenv("RECAP_AUTH_MODE", "auto").strip().lower()
+    #: encrypts stored API keys; falls back to DATA_DIR/.recap_secret
+    secret_key: str = os.getenv("RECAP_SECRET_KEY", "")
+    session_cookie: str = os.getenv("RECAP_SESSION_COOKIE", "recap_session")
+    csrf_cookie: str = os.getenv("RECAP_CSRF_COOKIE", "recap_csrf")
+    session_ttl_hours: float = _env_float("RECAP_SESSION_TTL_HOURS", 168.0)   # 7 days
+    session_idle_hours: float = _env_float("RECAP_SESSION_IDLE_HOURS", 72.0)
+    #: auto = Secure flag when the request arrived over https
+    cookie_secure: str = os.getenv("RECAP_COOKIE_SECURE", "auto").strip().lower()
+    cookie_samesite: str = os.getenv("RECAP_COOKIE_SAMESITE", "lax").strip().lower()
+    allow_signup: bool = _env_bool("RECAP_ALLOW_SIGNUP", False)
+    signup_code: str = os.getenv("RECAP_SIGNUP_CODE", "")
+    bootstrap_admin_user: str = os.getenv("RECAP_ADMIN_USER", "")
+    bootstrap_admin_password: str = os.getenv("RECAP_ADMIN_PASSWORD", "")
+    password_min_length: int = _env_int("RECAP_PASSWORD_MIN_LENGTH", 10)
+    pbkdf2_iterations: int = _env_int("RECAP_PBKDF2_ITERATIONS", 240_000)
+    login_max_attempts: int = _env_int("RECAP_LOGIN_MAX_ATTEMPTS", 8)
+    login_window_minutes: int = _env_int("RECAP_LOGIN_WINDOW_MINUTES", 15)
+    login_lockout_minutes: int = _env_int("RECAP_LOGIN_LOCKOUT_MINUTES", 15)
+    audit_retention_days: int = _env_int("RECAP_AUDIT_RETENTION_DAYS", 90)
+    #: generic API rate limit per client per minute (0 = off)
+    api_rate_limit: int = _env_int("RECAP_RATE_LIMIT_PER_MINUTE", 300)
+    login_rate_limit: int = _env_int("RECAP_LOGIN_RATE_LIMIT_PER_MINUTE", 12)
+    #: per-user quotas (0 = unlimited / fall back to the global setting)
+    user_max_concurrent_jobs: int = _env_int("RECAP_USER_MAX_CONCURRENT_JOBS", 1)
+    user_daily_jobs: int = _env_int("RECAP_USER_DAILY_JOBS", 0)
+    user_quota_bytes: int = _env_int("RECAP_USER_QUOTA_BYTES", 0)
+    #: response hardening headers (HSTS only when the request is https)
+    security_headers: bool = _env_bool("RECAP_SECURITY_HEADERS", True)
+    #: none | self | * — '*' allows embedding the UI in another site's iframe
+    frame_ancestors: str = os.getenv("RECAP_FRAME_ANCESTORS", "self").strip().lower()
+    hsts_seconds: int = _env_int("RECAP_HSTS_SECONDS", 0)
+    #: comma separated Host allow-list (empty = accept any Host header)
+    trusted_hosts: tuple = field(
+        default_factory=lambda: tuple(
+            h.strip().lower() for h in os.getenv("RECAP_TRUSTED_HOSTS", "").split(",")
+            if h.strip()
+        )
+    )
+
     # ── Dev / test switches (never enable on a public deployment) ──────────
     demo_mode: bool = _env_bool("RECAP_DEMO_MODE", False)          # fake AI timeline
     fake_tts: bool = _env_bool("RECAP_FAKE_TTS", False)            # beep instead of speech
     force_reencode: bool = _env_bool("RECAP_FORCE_REENCODE", False)
 
-    app_version: str = "4.1.2"
+    app_version: str = "4.2.0"
 
 
 settings = Settings()
@@ -186,9 +238,85 @@ settings = Settings()
 def ensure_dirs() -> None:
     for path in (
         WORKSPACE_DIR, OUTPUT_DIR, CACHE_DIR, UPLOAD_DIR, INCOMING_DIR,
-        TASK_DIR, LOGO_DIR, TMP_DIR, STATIC_DIR / "fonts",
+        TASK_DIR, LOGO_DIR, TMP_DIR, USERS_DIR, STATIC_DIR / "fonts",
     ):
         path.mkdir(parents=True, exist_ok=True)
+
+
+# ── per-user sandboxes (multi-user hardening) ────────────────────────────
+_SCOPE_RE = re.compile(r"[^a-zA-Z0-9_-]")
+
+
+def safe_scope(scope: str | None) -> str:
+    """Normalise an ownership scope into something usable as a folder name."""
+    cleaned = _SCOPE_RE.sub("", str(scope or "").strip())[:48]
+    return cleaned or "shared"
+
+
+def user_workspace_dir(scope: str | None, create: bool = True) -> Path:
+    """Where this account's uploads live (``workspace/users/<scope>``).
+
+    ``shared`` keeps the pre-Phase-2 layout so single-user installs and old
+    links keep working after an upgrade.
+    """
+    name = safe_scope(scope)
+    path = WORKSPACE_DIR if name == "shared" else (USERS_DIR / name)
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def user_logo_dir(scope: str | None, create: bool = True) -> Path:
+    name = safe_scope(scope)
+    path = LOGO_DIR if name == "shared" else (USERS_DIR / name / "logos")
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def user_output_dir(scope: str | None, create: bool = True) -> Path:
+    """Rendered artefacts (``output/u_<scope>``) — never shared between users."""
+    name = safe_scope(scope)
+    path = OUTPUT_DIR if name == "shared" else (OUTPUT_DIR / f"u_{name}")
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def owned_roots(scope: str | None) -> tuple[Path, ...]:
+    """Directories a given scope is allowed to read files from."""
+    name = safe_scope(scope)
+    if name == "shared":
+        return (DATA_DIR.resolve(),)
+    return (
+        user_workspace_dir(name, create=False).resolve(),
+        user_output_dir(name, create=False).resolve(),
+        CACHE_DIR.resolve(),
+    )
+
+
+def path_is_owned(path: os.PathLike | str, scope: str | None) -> bool:
+    try:
+        resolved = Path(path).resolve()
+    except OSError:
+        return False
+    for root in owned_roots(scope):
+        if resolved == root or root in resolved.parents:
+            return True
+    return False
+
+
+def resolve_owned(rel_or_abs: str, scope: str | None) -> Path:
+    """:func:`resolve` + "the caller actually owns this file".
+
+    Raises ``ValueError`` for traversal *and* for a valid path that belongs to
+    somebody else — the second half is what stops user A from streaming user
+    B's upload by guessing its name.
+    """
+    resolved = resolve(rel_or_abs)
+    if not path_is_owned(resolved, scope):
+        raise ValueError("ဤဖိုင်ကို ကြည့်ခွင့် မရှိပါ (another account's file)")
+    return resolved
 
 
 def rel(path: os.PathLike | str) -> str:

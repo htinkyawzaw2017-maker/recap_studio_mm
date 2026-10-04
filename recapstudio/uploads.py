@@ -50,6 +50,9 @@ class UploadSession:
     received: set[int] = field(default_factory=set)
     created_at: float = field(default_factory=time.time)
     completed_path: str = ""
+    #: account that started the upload (multi-user isolation). "" / "shared"
+    #: keeps the single-user behaviour.
+    owner: str = ""
 
     @property
     def expected_chunks(self) -> int:
@@ -69,6 +72,11 @@ class UploadSession:
             "completed_path": self.completed_path,
             "progress": round(len(self.received) / max(1, self.expected_chunks) * 100, 1),
         }
+
+    def owned_by(self, owner: Optional[str]) -> bool:
+        if owner is None:                       # internal / legacy caller
+            return True
+        return (self.owner or "shared") == (owner or "shared")
 
 
 class UploadManager:
@@ -90,6 +98,7 @@ class UploadManager:
         meta = session.to_dict()
         meta["created_at"] = session.created_at
         meta["safe_name"] = session.safe_name
+        meta["owner"] = session.owner
         try:
             with open(self._meta_path(session.upload_id), "w", encoding="utf-8") as fh:
                 json.dump(meta, fh, ensure_ascii=False)
@@ -115,6 +124,7 @@ class UploadManager:
                 received=set(int(i) for i in meta.get("received_chunks", [])),
                 created_at=float(meta.get("created_at", time.time())),
                 completed_path=meta.get("completed_path", ""),
+                owner=str(meta.get("owner", "") or ""),
             )
             self.sessions[upload_id] = session
             return session
@@ -133,7 +143,8 @@ class UploadManager:
         return ext
 
     # ── public API ─────────────────────────────────────────────────────
-    def find_resumable(self, filename: str, total_size: int, kind: str) -> Optional[UploadSession]:
+    def find_resumable(self, filename: str, total_size: int, kind: str,
+                       owner: str = "") -> Optional[UploadSession]:
         """An unfinished session for the same file (browser refresh / retry)."""
         safe_name = slugify_filename(filename)
         cutoff = time.time() - MAX_UPLOAD_AGE_SECONDS
@@ -148,12 +159,13 @@ class UploadManager:
             if session is None or session.completed_path:
                 continue
             if (session.safe_name == safe_name and session.total_size == int(total_size)
-                    and session.kind == kind and session.created_at >= cutoff):
+                    and session.kind == kind and session.created_at >= cutoff
+                    and session.owned_by(owner)):
                 return session
         return None
 
     def init(self, filename: str, total_size: int, kind: str = "video",
-             resume: bool = True) -> UploadSession:
+             resume: bool = True, owner: str = "") -> UploadSession:
         kind = kind if kind in {"video", "logo", "audio"} else "video"
         self._validate_extension(filename, kind)
         if total_size <= 0:
@@ -165,7 +177,7 @@ class UploadManager:
                 "(လိုအပ်ပါက RECAP_MAX_UPLOAD_BYTES ကို ပြင်နိုင်ပါသည်)။"
             )
         if resume:
-            existing = self.find_resumable(filename, total_size, kind)
+            existing = self.find_resumable(filename, total_size, kind, owner)
             if existing is not None and existing.received:
                 # A refresh / dropped connection should continue where it
                 # stopped instead of sending gigabytes again.
@@ -180,6 +192,7 @@ class UploadManager:
             safe_name=slugify_filename(filename),
             total_size=int(total_size),
             chunk_size=int(config.settings.upload_chunk_bytes),
+            owner=owner or "",
         )
         self._session_dir(upload_id).mkdir(parents=True, exist_ok=True)
         self.sessions[upload_id] = session
@@ -188,17 +201,22 @@ class UploadManager:
                  upload_id, filename, human_bytes(total_size), session.expected_chunks)
         return session
 
-    def session_state(self, upload_id: str) -> Optional[dict]:
+    def session_state(self, upload_id: str, owner: Optional[str] = None) -> Optional[dict]:
         """Public progress of a session (used by /api/upload/status)."""
         session = self._load_session(upload_id)
         if session is None:
             return None
+        if not session.owned_by(owner):
+            raise PermissionError("ဤ upload session ကို သုံးခွင့် မရှိပါ")
         return session.to_dict()
 
-    def save_chunk(self, upload_id: str, index: int, stream: BinaryIO) -> UploadSession:
+    def save_chunk(self, upload_id: str, index: int, stream: BinaryIO,
+                   owner: Optional[str] = None) -> UploadSession:
         session = self._load_session(upload_id)
         if session is None:
             raise KeyError("Upload session ရှာမတွေ့ပါ (session အဟောင်း ဖြစ်နိုင်ပါသည်)။ ပြန်လည် စတင်ပေးပါ။")
+        if not session.owned_by(owner):
+            raise PermissionError("ဤ upload session ကို သုံးခွင့် မရှိပါ")
         if session.completed_path:
             return session
         if index < 0 or index >= max(1, session.expected_chunks):
@@ -221,10 +239,12 @@ class UploadManager:
         self._save_meta(session)
         return session
 
-    def complete(self, upload_id: str) -> dict:
+    def complete(self, upload_id: str, owner: Optional[str] = None) -> dict:
         session = self._load_session(upload_id)
         if session is None:
             raise KeyError("Upload session ရှာမတွေ့ပါ။ ပြန်လည် စတင်ပေးပါ။")
+        if not session.owned_by(owner):
+            raise PermissionError("ဤ upload session ကို သုံးခွင့် မရှိပါ")
         if session.completed_path and Path(config.DATA_DIR / session.completed_path).exists():
             return self._describe(session)
 
@@ -235,7 +255,14 @@ class UploadManager:
             )
 
         session_dir = self._session_dir(upload_id)
-        target_dir = config.LOGO_DIR if session.kind == "logo" else self.workspace
+        # Multi-user: every account writes into its own sandbox folder so the
+        # asset/download endpoints can enforce ownership by path alone.
+        if session.kind == "logo":
+            target_dir = config.user_logo_dir(session.owner)
+        elif session.owner and config.safe_scope(session.owner) != "shared":
+            target_dir = config.user_workspace_dir(session.owner)
+        else:
+            target_dir = self.workspace
         target_dir.mkdir(parents=True, exist_ok=True)
         final_name = f"{session.kind}_{int(time.time())}_{uuid.uuid4().hex[:6]}_{session.safe_name}"
         final_path = target_dir / final_name
@@ -284,11 +311,11 @@ class UploadManager:
             if not info["has_video"]:
                 raise ValueError("ဒီဖိုင်ထဲမှာ video stream မတွေ့ပါ။ အသံဖိုင် သို့မဟုတ် ပျက်နေသော ဖိုင် ဖြစ်နိုင်ပါသည်။")
         if session.kind == "logo" and path.exists():
-            payload.update(self.logo_assets(path))
+            payload.update(self.logo_assets(path, owner=session.owner))
         return payload
 
     # ── logos ──────────────────────────────────────────────────────────
-    def logo_assets(self, raw_path: Path) -> dict:
+    def logo_assets(self, raw_path: Path, owner: str = "") -> dict:
         """Crop a logo into a circular badge, always returning a usable file.
 
         Previously a failed badge conversion still returned ``status: ok``
@@ -298,7 +325,7 @@ class UploadManager:
         """
         from PIL import Image
 
-        clean_path = config.LOGO_DIR / f"logo_{uuid.uuid4().hex[:10]}.png"
+        clean_path = config.user_logo_dir(owner) / f"logo_{uuid.uuid4().hex[:10]}.png"
         try:
             img = Image.open(raw_path).convert("RGBA")
             if max(img.size) > 1400:  # keep GPU/CPU overlay cheap

@@ -45,6 +45,28 @@ Timeline အလိုက် အသံ ပေါင်းစပ် (drift-free) +
 ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → MP4 + SRT + MP3
 ```
 
+### 🔐 v4.2 — အကောင့်စနစ် + Database လုံခြုံရေး + User အများသုံး (Phase 2)
+
+Site ကို link သိသူတိုင်း ဝင်နိုင်ခြင်း ပြီးဆုံးပါပြီ။ ယခု **username + password**
+အကောင့်စနစ်၊ user တစ်ယောက်ချင်း သီးသန့် workspace၊ encrypt လုပ်ထားသော API key
+သိမ်းဆည်းမှု တို့ ပါဝင်သည်။
+
+* **အကောင့်** — PBKDF2-SHA256 (240k rounds) + salt၊ session cookie (HttpOnly/SameSite/Secure)၊
+  CSRF token၊ ၈ ကြိမ် မှားလျှင် ၁၅ မိနစ် lock၊ IP rate limit
+* **User ခွဲခြားမှု** — job တိုင်းတွင် ပိုင်ရှင်ရှိ (သူများ job → **404**)၊
+  `workspace/users/<user>/` + `outputs/u_<user>/` သီးသန့်၊ per-user quota (job/disk)
+* **Database** — JSON အစား SQLite `data/recap.db` (0600 permission, schema migration, WAL)၊
+  audit log (login/create/delete/role အပြောင်းအလဲ)
+* **API key** — server ring အပြင် **user တစ်ယောက်ချင်း key** ကို Fernet ဖြင့် encrypt သိမ်း
+* **UI** — login/sign-up screen၊ 👤 account chip + logout၊
+  Settings → **အကောင့်** (password ပြောင်း / device အားလုံး ထွက်) နှင့်
+  **အကောင့် စီမံခန့်ခွဲမှု** (admin: user ဖန်တီး/ပိတ်/reset/ဖျက် + audit log)
+* **CLI** — `python -m recapstudio.useradmin status|migrate|create|list|passwd|disable|promote|delete|sessions|audit`
+* **Tests** — `tests/test_auth.py` (69 checks, offline)
+
+👉 သင် ကိုယ်တိုင် လုပ်ရမည့် အဆင့်များ (secret key, admin အကောင့်, restart, စစ်ဆေးချက်) —
+**[docs/PHASE2_AUTH.md](docs/PHASE2_AUTH.md)**
+
 ### ⚡ v4.1.2 — hotfix: `'TimelineExtractor' object has no attribute 'sdk'`
 
 v4.1.1 တွင် ထည့်လိုက်သော log line တစ်ကြောင်းက `self.sdk` (မှန်သည် `self.client.sdk`)
@@ -134,6 +156,11 @@ running job ကို refresh လုပ်လျှင် ပြန်ချိ�
 | POST | `/api/tasks/{id}/cancel` · `/rerender` · DELETE | ရပ် / ပြန် render / ဖျက် |
 | GET | `/api/download/{file}` | MP4 · SRT · ASS · MP3 |
 | POST | `/api/thumbnail` · `/api/split-video` · `/api/estimate-parts` | tools |
+| GET | `/api/auth/me` | login အခြေအနေ + mode (v4.2) |
+| POST | `/api/auth/login` · `/logout` · `/register` | အကောင့် ဝင်/ထွက်/ဖွင့် |
+| POST | `/api/auth/password` · `/api/auth/sessions/revoke` | password ပြောင်း / device အားလုံး ထွက် |
+| GET/POST/PATCH/DELETE | `/api/admin/users` | admin — user စီမံခန့်ခွဲမှု |
+| GET | `/api/admin/audit` | admin — security log |
 
 ---
 
@@ -143,7 +170,11 @@ running job ကို refresh လုပ်လျှင် ပြန်ချိ�
 |---|---|---|
 | `GEMINI_API_KEY` | — | AI timeline extraction အတွက် |
 | `RECAP_DATA_DIR` | app folder | workspace/output/tasks ထားမည့်နေရာ (AWS တွင် `/data`) |
-| `RECAP_ACCESS_PASSWORD` | — | public deployment အတွက် shared secret |
+| `RECAP_SECRET_KEY` | auto | **v4.2** session + API key encryption သော့ (`openssl rand -hex 32`) ⚠️ မပြောင်းပါနှင့် |
+| `RECAP_AUTH_MODE` | `auto` | `auto` / `users` / `legacy` / `open` |
+| `RECAP_ALLOW_SIGNUP` | `0` | user ကိုယ်တိုင် အကောင့်ဖွင့်ခွင့် (+ `RECAP_SIGNUP_CODE`) |
+| `RECAP_USER_MAX_CONCURRENT_JOBS` | `1` | user တစ်ယောက် တစ်ပြိုင်နက် job |
+| `RECAP_ACCESS_PASSWORD` | — | legacy shared secret (အကောင့်စနစ် သုံးလျှင် မလို) |
 | `RECAP_MAX_CONCURRENT_JOBS` | 2 | တစ်ချိန်တည်း render အရေအတွက် |
 | `RECAP_TTS_WORKERS` | 8 | parallel အသံသွင်း workers |
 | `RECAP_MAX_CHUNK_SECONDS` | 480 | Gemini သို့ ပေးပို့မည့် အပိုင်းအရှည် |
@@ -157,8 +188,10 @@ running job ကို refresh လုပ်လျှင် ပြန်ချိ�
 
 * **AWS EC2 (Instance Connect, port 80) — command တစ်ကြောင်းတည်း** — [docs/EC2_INSTANCE_CONNECT.md](docs/EC2_INSTANCE_CONNECT.md)
   ```bash
-  cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a1027a-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
+  cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
   ```
+  install ပြီးလျှင် **admin အကောင့် ဖန်တီးရန် မမေ့ပါနှင့်** →
+  [docs/PHASE2_AUTH.md](docs/PHASE2_AUTH.md) အဆင့် ၄
 * **AWS (ECS Fargate + ALB + EFS)** — [docs/AWS_DEPLOY.md](docs/AWS_DEPLOY.md)
 * **AWS ပေါ်ရှိ deployment ကို update လုပ်ရန်** — [docs/AWS_UPDATE.md](docs/AWS_UPDATE.md)
   (`python tests/verify_deployment.py https://your-domain.com` ဖြင့် စစ်နိုင်သည်)
@@ -177,9 +210,16 @@ python tests/test_real_run.py         # demo မပါဘဲ AI analysis အပ�
 python tests/test_self_attrs.py       # self.<name> static စစ်ဆေးခြင်း (12 modules)
 python tests/test_cancel.py          # ⏹ ရပ်တန့်ခြင်း = CancelledError (5 checks, ~3s)
 python tests/test_key_ring.py         # API key ၃ ခု + quota failover (27 checks, network မလိုပါ)
+python tests/test_auth.py             # အကောင့်/session/CSRF/quota/isolation (69 checks, offline)
+python tests/test_audio_coverage.py   # narration အစအဆုံး ရောက်/မရောက် (16 checks, ffmpeg လိုသည်)
+
+# Front-end (jsdom) — server တစ်ခု run ထားပြီးမှ
+npm install jsdom
+node tests/test_ui_auth.mjs http://127.0.0.1:8000 myname 'မိမိစကားဝှက်'   # 17 checks
 
 # Deploy လုပ်ပြီးသော server (AWS/Render) ကို စစ်ရန် — dependencies မလိုပါ
 python tests/verify_deployment.py https://your-domain.com
+python tests/verify_deployment.py https://your-domain.com --username admin --password 'XXXX'
 python tests/verify_deployment.py https://your-domain.com --video ./clip.mp4
 ```
 
@@ -198,6 +238,11 @@ recapstudio/
   ai.py                 chunked Gemini analysis + coverage sweep
   tts.py                edge-tts parallel synthesis + time fitting
   subtitles.py          ASS/SRT builder (libass-safe escaping)
+  db.py                 SQLite schema + migrations (users/sessions/jobs/audit)
+  crypto.py             secret key + Fernet/HMAC encryption
+  auth.py               password policy, session, quota, audit
+  webauth.py            FastAPI auth guards (cookie / Bearer / access key)
+  useradmin.py          account CLI (status/create/list/passwd/…)
   render.py             single-pass master render (+ fast copy path)
   pipeline.py           orchestration / splitter / thumbnail
   jobs.py uploads.py fonts.py util.py

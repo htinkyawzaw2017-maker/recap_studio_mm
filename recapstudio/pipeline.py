@@ -231,7 +231,8 @@ class RecapPipeline:
             store.update(job_id, stage="render", message="🎬 Final Video Render စတင်နေပါသည်...")
             render_prog = self._stage(job_id, "render")
             output_name = f"recap_{job_id}.mp4"
-            output_path = str(config.OUTPUT_DIR / output_name)
+            # multi-user: artefacts live in the owner's output sandbox
+            output_path = str(config.user_output_dir(store.owner_of(job_id)) / output_name)
             logo_path = payload.get("logo_path")
             logo_pos = None
             if logo_path and payload.get("logo_pos_x") is not None and payload.get("logo_pos_y") is not None:
@@ -438,7 +439,8 @@ class RecapPipeline:
 
             parts = self.split_video(video_path=video_path, slice_sec=slice_sec,
                                      aspect=aspect, progress=_progress,
-                                     cancel=self._cancel(job_id), owner=job_id)
+                                     cancel=self._cancel(job_id), owner=job_id,
+                                     out_dir=config.user_output_dir(store.owner_of(job_id)))
             if not parts:
                 raise RuntimeError("အပိုင်း မထွက်ပါ — ဗီဒီယိုဖိုင် ပျက်နိုင်ပါသည်။")
             store.update(job_id, status="completed", progress=100, stage="finalize",
@@ -517,7 +519,7 @@ class RecapPipeline:
 
             store.update(job_id, stage="render", message="🎬 ဗီဒီယို ပြန်လည် ထုတ်လုပ်နေပါသည်...")
             output_name = f"recap_{job_id}_v{int(time.time())}.mp4"
-            output_path = str(config.OUTPUT_DIR / output_name)
+            output_path = str(config.user_output_dir(store.owner_of(job_id)) / output_name)
             logo_path = payload.get("logo_path", job.request.get("logo_path"))
             logo_pos = None
             if logo_path and payload.get("logo_pos_x") is not None and payload.get("logo_pos_y") is not None:
@@ -563,20 +565,22 @@ class RecapPipeline:
                         srt_path: Optional[str], narration_mp3: str) -> dict[str, Any]:
         extras: dict[str, Any] = {}
         base = Path(output_path).stem
+        out_dir = Path(output_path).parent
+        out_dir.mkdir(parents=True, exist_ok=True)
         try:
             if srt_path and Path(srt_path).exists():
-                target = config.OUTPUT_DIR / f"{base}.srt"
+                target = out_dir / f"{base}.srt"
                 shutil.copyfile(srt_path, target)
                 extras["srt_url"] = f"/api/download/{target.name}"
             if ass_path and Path(ass_path).exists():
-                target = config.OUTPUT_DIR / f"{base}.ass"
+                target = out_dir / f"{base}.ass"
                 shutil.copyfile(ass_path, target)
                 extras["ass_url"] = f"/api/download/{target.name}"
         except Exception as exc:
             log.warning("publishing subtitle files failed: %s", exc)
         try:
             if narration_mp3 and Path(narration_mp3).exists():
-                target = config.OUTPUT_DIR / f"{base}_narration.mp3"
+                target = out_dir / f"{base}_narration.mp3"
                 shutil.copyfile(narration_mp3, target)
                 extras["audio_url"] = f"/api/download/{target.name}"
         except Exception as exc:
@@ -664,7 +668,7 @@ class RecapPipeline:
     def split_video(self, video_path: str, slice_sec: int, aspect: str,
                     progress: Optional[callable] = None,
                     cancel: Optional[callable] = None,
-                    owner: str = "") -> list[dict]:
+                    owner: str = "", out_dir: Optional[Path] = None) -> list[dict]:
         info = get_video_info(video_path)
         duration = info["duration"]
         if duration <= 0:
@@ -687,7 +691,7 @@ class RecapPipeline:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
                 pool.submit(self._split_one, video_path, index, start, length,
-                            aspect, info, tag, cancel, owner): index
+                            aspect, info, tag, cancel, owner, out_dir): index
                 for index, start, length in jobs
             }
             done = 0
@@ -712,11 +716,13 @@ class RecapPipeline:
     def _split_one(self, video_path: str, index: int, start: float, length: float,
                    aspect: str, info: dict, tag: str,
                    cancel: Optional[callable] = None,
-                   owner: str = "") -> Optional[dict]:
+                   owner: str = "", out_dir: Optional[Path] = None) -> Optional[dict]:
         if cancel and cancel():
             raise CancelledError("ခွဲထုတ်ခြင်းကို ရပ်လိုက်ပါပြီ")
         name = f"part_{index + 1:02d}_{tag}.mp4"
-        out_path = config.OUTPUT_DIR / name
+        target_dir = Path(out_dir) if out_dir else config.OUTPUT_DIR
+        target_dir.mkdir(parents=True, exist_ok=True)
+        out_path = target_dir / name
         same_aspect = False
         if aspect == "original":
             same_aspect = True
