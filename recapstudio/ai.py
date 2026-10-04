@@ -522,12 +522,24 @@ MODE_PROMPTS = {
 }
 
 FILL_MODE_PROMPTS = {
+    # ── whole-video recap: the narrator never stops talking ──────────────
     "continuous": (
-        "The recap must be narrated CONTINUOUSLY from the first second to the last second. "
-        "Wherever nobody is speaking on screen, write short connective narration that keeps the "
-        "story moving (describe what is visibly happening and what it leads to). Never invent facts."
+        "MODE = WHOLE-VIDEO RECAP. The recap must be narrated CONTINUOUSLY from the first second "
+        "to the last second, like a Burmese movie-recap YouTuber. Wherever nobody is speaking on "
+        "screen, write short connective narration that keeps the story moving (describe what is "
+        "visibly happening and what it leads to). Re-tell the story in your own words — you do NOT "
+        "have to translate the dialogue literally. Never invent facts."
     ),
-    "dialogue": "Only translate/dub moments where characters actually speak. Leave silence silent.",
+    # ── dialogue dubbing: a precise lip-sync-ish track, nothing invented ──
+    "dialogue": (
+        "MODE = DIALOGUE DUBBING. Output a line ONLY where a human actually speaks on screen or "
+        "off screen. Never describe the picture, never add narration, never summarise, never fill "
+        "silence — silence stays silent. `start` and `end` must match the real speech boundaries "
+        "to within 0.3 seconds (start exactly when the mouth/voice starts, end when it stops), "
+        "because the dub is laid over those moments. One entry per spoken sentence; split long "
+        "speeches into separate entries at their natural pauses. Keep the speaker's meaning and "
+        "tone faithfully — this is dubbing, not a summary."
+    ),
 }
 
 
@@ -551,6 +563,10 @@ def _chunk_prompt(chunk_start: float, chunk_end: float, target_language: str,
                 )
         except Exception:
             style_block = ""
+    from .tts import budget_chars, chars_per_second
+    cps = chars_per_second(target_language)
+    lang_word = "Burmese" if target_language == "my" else "English"
+    four_sec, eight_sec = budget_chars(4.0, target_language), budget_chars(8.0, target_language)
     return f"""You are a professional film dubbing director and Myanmar recap script writer.
 
 VIDEO SEGMENT: this clip is ONLY a part of a longer video. The clip starts at {chunk_start:.2f}s and
@@ -571,12 +587,19 @@ MANDATORY RULES
      {chunk_end:.2f}s: where nothing is spoken, write short narration describing what is
      visibly happening so the voice-over never stops.
    * Do not stop early, do not summarise the ending, do not skip the middle.
-3. Write every line in {lang_instruction}. Keep each line short enough to speak inside its window
-   (about 12-16 Burmese characters per second of window). Long windows get 2-3 shorter lines.
-4. NO double quotes inside text. Use single quotes if needed. No timestamps, no scene directions,
+3. LENGTH BUDGET (hard rule — breaking it makes the voice-over race and sound robotic):
+   a human narrator speaks about {cps:.0f} {lang_word} characters per second. A window of W
+   seconds therefore allows at most {cps:.0f} x W characters INCLUDING spaces. A 4 second window
+   = about {four_sec} characters, 8 seconds = about {eight_sec}. If you need to say more, add a
+   SECOND entry with its own time window instead of writing a longer line.
+4. STYLE — short, punchy, natural spoken {lang_word}: one idea per line, 6-14 words, active voice,
+   everyday spoken words (not literary/translationese), no filler like "ဒီနေရာမှာတော့ ကျွန်တော်
+   တို့ မြင်ရတာကတော့", no repeating what the previous line already said, no English words unless
+   they are the normal spoken form. Write it the way a popular recap channel talks.
+5. NO double quotes inside text. Use single quotes if needed. No timestamps, no scene directions,
    no camera instructions, no speaker labels inside the text itself.
-5. Never invent names, places, numbers or events that are not visible/audible in the clip.
-6. Return STRICT JSON only (no markdown fences).{" boundary_hint" if boundary_hint else ""}
+6. Never invent names, places, numbers or events that are not visible/audible in the clip.
+7. Return STRICT JSON only (no markdown fences).{" boundary_hint" if boundary_hint else ""}
 
 JSON SHAPE
 {{
@@ -951,7 +974,9 @@ class TimelineExtractor:
 
     # ── gap filling ────────────────────────────────────────────────────
     def _min_gap(self) -> float:
-        return 2.5 if self.fill_mode == "continuous" else 8.0
+        # dialogue dubbing has no "gaps" to fill — silence is the correct
+        # output there, so the sweep is skipped entirely (see _coverage_sweep)
+        return 2.5 if self.fill_mode == "continuous" else 1e9
 
     def _coverage_sweep(self, dialogues: list[dict], duration: float,
                         video_path: str) -> tuple[list[dict], int, float]:
@@ -964,6 +989,16 @@ class TimelineExtractor:
           3. anything the model still refuses to fill → a deterministic
              fallback line so continuous mode never goes silent.
         """
+        if self.fill_mode != "continuous":
+            # 🎭 Dialogue dubbing: only real speech is dubbed. Filling the
+            # quiet parts with invented narration is exactly what this mode
+            # must NOT do, so report the silence and stop.
+            quiet = find_gaps(dialogues, duration, 3.0)
+            longest = max((g["end"] - g["start"] for g in quiet), default=0.0)
+            self.log(f"🎭 Dialogue dub mode: {len(dialogues)} စကားပြောလိုင်း — "
+                     f"တိတ်ဆိတ်ချိန်ကို ဖြည့်စွက်ခြင်း မလုပ်ပါ (အရှည်ဆုံး {longest:.1f}s)")
+            return dialogues, 0, longest
+
         min_gap = self._min_gap()
         gaps = find_gaps(dialogues, duration, min_gap)
         longest = max((g["end"] - g["start"] for g in gaps), default=0.0)

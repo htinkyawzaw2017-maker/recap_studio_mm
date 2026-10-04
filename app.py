@@ -1006,63 +1006,173 @@ def serve_asset(path: str = Query(...),
     return FileResponse(str(target), headers=headers)
 
 
+#: yt-dlp attempt ladder — each entry is tried in order until one works.
+#: YouTube keeps rotating its player/signature checks, and a plain call now
+#: fails on many EC2 boxes ("Sign in to confirm you're not a bot",
+#: "nsig extraction failed", HTTP 403 on fragments). The android/ios players
+#: and an IPv4 lock fix the overwhelming majority of those failures.
+YTDLP_ATTEMPTS: list[tuple[str, list[str]]] = [
+    ("default", []),
+    ("android player", ["--extractor-args", "youtube:player_client=android"]),
+    ("ios player + IPv4", ["--extractor-args", "youtube:player_client=ios,web_safari",
+                           "--force-ipv4"]),
+    ("tv player + generic UA", ["--extractor-args", "youtube:player_client=tv",
+                                "--user-agent",
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/126.0 Safari/537.36"]),
+]
+
+
+def normalise_media_url(url: str) -> str:
+    """Clean a shared link so yt-dlp sees a single video.
+
+    Handles the three shapes people actually paste: `youtu.be/<id>`,
+    `/shorts/<id>` and a `watch?v=<id>` that still carries `&list=…`,
+    `&t=…`, `?si=…` (share tracking) — the playlist/tracking params make
+    yt-dlp download the wrong thing or refuse outright.
+    """
+    from urllib.parse import parse_qs, urlparse, urlunparse, urlencode
+
+    url = (url or "").strip()
+    try:
+        u = urlparse(url)
+    except ValueError:
+        return url
+    host = (u.netloc or "").lower().removeprefix("www.").removeprefix("m.")
+    if host in ("youtu.be", "youtube.com", "music.youtube.com", "youtube-nocookie.com"):
+        vid = ""
+        if host == "youtu.be":
+            vid = u.path.strip("/").split("/")[0]
+        elif u.path.startswith(("/shorts/", "/live/", "/embed/")):
+            vid = u.path.split("/")[2] if len(u.path.split("/")) > 2 else ""
+        else:
+            vid = (parse_qs(u.query).get("v") or [""])[0]
+        if vid:
+            return f"https://www.youtube.com/watch?v={vid}"
+    # non-YouTube: only drop obvious tracking noise
+    if u.query:
+        keep = {k: v for k, v in parse_qs(u.query).items()
+                if k.lower() not in {"si", "feature", "utm_source", "utm_medium", "fbclid"}}
+        return urlunparse(u._replace(query=urlencode(keep, doseq=True)))
+    return url
+
+
+def _ytdlp_error_hint(blob: str) -> str:
+    """Translate a yt-dlp failure into something the user can act on."""
+    low = (blob or "").lower()
+    if "sign in to confirm" in low or "not a bot" in low or "cookies" in low:
+        return ("YouTube က bot စစ်ဆေးနေပါသည်။ ⚙️ server ပေါ်တွင် cookies ဖိုင် ထည့်ပါ — "
+                "`.env` ထဲ `RECAP_YTDLP_COOKIES=/opt/recap-studio/data/cookies.txt` "
+                "(browser extension 'Get cookies.txt' ဖြင့် ထုတ်ယူပါ) ပြီးလျှင် restart လုပ်ပါ။")
+    if "age" in low and ("restrict" in low or "confirm" in low):
+        return "အသက်အရွယ် ကန့်သတ်ထားသော ဗီဒီယို ဖြစ်ပါသည် — cookies ဖိုင် (login ထားသော) လိုအပ်ပါသည်။"
+    if "private video" in low or "members-only" in low or "join this channel" in low:
+        return "သီးသန့် (private / members-only) ဗီဒီယို ဖြစ်၍ ဒေါင်းလုဒ် မရနိုင်ပါ။"
+    if "video unavailable" in low or "removed" in low or "terminated" in low:
+        return "ဤဗီဒီယိုကို ဖျက်ထားပြီး (သို့) မရနိုင်တော့ပါ — link ကို ပြန်စစ်ပါ။"
+    if "not available in your country" in low or "geo" in low:
+        return ("ဤဒေသတွင် ပိတ်ထားသော ဗီဒီယို ဖြစ်ပါသည် — `RECAP_YTDLP_PROXY` ဖြင့် proxy "
+                "သတ်မှတ်၍ ပြန်စမ်းနိုင်ပါသည်။")
+    if "is live" in low or "live event" in low:
+        return "တိုက်ရိုက်ထုတ်လွှင့်နေဆဲ ဗီဒီယိုကို မယူနိုင်ပါ — ပြီးဆုံးပြီးမှ ပြန်စမ်းပါ။"
+    if "nsig" in low or "signature" in low or "player" in low:
+        return ("yt-dlp အဟောင်း ဖြစ်နေပါသည်။ server ပေါ်တွင် "
+                "`sudo /opt/recap-studio/.venv/bin/pip install -U yt-dlp` "
+                "ပြီးလျှင် `sudo systemctl restart recap-studio` လုပ်ပါ။")
+    if "403" in low or "forbidden" in low:
+        return ("YouTube CDN က server ၏ IP ကို ပိတ်ထားပါသည် — ခဏနေ ပြန်စမ်းပါ "
+                "(သို့) `RECAP_YTDLP_PROXY` သုံးပါ။")
+    if "unsupported url" in low or "no video formats" in low:
+        return "ဤ link မှ ဗီဒီယို ရယူ၍ မရပါ — တိုက်ရိုက် ဖိုင်တင်ခြင်းကို သုံးပါ။"
+    return ""
+
+
 @app.post("/api/download-url")
 def import_from_url(payload: dict[str, Any],
                     principal: Principal = Depends(guard)) -> dict:
-    """yt-dlp import.
+    """yt-dlp import with an attempt ladder and actionable error messages.
 
-    The previous implementation passed ``url.split("?")[0]`` which *removes
-    the video id* from every YouTube link (`watch?v=...`), so downloads from
-    the most common source were guaranteed to fail. Errors from yt-dlp are
-    now surfaced to the UI instead of a generic failure.
+    v4.3.1 (#1): a single plain yt-dlp call fails on most EC2 boxes today.
+    The link is normalised first (share/playlist params stripped), then up to
+    four player back-ends are tried, and whatever still fails is reported in
+    Burmese with the exact fix.
     """
     import subprocess
     import shutil as _shutil
+    import sys as _sys
 
-    url = str(payload.get("url", "")).strip()
-    if not url:
+    raw_url = str(payload.get("url", "")).strip()
+    if not raw_url:
         raise HTTPException(status_code=400, detail="Video Link ထည့်ပါ")
-    if not url.lower().startswith(("http://", "https://")):
+    if not raw_url.lower().startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="Link ပုံစံ မမှန်ကန်ပါ (https://... ဖြစ်ရပါမည်)")
-    if not _shutil.which("yt-dlp"):
-        raise HTTPException(status_code=500, detail="yt-dlp မထည့်သွင်းထားပါ (pip install yt-dlp)")
+    url = normalise_media_url(raw_url)
+
+    base_cmd = ["yt-dlp"] if _shutil.which("yt-dlp") else [_sys.executable, "-m", "yt_dlp"]
+    try:
+        probe = subprocess.run(base_cmd + ["--version"], capture_output=True,
+                               text=True, timeout=60)
+        ytdlp_version = (probe.stdout or "").strip() or "?"
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500,
+                            detail="yt-dlp မထည့်သွင်းထားပါ (pip install -U yt-dlp)") from exc
 
     work_dir = config.user_workspace_dir(_scope(principal))
-    out_tmpl = str(work_dir / f"ytdl_{int(time.time())}_{uuid.uuid4().hex[:6]}.%(ext)s")
-    cmd = [
-        "yt-dlp", "--no-playlist", "--no-warnings", "--newline",
+    stamp = f"{int(time.time())}_{uuid.uuid4().hex[:6]}"
+    out_tmpl = str(work_dir / f"ytdl_{stamp}.%(ext)s")
+    common = [
+        "--no-playlist", "--no-warnings", "--newline", "--ignore-config",
         "--restrict-filenames", "--merge-output-format", "mp4",
-        "-f", "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/bv*[height<=1080]+ba/b",
-        "-o", out_tmpl, "--print", "after_move:filepath", url,
+        "--retries", "10", "--fragment-retries", "20", "--concurrent-fragments", "4",
+        "--socket-timeout", "30", "--geo-bypass",
+        "-f", ("bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]"
+               "/bv*[height<=1080]+ba/b[height<=1080]/b"),
+        "-o", out_tmpl, "--print", "after_move:filepath",
     ]
     if config.settings.ytdlp_cookies_file and Path(config.settings.ytdlp_cookies_file).exists():
-        cmd += ["--cookies", config.settings.ytdlp_cookies_file]
+        common += ["--cookies", config.settings.ytdlp_cookies_file]
     if config.settings.ytdlp_proxy:
-        cmd += ["--proxy", config.settings.ytdlp_proxy]
+        common += ["--proxy", config.settings.ytdlp_proxy]
 
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-    except subprocess.TimeoutExpired as exc:
-        raise HTTPException(status_code=504, detail="Download အချိန် ကြာလွန်းနေပါသည် (30 မိနစ်)") from exc
+    attempts_log: list[str] = []
+    downloaded: list[Path] = []
+    last_blob = ""
+    for label, extra in YTDLP_ATTEMPTS:
+        try:
+            proc = subprocess.run(base_cmd + common + extra + [url],
+                                  capture_output=True, text=True, timeout=1800)
+        except subprocess.TimeoutExpired as exc:
+            raise HTTPException(status_code=504,
+                                detail="Download အချိန် ကြာလွန်းနေပါသည် (30 မိနစ်)") from exc
+        lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+        found = [Path(ln) for ln in lines if ln.endswith((".mp4", ".mkv", ".webm", ".m4a"))]
+        if not found:
+            found = sorted(work_dir.glob(f"ytdl_{stamp}.*"), key=lambda p: p.stat().st_mtime)
+        found = [f for f in found if f.exists() and f.stat().st_size > 10240]
+        if found:
+            downloaded = found
+            log.info("yt-dlp %s: '%s' ok via %s", ytdlp_version, url, label)
+            break
+        last_blob = ((proc.stderr or "") + "\n" + (proc.stdout or "")).strip()
+        attempts_log.append(f"[{label}] " + (last_blob.splitlines() or ["(no output)"])[-1][:200])
+        for leftover in work_dir.glob(f"ytdl_{stamp}.*"):
+            leftover.unlink(missing_ok=True)
 
-    output = (proc.stdout or "").strip().splitlines()
-    downloaded = [Path(line.strip()) for line in output if line.strip().endswith((".mp4", ".mkv", ".webm"))]
-    if not downloaded or not downloaded[-1].exists():
-        candidates = sorted(work_dir.glob("ytdl_*"), key=lambda p: p.stat().st_mtime)
-        if not candidates:
-            tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-6:]
-            hint = ""
-            joined = " ".join(tail).lower()
-            if "sign in" in joined or "bot" in joined or "cookies" in joined:
-                hint = (" YouTube မှ bot စစ်ဆေးမှု ဖြစ်နေပါသည် - cookies ဖိုင် ထည့်ရန် လိုအပ်ပါသည် "
-                        "(RECAP_YTDLP_COOKIES)။")
-            raise HTTPException(status_code=502,
-                                detail=f"Download မအောင်မြင်ပါ။{hint}\n" + "\n".join(tail))
-        downloaded = [candidates[-1]]
+    if not downloaded:
+        hint = _ytdlp_error_hint(last_blob)
+        detail = ("Download မအောင်မြင်ပါ (yt-dlp " + ytdlp_version + " — နည်းလမ်း "
+                  + str(len(YTDLP_ATTEMPTS)) + " မျိုး စမ်းပြီးပါပြီ)။")
+        if hint:
+            detail += "\n👉 " + hint
+        detail += "\n\n" + "\n".join(attempts_log[-3:])
+        raise HTTPException(status_code=502, detail=detail)
 
     path = downloaded[-1]
     final = work_dir / f"import_{int(time.time())}{path.suffix}"
     path.replace(final)
+    for leftover in work_dir.glob(f"ytdl_{stamp}.*"):
+        leftover.unlink(missing_ok=True)
     info = get_video_info(final)
     return {
         "status": "ok", "video_path": config.rel(final),

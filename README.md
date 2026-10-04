@@ -45,6 +45,18 @@ Timeline အလိုက် အသံ ပေါင်းစပ် (drift-free) +
 ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → MP4 + SRT + MP3
 ```
 
+### 🗣️ v4.3.1 — Link import, narration အရှည်အတို, Recap ⇄ Dubbing ခွဲခြားမှု (Phase 3 · Batch B-1)
+
+* **#1 Link import** — `youtu.be` / `shorts` / `live` / `&list=` ပါသော link များကို သန့်စင်ပြီး
+  yt-dlp ကို **နည်းလမ်း ၄ မျိုး** (default → android → ios+IPv4 → tv) ဖြင့် အဆင့်ဆင့် စမ်းသည်။
+  မအောင်မြင်လျှင် မြန်မာလို အကြောင်းပြချက် + ပြင်နည်း (cookies / yt-dlp update / proxy) ပြသည်။
+* **#2 narration မြန်လွန်းခြင်း** — မြန်မာ **10.5 စာလုံး/စက္ကန့်** budget ဖြင့် window ထက်
+  ရှည်သော စာကြောင်းကို TTS မလုပ်မီ သဘာဝကျစွာ ချုံ့သည် (စာတန်းနှင့် အသံ တစ်ထပ်တည်း)။
+* **#4 တို/ပြတ်သား/သဘာဝကျ** — prompt တွင် budget ကိန်းဂဏန်း အတိအကျ + filler စကား ပိတ်ပင်ချက်။
+* **#6 Recap ⇄ Dubbing** — 🎭 dubbing mode တွင် တိတ်ဆိတ်ချိန်ကို **စကား လုံးဝ မဖြည့်တော့**၊
+  speech boundary ±0.3s တိကျရန် တောင်းဆိုသည်။ 🎬 recap mode သာ အစအဆုံး narration ထည့်သည်။
+* **Tests** — `tests/test_narration_fit.py` (39 checks, offline)
+
 ### 🎛️ v4.3 — WYSIWYG Live Preview + ဖုန်း/တက်ဘလက်/ကွန်ပျူတာ အားလုံး အဆင်ပြေ (Phase 3 · Batch A)
 
 Live Preview သည် ယခင်က **9:16 box တစ်မျိုးတည်း** ဖြစ်နေသဖြင့် 16:9 / 1:1 /
@@ -241,6 +253,7 @@ python tests/test_cancel.py          # ⏹ ရပ်တန့်ခြင်း 
 python tests/test_key_ring.py         # API key ၃ ခု + quota failover (27 checks, network မလိုပါ)
 python tests/test_auth.py             # အကောင့်/session/CSRF/quota/isolation (69 checks, offline)
 python tests/test_audio_coverage.py   # narration အစအဆုံး ရောက်/မရောက် (16 checks, ffmpeg လိုသည်)
+python tests/test_narration_fit.py    # narration budget · mode ခွဲခြားမှု · link import (39 checks)
 
 # Front-end (jsdom)
 npm install jsdom

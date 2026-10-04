@@ -22,7 +22,7 @@ from .media import process_registry
 from .media import get_media_duration, get_video_info, run_ffmpeg
 from .render import export_srt, render_master
 from .subtitles import build_ass
-from .tts import VOICE_CATALOG, master_audio, tts_engine
+from .tts import (VOICE_CATALOG, fit_lines_to_windows, master_audio, tts_engine)
 from .util import (CancelledError, ensure_disk_space, get_logger, human_bytes,
                    human_time, safe_rmtree)
 
@@ -156,6 +156,21 @@ class RecapPipeline:
             store.log(job_id, f"AI timeline: {len(dialogues)} lines, "
                               f"coverage={coverage.get('coverage_percent')}%")
             self.store.raise_if_cancelled(job_id)
+
+            # ── 1b. narration length budget ───────────────────────────
+            # A line that needs 9 seconds to read but only owns a 4 second
+            # window used to be rescued by speeding the voice up, which is
+            # what made the narration sound rushed (#2). Trim it to what can
+            # be spoken calmly — the subtitle then shows exactly what is said.
+            dialogues, condensed = fit_lines_to_windows(
+                dialogues, duration, payload.get("lang", "my"))
+            if condensed:
+                store.log(job_id, f"✂️ စာကြောင်း {condensed} ကြောင်းကို အချိန်ကိုက် တိုအောင် ချုံ့လိုက်သည် "
+                                  f"(အသံ မြန်လွန်းခြင်း မဖြစ်စေရန်)")
+                store.update(job_id, dialogues=dialogues,
+                             stats={**store.get(job_id).stats,
+                                    "script": {"condensed_lines": condensed,
+                                               "total_lines": len(dialogues)}})
 
             # ── 2. voice ──────────────────────────────────────────────
             voice_cfg = _voice_config(payload.get("lang", "my"), payload.get("voice", "thiha"))

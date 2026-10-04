@@ -71,6 +71,94 @@ PHONETICS_MM = {
 }
 
 
+# ── speaking-rate budget (v4.3.1) ────────────────────────────────────────
+#: Measured edge-tts output at rate "+0%" (natural, unhurried delivery).
+#: Burmese neural voices speak ~10.5 characters per second, English ~14.5
+#: (≈2.6 words/s). Everything that plans *how much text* may sit inside a
+#: window derives from these two numbers, so the AI, the subtitle writer and
+#: the voice engine all agree instead of each guessing.
+CHARS_PER_SECOND = {"my": 10.5, "en": 14.5}
+#: how much faster than natural we are willing to read before it sounds rushed
+COMFORT_SPEEDUP = 1.12
+
+
+def chars_per_second(lang: str = "my") -> float:
+    return CHARS_PER_SECOND.get((lang or "my").lower()[:2], CHARS_PER_SECOND["my"])
+
+
+def budget_chars(seconds: float, lang: str = "my", comfort: bool = True) -> int:
+    """How many characters fit in ``seconds`` of natural narration."""
+    rate = chars_per_second(lang) * (COMFORT_SPEEDUP if comfort else 1.0)
+    return max(8, int(max(0.0, seconds) * rate))
+
+
+#: sentence / clause boundaries we may cut at, best first
+_CUT_POINTS = ("။", ".", "!", "?", "၊", ",", ";", ":", " ")
+
+
+def condense_line(text: str, seconds: float, lang: str = "my") -> tuple[str, bool]:
+    """Shorten ``text`` so it can be *spoken calmly* inside ``seconds``.
+
+    The #2 complaint — "narration is too wordy so the voice races to fit" —
+    is caused by the model writing 3 sentences for a 4 second window. Speeding
+    the take up (atempo) is the wrong fix: it sounds robotic. Instead the line
+    is cut back to its budget at the nearest natural boundary **before** TTS,
+    and the subtitle uses the same shortened text, so audio and subtitle stay
+    identical.
+
+    Returns ``(text, condensed?)``.
+    """
+    text = (text or "").strip()
+    if not text:
+        return text, False
+    limit = budget_chars(seconds, lang)
+    if len(text) <= limit:
+        return text, False
+    head = text[:limit]
+    cut = -1
+    for mark in _CUT_POINTS:
+        pos = head.rfind(mark)
+        # only accept a boundary that keeps at least 55% of the budget,
+        # otherwise we would throw away most of the sentence
+        if pos > limit * 0.55:
+            cut = max(cut, pos + (0 if mark == " " else len(mark)))
+    short = (head[:cut] if cut > 0 else head).strip(" ,;:၊")
+    if not short:
+        short = head.strip()
+    if lang == "my":
+        if not short.endswith(("။", "!", "?")):
+            short += "။"
+    elif not short.endswith((".", "!", "?")):
+        short += "."
+    return short, True
+
+
+def fit_lines_to_windows(dialogues: list[dict], duration: float,
+                         lang: str = "my") -> tuple[list[dict], int]:
+    """Condense every line that cannot be spoken calmly inside its window.
+
+    The window of a line ends where the next line starts (that is also how
+    :meth:`VoiceEngine.plan_lines` fits the audio), so this is the single
+    place where "too much text for the time available" is solved — for the
+    voice *and* the burned-in subtitle at once.
+    """
+    ordered = sorted(
+        [d for d in (dialogues or []) if str(d.get("text", "")).strip()],
+        key=lambda d: float(d.get("start", 0.0) or 0.0),
+    )
+    condensed = 0
+    for idx, item in enumerate(ordered):
+        start = max(0.0, float(item.get("start", 0.0) or 0.0))
+        nxt = float(ordered[idx + 1].get("start", duration)) if idx + 1 < len(ordered) else duration
+        window = max(0.4, min(nxt, duration) - start - 0.06)
+        text, changed = condense_line(str(item.get("text", "")), window, lang)
+        if changed:
+            item["text"] = text
+            item["condensed"] = True
+            condensed += 1
+    return ordered, condensed
+
+
 def clean_script_line(text: str, lang: str = "my") -> str:
     """Strip anything that must never be spoken aloud."""
     if not text:

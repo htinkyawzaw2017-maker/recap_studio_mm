@@ -594,6 +594,15 @@
     el.style.width = '92%';                        // ASS MarginL/R = 4% each
   }
 
+  const FILL_MODE_HELP = {
+    continuous: 'ဇာတ်လမ်းတစ်ခုလုံးကို ကိုယ်ပိုင်စကားဖြင့် အစမှအဆုံး ပြောပြသည် — narrator ဘယ်တော့မှ မရပ် (recap channel ပုံစံ)။',
+    dialogue: 'ဇာတ်ကောင် တကယ် စကားပြောသည့် အချိန်များကိုသာ ဒပ်ဘ်လုပ်သည် — တိတ်ဆိတ်ချိန်တွင် စကား ထပ်မထည့်ပါ၊ အချိန်ကိုက် တိကျသည်။'
+  };
+  function syncFillModeHelp() {
+    const el = $('fill-mode-help');
+    if (el) el.textContent = FILL_MODE_HELP[$('fill-mode').value] || FILL_MODE_HELP.continuous;
+  }
+
   function updateHookOverlay() {
     const h1 = $('hook1').value.trim(), h2 = $('hook2').value.trim();
     $('overlay-hook').innerHTML = h1 || h2
@@ -1588,8 +1597,10 @@
   function bindUiSync() {
     $('lang').addEventListener('change', () => { renderVoices(); persistUiState(); });
     $('voice').addEventListener('change', persistUiState);
-    ['mode', 'fill-mode', 'quality'].forEach((id) =>
+    ['mode', 'quality'].forEach((id) =>
       $(id).addEventListener('change', persistUiState));
+    // 🎬 recap vs 🎭 dubbing behave very differently — say so out loud
+    $('fill-mode').addEventListener('change', () => { syncFillModeHelp(); persistUiState(); });
     // the output frame changed → the preview box must change with it
     ['aspect', 'reframe'].forEach((id) =>
       $(id).addEventListener('change', () => { applyPreviewGeometry(); persistUiState(); }));
@@ -2078,6 +2089,7 @@
     bindAuthUi();
     bindRunBar();
     updateHookOverlay();
+    syncFillModeHelp();
     applyPreviewGeometry();
     renderPreviewMeta();
     $('original-audio-row').classList.toggle('hidden', $('mute-original').checked);
