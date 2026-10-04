@@ -93,6 +93,9 @@ Site ကို link သိသူတိုင်း ဝင်နိုင်ခ�
 👉 သင် ကိုယ်တိုင် လုပ်ရမည့် အဆင့်များ (secret key, admin အကောင့်, restart, စစ်ဆေးချက်) —
 **[docs/PHASE2_AUTH.md](docs/PHASE2_AUTH.md)**
 
+👉 v4.3 ကို **Windows CMD မှ AWS EC2 ပေါ် အစအဆုံး ပြန်တင်နည်း** —
+**[docs/REDEPLOY_V43_CMD.md](docs/REDEPLOY_V43_CMD.md)**
+
 ### ⚡ v4.1.2 — hotfix: `'TimelineExtractor' object has no attribute 'sdk'`
 
 v4.1.1 တွင် ထည့်လိုက်သော log line တစ်ကြောင်းက `self.sdk` (မှန်သည် `self.client.sdk`)
