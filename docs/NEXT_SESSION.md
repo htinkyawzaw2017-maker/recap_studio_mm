@@ -49,7 +49,22 @@ gh pr create --base arena/01a105ed-recap-studio-mm --head <ထို-branch> --f
 | GitHub branches | `main`, `arena/01a10175`, `arena/01a105ed`, `arena/01a10790` — **`v4.3.5` မရှိပါ** |
 | GitHub tags / releases | **ဗလာ** (tag တစ်ခုမှ မရှိပါ) |
 
+### နက်ရှိုင်းစွာ ထပ်စစ်ပြီးသည့်အချက်များ
+
+| စစ်ဆေးချက် | ရလဒ် |
+|---|---|
+| repo ၏ push history အပြည့် (events ၁၀၀ → PushEvent ၇၁ ခု → SHA ၈၁ ခု) | `6a6d49d` **တစ်ခါမျှ push မလုပ်ဖူးပါ** (0) |
+| ယနေ့ ဖျက်လိုက်သော branch ၄ ခု (`01a105ca`, `01a10540`, `01a1027a`, `revert-3-…`) | PR #7 `7fc04fe` = v4.2.0 · PR #6 `cc745fb` = v4.1.2 · PR #5 `924c06f` = v4.1 → **v4.3.5 မဟုတ်ပါ** |
+| သင့်အခြား repo ၃ ခု တွင် `6a6d49d` ရှာခြင်း | `ai-shorts-factory` 422 · `aistudiopro` 422 · `newversionrecap` = repo ဗလာ (409) |
+| `recap_studio_mm` ၏ fork များ | **မရှိပါ** |
+| Actions artifacts / gists | **0** / **မရှိပါ** |
+| GitHub-wide commit search `6a6d49d` | hit ၃၃ ခု ရသော်လည်း အားလုံး **အခြားသူများ၏ repo** (ဥပမာ `OsvaldoMartini/MFE_Five_Mistakes`) — 7-hex short SHA တိုက်ဆိုင်မှု သက်သက်သာ။ သင့် project နှင့် **မဆိုင်ပါ** |
+
+> ⚠️ သတိ — `6a6d49d` သည် 7-hex အတိုသာ ဖြစ်သဖြင့် GitHub တစ်ခုလုံးတွင် အခြား repo ၃၂ ခု၌
+> ထို prefix ဖြင့် စသော commit များ ရှိနေသည်။ ထို့ကြောင့် အတည်ပြုရာတွင် **full SHA** ကို သုံးပါ။
+
 **အနက်အဓိပ္ပာယ်** — push လုပ်စရာ commit/bundle မရှိသဖြင့် `v4.3.5` branch ကို ဖန်တီး၍ မရပါ။
+GitHub ပေါ်သို့ ရောက်ခဲ့ဖူးသော အမြင့်ဆုံး version မှာ **v4.3.4 (`8c86824`)** သာ ဖြစ်သည်။
 ထို့အပြင် ဤ sandbox session သည် `arena/01a1081f-recap-studio-mm` branch တစ်ခုတည်းတွင်သာ
 push လုပ်နိုင်သည် (အခြား branch အသစ် `v4.3.5` ကို ဤနေရာမှ push၍ မရပါ)။
 
