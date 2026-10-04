@@ -11,11 +11,35 @@
 
 | # | ဘယ်မှာ လုပ်မလဲ | ဘာလုပ်မလဲ | ကြာချိန် |
 |---|---|---|---|
+| 0 | **AWS Console** | *(EC2 မရှိသေးလျှင်သာ)* instance အသစ် ဆောက် | ၅ မိနစ် |
 | 1 | **Windows CMD** | server ထဲ SSH ဝင် | ၂ မိနစ် |
 | 2 | **Server (Ubuntu)** | code အသစ် ဆွဲ + installer run | ၄ မိနစ် |
 | 3 | **Server** | admin အကောင့် + API key | ၂ မိနစ် |
 | 4 | **Server / CMD** | version + markup စစ် | ၁ မိနစ် |
 | 5 | **Browser** | hard refresh (Ctrl+Shift+R) | ၁၀ စက္ကန့် |
+
+---
+
+## 0️⃣ (EC2 မရှိသေးလျှင်) AWS Console မှာ server အသစ် ဆောက်ခြင်း
+
+> EC2 ရှိပြီးသားဆိုလျှင် ဤအပိုင်းကို ကျော်၍ **§1** သို့ သွားပါ။
+
+1. **Console ဖွင့်** → https://console.aws.amazon.com/ec2/ → ညာဘက်အပေါ်တွင်
+   region ကို **Asia Pacific (Singapore) `ap-southeast-1`** ရွေးပါ (မြန်မာနှင့် အနီးဆုံး)
+2. **Launch instance** နှိပ်ပါ
+3. **Name** — `recap-studio`
+4. **Application and OS Images** — **Ubuntu Server 24.04 LTS (64-bit x86)**
+5. **Instance type** — **`t3.medium`** (2 vCPU / 4 GB) *အနည်းဆုံး*၊
+   ဗီဒီယိုကြီး/မြန်ဆန်လိုလျှင် **`t3.large`** (2 vCPU / 8 GB) သို့ **`c5.xlarge`** (4 vCPU)
+   > `t2.micro` (free tier) သည် ffmpeg render အတွက် **မလုံလောက်ပါ** — job က ကြာလွန်း/ရပ်သွားတတ်သည်
+6. **Key pair** — `Create new key pair` → Name: `recap-key` → Type: **RSA** → Format: **.pem**
+   → Create → ဖိုင်က `Downloads` ထဲ ကျလာမည် (**ဤဖိုင် ပျောက်လျှင် server ထဲ ပြန်ဝင်၍ မရတော့ပါ**)
+7. **Network settings** → Edit → ✅ Allow SSH traffic from **My IP**
+   · ✅ Allow HTTP traffic from the internet (port 80)
+8. **Configure storage** — **30 GiB** gp3 (ဗီဒီယိုများ သိမ်းရန် — 8 GiB default က နည်းလွန်းသည်)
+9. **Launch instance** → ၁ မိနစ်ခန့် စောင့် → **Public IPv4 address** ကို copy ယူပါ (= `<EC2-IP>`)
+
+> 💡 IP မပြောင်းစေလိုလျှင် — EC2 → **Elastic IPs** → Allocate → Associate with instance။
 
 ---
 
