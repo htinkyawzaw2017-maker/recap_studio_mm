@@ -249,8 +249,9 @@ def export_srt(dialogues: list[dict], srt_path: str | Path, hook: bool = False) 
         s, ms = divmod(rem, 1000)
         return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
-    out: list[str] = []
-    for idx, item in enumerate(dialogues, start=1):
+    cleaned: list[dict] = []
+    prev_text = ""
+    for item in sorted(dialogues, key=lambda d: float(d.get("start", 0))):
         try:
             start = float(item.get("start", 0))
             end = float(item.get("end", start + 2))
@@ -259,6 +260,19 @@ def export_srt(dialogues: list[dict], srt_path: str | Path, hook: bool = False) 
         text = str(item.get("text", "")).strip()
         if not text:
             continue
-        out.append(f"{idx}\n{ts(start)} --> {ts(max(end, start + 0.6))}\n{text}\n")
+        if text == prev_text and cleaned and abs(start - cleaned[-1]["start"]) < 6.0:
+            continue
+        cleaned.append({"start": start, "end": end, "text": text})
+        prev_text = text
+
+    out: list[str] = []
+    for idx, item in enumerate(cleaned, start=1):
+        start = item["start"]
+        end = item["end"]
+        if idx < len(cleaned):
+            nxt = cleaned[idx]["start"]
+            if end > nxt - 0.04:
+                end = max(start + 0.35, nxt - 0.04)
+        out.append(f"{idx}\n{ts(start)} --> {ts(max(end, start + 0.35))}\n{item['text']}\n")
     srt_path.write_text("\n".join(out), encoding="utf-8")
     return srt_path

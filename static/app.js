@@ -157,6 +157,16 @@
       b.classList.toggle('active', b.dataset.tab === name));
     if (name === 'jobs') loadJobs();
     if (name === 'settings') refreshSystem();
+    if (name === 'thumb') {
+      const h1 = $('hook1') ? $('hook1').value.trim() : '';
+      const h2 = $('hook2') ? $('hook2').value.trim() : '';
+      if (h1 && $('thumb-h1') && ($('thumb-h1').value === 'စိတ်ဝင်စားဖွယ်ရာ' || !$('thumb-h1').value)) {
+        $('thumb-h1').value = h1;
+      }
+      if (h2 && $('thumb-h2') && ($('thumb-h2').value === 'ဇာတ်ကွက်များ' || !$('thumb-h2').value)) {
+        $('thumb-h2').value = h2;
+      }
+    }
   }
 
   /* ══════════════════════════ UPLOADS ═══════════════════════════════ */
@@ -230,6 +240,7 @@
       info: `${fmtTime(state.video.duration)} · ${state.video.width || '?'}×${state.video.height || '?'} · ${fmtBytes(state.video.size)}`
     }, localThumb);
     if (localThumb) $('preview-video').src = localThumb;
+    setPreviewOutputMode(false);
     $('parts-estimate').style.display = 'none';
     estimateSplitParts();
   }
@@ -459,6 +470,22 @@
   };
 
   /* ══════════════════ PREVIEW OVERLAYS (drag) ═══════════════════════ */
+  function setPreviewOutputMode(isOutput) {
+    state.isPreviewOutput = !!isOutput;
+    // When previewing rendered output, subtitles and logo are ALREADY burned into the video
+    // So hide the interactive HTML overlay elements to prevent double subtitles / repetition!
+    const subOverlay = $('overlay-sub');
+    const hookOverlay = $('overlay-hook');
+    const logoOverlay = $('overlay-logo');
+    if (subOverlay) subOverlay.classList.toggle('hidden', isOutput || !$('enable-subs').checked);
+    if (hookOverlay) hookOverlay.classList.toggle('hidden', isOutput);
+    if (logoOverlay) logoOverlay.classList.toggle('hidden', isOutput || !state.logo);
+    if (isOutput) {
+      const meta = $('preview-meta');
+      if (meta) meta.innerHTML = '<span class="chip ok">Output ဗီဒီယို (Burn-in ပြီး)</span>';
+    }
+  }
+
   function styleSubtitleOverlay() {
     const el = $('overlay-sub');
     const size = Number($('sub-font').value);
@@ -553,11 +580,26 @@
     if (saved && models.includes(saved)) { $('model').value = saved; $('cfg-model').value = saved; }
   }
 
+  function syncModeCards() {
+    const val = $('fill-mode') ? $('fill-mode').value : 'continuous';
+    const isRecap = val === 'continuous';
+    const cardRecap = $('card-mode-recap');
+    const cardDub = $('card-mode-dub');
+    if (cardRecap) cardRecap.classList.toggle('active', isRecap);
+    if (cardDub) cardDub.classList.toggle('active', !isRecap);
+    const lblMute = $('lbl-mute-original');
+    if (lblMute) {
+      lblMute.innerHTML = isRecap
+        ? '<b>မူရင်းအသံ ပိတ်မည်</b> — Recap အတွက် Narrator အသံသာ ရှင်းလင်းစွာ ကြားရပါမည်'
+        : '<b>မူရင်းအသံ ပိတ်မည်</b> — Dialogue Dub အတွက် ဖွင့်ထားပြီး background အသံ ထား၍ရသည်';
+    }
+  }
+
   function persistUiState() {
     LS.set('rs_voice_' + $('lang').value, $('voice').value);
     LS.set('rs_model', $('model').value);
     ['lang', 'mode', 'fill-mode', 'quality', 'sub-font', 'sub-color', 'sub-bg', 'aspect',
-     'reframe', 'hook1', 'hook2', 'hook-seconds', 'thumb-sec'].forEach((id) => {
+     'reframe', 'hook1', 'hook2', 'hook-seconds', 'thumb-sec', 'original-level', 'narration-gain'].forEach((id) => {
       const el = $(id);
       if (el) LS.set('rs_' + id, el.value);
     });
@@ -565,14 +607,19 @@
 
   function restoreUiState() {
     ['lang', 'mode', 'fill-mode', 'quality', 'sub-font', 'sub-color', 'sub-bg', 'aspect',
-     'reframe', 'hook-seconds'].forEach((id) => {
+     'reframe', 'hook-seconds', 'original-level', 'narration-gain'].forEach((id) => {
       const saved = LS.get('rs_' + id, null);
       const el = $(id);
-      if (saved !== null && el && [...el.options].some((o) => o.value === saved)) el.value = saved;
-      else if (saved !== null && el && el.type === 'range') el.value = saved;
+      if (saved !== null && el) {
+        if (el.options && [...el.options].some((o) => o.value === saved)) el.value = saved;
+        else if (el.type === 'range' || el.type === 'hidden') el.value = saved;
+      }
     });
     $('hook1').value = LS.get('rs_hook1', '');
     $('hook2').value = LS.get('rs_hook2', '');
+    if ($('lbl-orig-vol') && $('original-level')) $('lbl-orig-vol').textContent = $('original-level').value;
+    if ($('lbl-ai-vol') && $('narration-gain')) $('lbl-ai-vol').textContent = $('narration-gain').value;
+    syncModeCards();
   }
 
   /* ═══════════════════════════ JOB RUNNER ══════════════════════════ */
@@ -708,7 +755,10 @@
         ['တိတ်ဆိတ်ချိန်', `${voice.silent_seconds ?? '—'}s`],
         ['ကြာချိန်', fmtTime(out.duration || job.duration)]
       ].map(([k, v]) => `<div class="stat"><b>${escapeHtml(String(v))}</b><span>${k}</span></div>`).join('');
-      if (job.preview_url) $('preview-video').src = job.preview_url;
+      if (job.preview_url) {
+        $('preview-video').src = job.preview_url;
+        setPreviewOutputMode(true);
+      }
       renderTimeline(job);
       renderCoverage(job);
       const warnings = (job.stats && job.stats.warnings) || [];
@@ -919,6 +969,7 @@
     const v = $('preview-video');
     if (!v.getAttribute('src')) return toast('Preview အတွက် ဗီဒီယိုဖိုင် မရှိပါ', 'err');
     switchTab('studio');
+    setPreviewOutputMode(true);
     try { await v.play(); } catch { /* autoplay may be blocked */ }
     toast('Preview ကို ဖွင့်လိုက်ပါပြီ', 'info', 3500);
   };
@@ -1069,23 +1120,42 @@
   }
 
   function renderSplitParts(parts) {
-    $('split-results').innerHTML = (parts || []).map((p) => `
+    const list = parts || [];
+    $('split-results').innerHTML = list.map((p, idx) => `
       <div class="card" style="padding:12px">
         <b>Part ${p.part}</b>
         <p class="sub">${p.duration}s · ${fmtBytes(p.size)}</p>
         <div class="btn-row">
           <a class="btn small success" href="${p.url}" download>📥 ဒေါင်းလုဒ်</a>
           <a class="btn small ghost" href="${p.preview_url || p.url}" target="_blank" rel="noopener">▶ ကြည့်</a>
+          <button class="btn small primary" data-use-studio="${idx}">🎬 Studio သို့ ပို့မည်</button>
         </div>
       </div>`).join('') || '<p class="empty">အပိုင်း မထွက်ပါ</p>';
-    if (parts && parts.length) {
+
+    $('split-results').querySelectorAll('[data-use-studio]').forEach((b) => {
+      b.onclick = () => {
+        const part = list[Number(b.dataset.useStudio)];
+        if (!part) return;
+        applyVideoResult({
+          video_path: part.path || `output/${part.filename}`,
+          duration: part.duration,
+          preview_url: part.preview_url || part.url,
+          filename: part.filename || `part_${part.part}.mp4`
+        }, null);
+        switchTab('studio');
+        setPreviewOutputMode(false);
+        toast(`Part ${part.part} ကို Studio သို့ ပို့လိုက်ပါပြီ — Recap/Dubbing စတင်နိုင်ပါပြီ`, 'ok', 5000);
+      };
+    });
+
+    if (list && list.length) {
       const bar = document.createElement('div');
       bar.className = 'btn-row';
       bar.style.marginTop = '12px';
-      bar.innerHTML = `<button class="btn small primary" id="btn-download-all">⬇️ အားလုံး ဒေါင်းလုဒ် (${parts.length})</button>`;
+      bar.innerHTML = `<button class="btn small primary" id="btn-download-all">⬇️ အားလုံး ဒေါင်းလုဒ် (${list.length})</button>`;
       $('split-results').appendChild(bar);
       $('btn-download-all').onclick = () => {
-        parts.forEach((p, i) => setTimeout(() => {
+        list.forEach((p, i) => setTimeout(() => {
           const a = document.createElement('a');
           a.href = p.url; a.download = p.filename || `part_${p.part}.mp4`;
           document.body.appendChild(a); a.click(); a.remove();
@@ -1383,6 +1453,35 @@
 
   /* ═══════════════════════════ INIT ════════════════════════════════ */
   function bindUiSync() {
+    if ($('card-mode-recap')) {
+      $('card-mode-recap').onclick = () => {
+        $('fill-mode').value = 'continuous';
+        syncModeCards();
+        persistUiState();
+      };
+    }
+    if ($('card-mode-dub')) {
+      $('card-mode-dub').onclick = () => {
+        $('fill-mode').value = 'dialogue';
+        syncModeCards();
+        persistUiState();
+      };
+    }
+    syncModeCards();
+
+    if ($('original-level')) {
+      $('original-level').addEventListener('input', () => {
+        if ($('lbl-orig-vol')) $('lbl-orig-vol').textContent = $('original-level').value;
+        persistUiState();
+      });
+    }
+    if ($('narration-gain')) {
+      $('narration-gain').addEventListener('input', () => {
+        if ($('lbl-ai-vol')) $('lbl-ai-vol').textContent = $('narration-gain').value;
+        persistUiState();
+      });
+    }
+
     $('lang').addEventListener('change', () => { renderVoices(); persistUiState(); });
     $('voice').addEventListener('change', persistUiState);
     ['mode', 'fill-mode', 'quality', 'aspect', 'reframe'].forEach((id) =>

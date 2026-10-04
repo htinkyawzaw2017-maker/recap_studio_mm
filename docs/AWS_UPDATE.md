@@ -1,16 +1,16 @@
-# AWS ပေါ်မှာ Update တင်နည်း (Runbook) — v4.1
+# AWS ပေါ်မှာ Update တင်နည်း (Runbook) — v4.2
 
 ## 0. အခု အခြေအနေ
 
-v4.1 ပြင်ဆင်ချက် အားလုံး (တိုင်ကြားချက် ၇ ခု + UI ကြီးခြင်း) သည် အောက်ပါ branch တွင် ရှိပြီးဖြစ်သည်:
+v4.2 ပြင်ဆင်ချက် အားလုံး (Movie Recap vs Dialogue Dubbing mode, International dubbing timeline mixer, duplicate voice & subtitle fix, Splitter → Studio, Thumbnail styles) သည် အောက်ပါ branch တွင် ရှိပြီးဖြစ်သည်:
 
 ```
-origin/arena/01a1027a-recap-studio-mm   1e68b88   ← v4.1 (အသစ်ဆုံး)
-origin/main                             27eb2ca   ← ဟောင်း (v4.0)
+origin/arena/01a105ca-recap-studio-mm   ← v4.2.0 (အသစ်ဆုံး)
+origin/main                             ← v4.1 / v4.0
 ```
 
-> ⚠️ `origin/main` ကို merge လုပ်ပြီးသားမဟုတ်သေးပါ — ဒါကြောင့် **install script က branch ကို
-> တိုက်ရိုက် ဆွဲချသည်** (`RECAP_BRANCH` default = `arena/01a1027a-recap-studio-mm`)။
+> ⚠️ `origin/main` ကို merge လုပ်ပြီးသားမဟုတ်သေးပါက — **install script က branch ကို
+> တိုက်ရိုက် ဆွဲချသည်** (`RECAP_BRANCH` default = `arena/01a105ca-recap-studio-mm`)။
 > အောက်ပါ command များကို အပြောင်းအလဲ မလိုဘဲ တိုက်ရိုက် run နိုင်သည်။
 
 ### ဘယ်လမ်းကို ရွေးမလဲ
@@ -32,16 +32,16 @@ origin/main                             27eb2ca   ← ဟောင်း (v4.0)
 ```bash
 # 1) server terminal (Instance Connect / SSH) ထဲ ဝင်ပြီး —
 cd /tmp
-curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a1027a-recap-studio-mm
+curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ca-recap-studio-mm
 rm -rf recap_studio_mm-arena-* && tar xzf recap.tgz
-sudo bash /tmp/recap_studio_mm-arena-01a1027a-recap-studio-mm/deploy/ec2_install.sh
+sudo bash /tmp/recap_studio_mm-arena-01a105ca-recap-studio-mm/deploy/ec2_install.sh
 
 # 2) Key #2/#3 ထည့်လိုလျှင် (quota failover) —
 sudo nano /opt/recap-studio/.env      # GEMINI_API_KEY_2 / _3 ဖြည့်
 sudo systemctl restart recap-studio
 
 # 3) စစ်ဆေး —
-curl -s http://localhost/healthz      # "version":"4.1.2" ဖြစ်ရမည်
+curl -s http://localhost/healthz      # "version":"4.2.0" ဖြစ်ရမည်
 ```
 
 Browser တွင် `http://<EC2-IP>` ဖွင့်ပြီး **Ctrl + Shift + R** (hard refresh) နှိပ်ပါ။
@@ -52,9 +52,9 @@ Browser တွင် `http://<EC2-IP>` ဖွင့်ပြီး **Ctrl + Shif
 
 ### နည်းလမ်း A — PR ကို merge (အကြံပြု၊ အလွယ်ဆုံး)
 
-1. Arena session မှ ဖွင့်ထားသော PR (`arena/01a1027a-recap-studio-mm` → `main`) ကို ဖွင့်ပါ
+1. Arena session မှ ဖွင့်ထားသော PR (`arena/01a105ca-recap-studio-mm` → `main`) ကို ဖွင့်ပါ
 2. **Merge pull request** → **Confirm merge**
-3. ပြီးလျှင် `main` သည် v4.1 ဖြစ်သွားမည် — Auto-deploy pipeline ရှိပါက အလိုအလျောက် deploy စပါမည်
+3. ပြီးလျှင် `main` သည် v4.2 ဖြစ်သွားမည် — Auto-deploy pipeline ရှိပါက အလိုအလျောက် deploy စပါမည်
    (EC2 ဖြစ်ပါက §1b ကို `RECAP_BRANCH=main` ဖြင့် run နိုင်သည်)
 
 ### နည်းလမ်း B — merge မလုပ်ဘဲ branch ကို တိုက်ရိုက် deploy
@@ -62,19 +62,19 @@ Browser တွင် `http://<EC2-IP>` ဖွင့်ပြီး **Ctrl + Shif
 ```bash
 # EC2 ကဲ့သို့ server ပေါ်မှာ
 git fetch origin
-git checkout arena/01a1027a-recap-studio-mm     # ← fix ရှိသည့် branch
-git pull origin arena/01a1027a-recap-studio-mm
+git checkout arena/01a105ca-recap-studio-mm     # ← fix ရှိသည့် branch
+git pull origin arena/01a105ca-recap-studio-mm
 ```
 
 ECS/CodePipeline သုံးပါက source stage ၏ **branch name** ကို
-`arena/01a1027a-recap-studio-mm` သို့ ပြောင်းလိုက်ပါ။
+`arena/01a105ca-recap-studio-mm` သို့ ပြောင်းလိုက်ပါ။
 
 ### နည်းလမ်း C — git မသုံးဘဲ tarball ဖြင့်
 
 ```bash
 # laptop ပေါ်တွင်
 curl -L -o recap.tar.gz \
-  https://github.com/htinkyawzaw2017-maker/recap_studio_mm/archive/refs/heads/arena/01a1027a-recap-studio-mm.tar.gz
+  https://github.com/htinkyawzaw2017-maker/recap_studio_mm/archive/refs/heads/arena/01a105ca-recap-studio-mm.tar.gz
 
 # server ပေါ်တွင်
 scp recap.tar.gz ec2-user@YOUR_EC2:/tmp/
@@ -87,7 +87,7 @@ sudo mkdir -p /opt/recap && sudo tar xzf /tmp/recap.tar.gz -C /opt/recap --strip
 ## 1b. EC2 (Instance Connect / Docker မသုံး) ဖြစ်ပါက — command တစ်ကြောင်းတည်း
 
 ```bash
-cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a1027a-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
+cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ca-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
 ```
 
 Script က code အသစ်ကို ရယူပြီး `/opt/recap-studio` ထဲ တပ်ဆင်၊ systemd service အဖြစ်
@@ -132,21 +132,21 @@ aws ecs wait services-stable --cluster YOUR_CLUSTER --services YOUR_SERVICE --re
 ```bash
 ssh ec2-user@YOUR_EC2
 cd /opt/recap                                  # repo ရှိသည့်နေရာ
-git fetch origin && git checkout arena/01a1027a-recap-studio-mm && git pull
+git fetch origin && git checkout arena/01a105ca-recap-studio-mm && git pull
 
 docker compose down
 docker compose up -d --build
-docker compose logs -f --tail=50               # 'Recap Studio 4.0.0 starting' ကို တွေ့ရမည်
+docker compose logs -f --tail=50               # 'Recap Studio 4.2.0 starting' ကို တွေ့ရမည်
 ```
 
 ### 2c. EC2 bare-metal (Docker မသုံး၊ systemd + uvicorn)
 
 ```bash
 ssh ec2-user@YOUR_EC2
-cd /opt/recap && git fetch origin && git checkout arena/01a1027a-recap-studio-mm && git pull
+cd /opt/recap && git fetch origin && git checkout arena/01a105ca-recap-studio-mm && git pull
 
 source .venv/bin/activate
-pip install -r requirements.txt                # ← ယခုမှ အလုပ်လုပ်ပါသည် (အရင် apt package များ ကြောင့် fail ဖြစ်ခဲ့သည်)
+pip install -r requirements.txt
 deactivate
 
 sudo systemctl restart recap-studio            # unit ဖိုင်က ExecStart=.../uvicorn app:app ... ဖြစ်ရမည်

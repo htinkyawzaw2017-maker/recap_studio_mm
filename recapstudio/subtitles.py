@@ -123,7 +123,9 @@ def build_ass(dialogues: list[dict[str, Any]], duration: float, ass_path: str | 
         )
 
     written = 0
-    for item in dialogues:
+    safe_dialogues: list[dict[str, Any]] = []
+    prev_text = ""
+    for item in sorted(dialogues, key=lambda d: float(d.get("start", 0.0))):
         try:
             start = max(0.0, float(item.get("start", 0.0)))
             end = float(item.get("end", start + 2.5))
@@ -132,12 +134,28 @@ def build_ass(dialogues: list[dict[str, Any]], duration: float, ass_path: str | 
         text = escape_ass_text(item.get("text", ""))
         if not text:
             continue
+        # Drop identical text within 6 seconds so subtitles never repeat
+        if text == prev_text and safe_dialogues and abs(start - safe_dialogues[-1]["start"]) < 6.0:
+            continue
         if end <= start:
             end = start + 2.0
-        end = min(max(end, start + 0.6), max(duration, start + 0.6))
+        safe_dialogues.append({"start": start, "end": end, "text": text})
+        prev_text = text
+
+    for idx, item in enumerate(safe_dialogues):
+        start = item["start"]
+        end = item["end"]
+        if idx + 1 < len(safe_dialogues):
+            next_start = safe_dialogues[idx + 1]["start"]
+            # Strict de-overlap: subtitle ends before the next subtitle begins
+            if end > next_start - 0.04:
+                end = max(start + 0.35, next_start - 0.04)
+        end = min(max(end, start + 0.35), duration)
+        if end <= start:
+            continue
         lines.append(
             f"Dialogue: 0,{_fmt_time(start)},{_fmt_time(end)},SubtitleStyle,,0,0,0,,"
-            f"{{\\fad(90,90)\\t(0,110,\\fscx108\\fscy108)\\t(110,230,\\fscx100\\fscy100)}}{text}"
+            f"{{\\fad(90,90)\\t(0,110,\\fscx108\\fscy108)\\t(110,230,\\fscx100\\fscy100)}}{item['text']}"
         )
         written += 1
 

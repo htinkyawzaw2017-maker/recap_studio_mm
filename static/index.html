@@ -139,9 +139,23 @@
             <span class="step violet">2</span>
             <div class="head-text">
               <h3>အသံနှင့် Recap ပုံစံ</h3>
-              <p class="sub">ဘာသာစကား၊ narrator အသံနှင့် အရည်အသွေးကို ရွေးပါ။</p>
+              <p class="sub">ဇာတ်လမ်းတစ်ခုလုံး Recap သို့မဟုတ် ဇာတ်ကောင် Dialogue Dubbing ကို ရွေးချယ်ပါ</p>
             </div>
           </div>
+
+          <!-- DUBBING / RECAP MODE CARDS -->
+          <div class="mode-cards" id="mode-cards">
+            <div class="mode-card active" id="card-mode-recap" data-fill="continuous">
+              <div class="mode-card-title">🎬 ဇာတ်လမ်း တစ်ခုလုံး Recap</div>
+              <div class="mode-card-sub">Narrator က ဇာတ်လမ်းတစ်ခုလုံးကို အစအဆုံး ပြောပြသည် — စကားပြော မပါသည့်နေရာလည်း ဆက်ပြောသည်</div>
+            </div>
+            <div class="mode-card" id="card-mode-dub" data-fill="dialogue">
+              <div class="mode-card-title">🎭 Dialogue Dubbing</div>
+              <div class="mode-card-sub">ဇာတ်ကောင် စကားပြောသည့် အချိန်များသာ တိတိကျကျ လိုက်ပြော — ကျန်နေရာ တိတ်ဆိတ်</div>
+            </div>
+          </div>
+          <input type="hidden" id="fill-mode" value="continuous">
+
           <div class="row c2">
             <label class="field">
               <span>ဘာသာစကား</span>
@@ -159,26 +173,19 @@
             <label class="field">
               <span>Recap အမျိုးအစား</span>
               <select id="mode">
+                <option value="movie" selected>🎬 Movie / Drama</option>
                 <option value="auto">🔍 Auto-Detect</option>
-                <option value="movie">🎬 Movie / Drama</option>
                 <option value="experiment">🔬 Science / Review</option>
                 <option value="craft">🛠️ DIY / Cooking</option>
                 <option value="news">📰 News / Documentary</option>
               </select>
             </label>
             <label class="field">
-              <span>အသံသွင်းပုံစံ (Dubbing Mode)</span>
-              <select id="fill-mode">
-                <option value="continuous">🗣️ အစအဆုံး စကားပြော (Recap အတွက် အကြံပြု)</option>
-                <option value="dialogue">🎭 စကားပြောခန်း ရှိသည့်အချိန်သာ (Dialogue Dub)</option>
-              </select>
-            </label>
-          </div>
-          <div class="row c2">
-            <label class="field">
               <span>AI Model</span>
               <select id="model"></select>
             </label>
+          </div>
+          <div class="row c2">
             <label class="field">
               <span>Output Quality</span>
               <select id="quality">
@@ -187,18 +194,20 @@
                 <option value="quality">💎 အရည်အသွေး (1080p, medium)</option>
               </select>
             </label>
+            <div style="display:flex;flex-direction:column;justify-content:flex-end">
+              <label class="check" style="margin-bottom:6px">
+                <input type="checkbox" id="mute-original" checked>
+                <span id="lbl-mute-original"><b>မူရင်းအသံ ပိတ်မည်</b> — Dialogue Dub အတွက် ဖွင့်ထားပြီး background အသံ ထား၍ရသည်</span>
+              </label>
+            </div>
           </div>
-          <label class="check">
-            <input type="checkbox" id="mute-original" checked>
-            <span><b>မူရင်းအသံ ပိတ်မည်</b> — ပိတ်ထားလျှင် AI အသံသာ ကြားရပါမည်</span>
-          </label>
           <div class="row c2 hidden" id="original-audio-row">
             <label class="field">
-              <span>မူရင်းအသံ အကျယ် (background)</span>
+              <span>မူရင်းအသံ အကျယ် (background) — <b id="lbl-orig-vol">12</b>%</span>
               <input type="range" id="original-level" min="0" max="40" value="12">
             </label>
             <label class="field">
-              <span>AI အသံ အကျယ်</span>
+              <span>AI အသံ အကျယ် — <b id="lbl-ai-vol">130</b>%</span>
               <input type="range" id="narration-gain" min="60" max="200" value="130">
             </label>
           </div>
@@ -408,7 +417,11 @@
           <label class="field"><span>ဖမ်းယူမည့် စက္ကန့်</span>
             <input type="number" id="thumb-sec" value="2.5" step="0.5" min="0"></label>
           <label class="field"><span>စတိုင်</span>
-            <select id="thumb-style"><option value="bold">Bold (Yellow/Cyan)</option></select></label>
+            <select id="thumb-style">
+              <option value="bold">💥 Bold (Yellow / Cyan)</option>
+              <option value="modern">🔥 Modern (White / Red)</option>
+              <option value="cinema">🎬 Cinema (Gold / White)</option>
+            </select></label>
         </div>
         <label class="field"><span>အပေါ် Hook စာသား</span>
           <input type="text" id="thumb-h1" value="စိတ်ဝင်စားဖွယ်ရာ"></label>

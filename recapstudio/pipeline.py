@@ -624,8 +624,22 @@ class RecapPipeline:
         draw = ImageDraw.Draw(base)
         font_big = get_mm_pil_font(int(width * 0.072), bold=True)
         font_small = get_mm_pil_font(int(width * 0.048), bold=True)
-        accent = (0, 242, 254, 255)
-        yellow = (255, 214, 10, 255)
+
+        if style == "modern":
+            top_color = (255, 255, 255, 255)
+            bottom_color = (255, 68, 68, 255)
+            stroke_top = (15, 15, 20, 255)
+            stroke_bottom = (0, 0, 0, 255)
+        elif style == "cinema":
+            top_color = (255, 215, 0, 255)
+            bottom_color = (245, 245, 250, 255)
+            stroke_top = (20, 15, 5, 255)
+            stroke_bottom = (0, 0, 0, 255)
+        else:  # bold
+            top_color = (255, 214, 10, 255)
+            bottom_color = (0, 242, 254, 255)
+            stroke_top = (0, 0, 0, 255)
+            stroke_bottom = (0, 0, 0, 255)
 
         def wrap(text: str, font, max_width: int) -> list[str]:
             words = (text or "").split()
@@ -646,13 +660,13 @@ class RecapPipeline:
         bottom_lines = wrap(hook2, font_small, int(width * 0.86))
         y = int(height * 0.055)
         for line in top_lines:
-            draw.text((width // 2, y), line, font=font_big, fill=yellow, anchor="ma",
-                      stroke_width=7, stroke_fill=(0, 0, 0, 255))
+            draw.text((width // 2, y), line, font=font_big, fill=top_color, anchor="ma",
+                      stroke_width=7, stroke_fill=stroke_top)
             y += int(width * 0.088)
         y = int(height * 0.755)
         for line in bottom_lines:
-            draw.text((width // 2, y), line, font=font_small, fill=accent, anchor="ma",
-                      stroke_width=5, stroke_fill=(0, 0, 0, 255))
+            draw.text((width // 2, y), line, font=font_small, fill=bottom_color, anchor="ma",
+                      stroke_width=5, stroke_fill=stroke_bottom)
             y += int(width * 0.062)
 
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -752,6 +766,7 @@ class RecapPipeline:
         return {
             "part": index + 1,
             "filename": name,
+            "path": config.rel(out_path),
             "url": f"/api/download/{name}",
             "preview_url": f"/api/asset?path={config.rel(out_path)}",
             "duration": round(get_media_duration(out_path), 2),

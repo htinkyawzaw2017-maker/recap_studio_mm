@@ -551,6 +551,24 @@ def _chunk_prompt(chunk_start: float, chunk_end: float, target_language: str,
                 )
         except Exception:
             style_block = ""
+
+    if fill_mode == "dialogue":
+        rule2 = f"""2. STRICT CHARACTER DIALOGUE DUBBING:
+   * Only translate and dub moments where characters ACTUALLY SPEAK on screen.
+   * Start each dialogue entry at the exact second the character begins speaking, and end when they finish.
+   * If characters do NOT speak in a portion of the clip (music, action, silence, scene transition), LEAVE IT SILENT. Do NOT invent narration or commentary.
+   * Keep character dialogue natural, lively, and perfectly matched with the scene's emotional context."""
+    else:
+        rule2 = f"""2. COVER THE WHOLE CLIP (CONTINUOUS MOVIE RECAP NARRATION):
+   * Narrate the entire story continuously like a professional movie recap channel (Movie / Drama Recap).
+   * The FIRST entry must start at or before {chunk_start + 4:.2f}s.
+   * The LAST entry must start after {max(chunk_start, chunk_end - 8):.2f}s and end at
+     {chunk_end:.2f}s (or later) — never finish the clip early.
+   * No silent window longer than 4 seconds anywhere between {chunk_start:.2f}s and
+     {chunk_end:.2f}s: where characters are not speaking, write engaging Burmese narration describing what is
+     visibly happening and the characters' intentions so the recap flows naturally.
+   * Do not stop early, do not summarise the ending abruptly, do not skip scenes."""
+
     return f"""You are a professional film dubbing director and Myanmar recap script writer.
 
 VIDEO SEGMENT: this clip is ONLY a part of a longer video. The clip starts at {chunk_start:.2f}s and
@@ -563,14 +581,7 @@ ends at {chunk_end:.2f}s (total video length = {duration:.2f}s).
 MANDATORY RULES
 1. TIMESTAMPS ARE ABSOLUTE: use seconds counted from the START OF THE FULL VIDEO.
    The first second of this clip is {chunk_start:.2f}s (NOT 0). The last is {chunk_end:.2f}s.
-2. COVER THE WHOLE CLIP — THIS IS THE MOST IMPORTANT RULE:
-   * The FIRST entry must start at or before {chunk_start + 4:.2f}s.
-   * The LAST entry must start after {max(chunk_start, chunk_end - 8):.2f}s and end at
-     {chunk_end:.2f}s (or later) — never finish the clip early.
-   * No silent window longer than 4 seconds anywhere between {chunk_start:.2f}s and
-     {chunk_end:.2f}s: where nothing is spoken, write short narration describing what is
-     visibly happening so the voice-over never stops.
-   * Do not stop early, do not summarise the ending, do not skip the middle.
+{rule2}
 3. Write every line in {lang_instruction}. Keep each line short enough to speak inside its window
    (about 12-16 Burmese characters per second of window). Long windows get 2-3 shorter lines.
 4. NO double quotes inside text. Use single quotes if needed. No timestamps, no scene directions,
@@ -653,12 +664,43 @@ def demo_timeline(duration: float, lang: str = "my") -> dict:
     }
 
 
+def _text_key(text: str) -> str:
+    """Normalize text for deduplication: remove punctuation and whitespace."""
+    return re.sub(r"[\s\.,\/#!$%\^&\*;:{}=\-_`~()\"'၊။၊]+", "", str(text or "").strip().lower())
+
+
+def _is_similar_text(t1: str, t2: str) -> bool:
+    k1, k2 = _text_key(t1), _text_key(t2)
+    if not k1 or not k2:
+        return False
+    if k1 == k2:
+        return True
+    if len(k1) >= 6 and len(k2) >= 6:
+        if k1 in k2 or k2 in k1:
+            return True
+        import difflib
+        if difflib.SequenceMatcher(None, k1, k2).ratio() > 0.82:
+            return True
+    return False
+
+
 # ── merging / coverage ───────────────────────────────────────────────────
 def normalise(dialogues: Iterable[dict], duration: float) -> list[dict]:
-    cleaned: list[dict] = []
-    for item in sorted(dialogues, key=lambda d: float(d.get("start", 0))):
+    """Clean, deduplicate, and sequence timeline dialogue lines.
+
+    Guarantees (International Dubbing Standard):
+      1. Strict deduplication: identical or near-identical text within 8 seconds
+         is deduplicated so the narrator never repeats lines.
+      2. No zero-length or backwards timestamps.
+      3. Strict sequencing: lines are strictly ordered by start time.
+      4. Absolute de-overlapping: line[i].end <= line[i+1].start - 0.04.
+         No two dialogue lines or subtitles ever overlap on screen or in audio.
+      5. Pacing: lines have realistic speaking duration and natural breathing space.
+    """
+    raw_cleaned: list[dict] = []
+    for item in sorted(dialogues, key=lambda d: float(d.get("start", 0.0))):
         try:
-            st = max(0.0, min(float(item.get("start", 0)), duration))
+            st = max(0.0, min(float(item.get("start", 0.0)), duration))
             en = max(0.0, min(float(item.get("end", st + 2.0)), duration))
         except (TypeError, ValueError):
             continue
@@ -667,17 +709,61 @@ def normalise(dialogues: Iterable[dict], duration: float) -> list[dict]:
             continue
         if en <= st:
             en = min(duration, st + max(1.2, estimate_speech_seconds(text)))
-        cleaned.append({"start": st, "end": en,
-                        "speaker": str(item.get("speaker", ""))[:40], "text": text})
+        raw_cleaned.append({
+            "start": st,
+            "end": en,
+            "speaker": str(item.get("speaker", ""))[:40],
+            "text": text,
+        })
 
-    # de-overlap: a line may never run into the next line's start
+    if not raw_cleaned:
+        return []
+
+    # 1. Deduplicate identical/near-identical lines within a close time window (8s)
+    deduped: list[dict] = []
+    for line in raw_cleaned:
+        is_dup = False
+        for prev in reversed(deduped):
+            if abs(line["start"] - prev["start"]) > 8.0:
+                break
+            if _is_similar_text(line["text"], prev["text"]):
+                is_dup = True
+                if line["end"] > prev["end"]:
+                    prev["end"] = min(duration, max(prev["end"], line["end"]))
+                break
+        if not is_dup:
+            deduped.append(line)
+
+    if not deduped:
+        return []
+
+    # 2. Separate start times so lines don't start at the exact same fraction of a second
+    sequenced: list[dict] = []
+    min_spacing = 0.35
+    for line in deduped:
+        if sequenced:
+            prev = sequenced[-1]
+            if line["start"] < prev["start"] + min_spacing:
+                est_speech = max(0.8, estimate_speech_seconds(prev["text"]))
+                line["start"] = min(duration - 0.1, prev["start"] + min(est_speech, 1.5))
+                if line["end"] <= line["start"]:
+                    line["end"] = min(duration, line["start"] + max(1.2, estimate_speech_seconds(line["text"])))
+        if line["start"] < duration - 0.1:
+            sequenced.append(line)
+
+    # 3. De-overlap strictly so line[i].end <= line[i+1].start - 0.04
     merged: list[dict] = []
-    for idx, line in enumerate(cleaned):
-        if idx + 1 < len(cleaned):
-            nxt = cleaned[idx + 1]["start"]
-            if line["end"] > nxt:
-                line["end"] = max(line["start"] + 0.4, nxt)
-        merged.append(line)
+    for idx, line in enumerate(sequenced):
+        if idx + 1 < len(sequenced):
+            nxt_start = sequenced[idx + 1]["start"]
+            max_end = max(line["start"] + 0.3, nxt_start - 0.04)
+            if line["end"] > max_end:
+                line["end"] = max_end
+        else:
+            line["end"] = min(duration, line["end"])
+        if line["end"] > line["start"]:
+            merged.append(line)
+
     return merged
 
 
@@ -876,10 +962,10 @@ class TimelineExtractor:
                                 "speaker": line.get("speaker", ""), "text": line["text"]})
             payload["dialogues"] = shifted
 
-            # ── tail pass: never let a clip end in silence ─────────────
-            # Models like to "summarise" the ending, so the last line often
-            # stops far before the clip does and the dub fell silent there.
-            if config.settings.ai_tail_pass and shifted:
+            # ── tail pass: never let a clip end in silence (continuous recap only) ──
+            # In continuous mode, ensure narration doesn't stop early.
+            # In dialogue dubbing mode, non-speaking tails are naturally silent.
+            if config.settings.ai_tail_pass and shifted and self.fill_mode == "continuous":
                 last_end = max(l["end"] for l in shifted)
                 missing_tail = end - last_end
                 if missing_tail > max(6.0, (end - start) * 0.12) and end - start > 12.0:
@@ -891,12 +977,14 @@ class TimelineExtractor:
                                                  focus=True)
                         before = len(shifted)
                         shifted.extend(extra)
+                        shifted = normalise(shifted, duration)
                         self.log(f"✓ tail pass recovered {len(shifted) - before} lines "
                                  f"({tail_start:.0f}-{end:.0f}s)")
                     except CancelledError:
                         raise
                     except Exception as exc:
                         self.log(f"⚠️ tail pass failed ({start:.0f}-{end:.0f}s): {exc}")
+            shifted = normalise(shifted, duration)
             payload["dialogues"] = shifted
             return payload, len(shifted)
         finally:
@@ -942,7 +1030,7 @@ class TimelineExtractor:
                     line_end = min(duration, max(line_start + 0.5, line["end"]))
                 out.append({"start": line_start, "end": line_end,
                             "speaker": line.get("speaker", ""), "text": line["text"]})
-            return out
+            return normalise(out, duration)
         finally:
             if ref is not None:
                 self.client.delete(ref)
@@ -957,13 +1045,19 @@ class TimelineExtractor:
                         video_path: str) -> tuple[list[dict], int, float]:
         """Make sure narration runs from the first to the last second.
 
-        Three passes, each one cheaper than the last:
-          1. big holes → re-analyse that piece of *video* (the model simply
-             skipped a scene, text alone would invent things),
-          2. remaining holes → short connective lines written in batches,
-          3. anything the model still refuses to fill → a deterministic
-             fallback line so continuous mode never goes silent.
+        In Dialogue Dubbing mode:
+          Silence between spoken dialogue is natural and intentional ("ကျန်နေရာ တိတ်ဆိတ်").
+          We do not inject fake commentary.
+        In Movie Recap mode:
+          Three passes (re-analyse, connective narration, fallback) keep the voice
+          flowing continuously like a true movie recap channel.
         """
+        if self.fill_mode == "dialogue":
+            cleaned = normalise(dialogues, duration)
+            longest = max((g["end"] - g["start"] for g in find_gaps(cleaned, duration, 3.0)),
+                          default=0.0)
+            return cleaned, 0, longest
+
         min_gap = self._min_gap()
         gaps = find_gaps(dialogues, duration, min_gap)
         longest = max((g["end"] - g["start"] for g in gaps), default=0.0)

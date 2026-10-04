@@ -25,15 +25,19 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import os
 import re
 import shutil
 import subprocess
 import threading
+import wave
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
+
+import numpy as np
 
 from . import config
 from .media import FFMPEG, get_media_duration, make_silence_wav
@@ -272,6 +276,7 @@ class TTSEngine:
     def plan_lines(self, dialogues: list[dict], duration: float,
                    lang: str = "my") -> list[PlannedLine]:
         cleaned: list[tuple[float, float, str]] = []
+        prev_text = ""
         for item in sorted(dialogues, key=lambda d: float(d.get("start", 0.0))):
             text = clean_script_line(str(item.get("text", "")), lang)
             try:
@@ -280,7 +285,11 @@ class TTSEngine:
                 continue
             if not text or start >= duration:
                 continue
+            # Deduplicate identical text within 6 seconds
+            if text == prev_text and cleaned and abs(start - cleaned[-1][0]) < 6.0:
+                continue
             cleaned.append((start, float(item.get("end", start + 2.5) or start + 2.5), text))
+            prev_text = text
 
         planned: list[PlannedLine] = []
         guard = 0.06
@@ -475,15 +484,136 @@ class TTSEngine:
                             "ကျန် လိုင်းများ ဆက်လက် ထွက်ရှိပါမည်။")
             log.warning("skipped %d lines during TTS", len(skipped))
 
-        # ── assemble: silence gaps + clips, exactly `duration` long ─────
+        # ── assemble: sample-accurate timeline mix (International Dubbing Standard) ─
         if progress:
             progress(82, "🧵 Timeline အသံများ ပေါင်းစပ်နေပါသည်...")
+
+        final_wav = work_dir / f"narration_{tag}.wav"
+        try:
+            placed = self._assemble_timeline(planned, clips, duration, final_wav)
+        except Exception as exc:
+            log.warning("sample-accurate assembly failed, falling back to concat: %s", exc)
+            placed = self._assemble_concat(planned, clips, duration, work_dir, tag, final_wav)
+
+        silent_windows: list[dict] = []
+        if planned and placed and placed[0][0] > 0.4:
+            silent_windows.append({"start": 0.0, "end": round(placed[0][0], 2)})
+        for idx, (start, end) in enumerate(placed):
+            if idx + 1 < len(placed):
+                next_start = placed[idx + 1][0]
+                if next_start - end > 1.2:
+                    silent_windows.append({"start": round(end, 2), "end": round(next_start, 2)})
+            elif duration - end > 1.2:
+                silent_windows.append({"start": round(end, 2), "end": round(duration, 2)})
+
+        if progress:
+            progress(100, f"🎧 အသံ ပြီးစီးပါပြီ ({human_time(get_media_duration(final_wav))})")
+
+        trimmed = sum(1 for line in planned if line.trimmed)
+        if trimmed:
+            warnings.append(f"လိုင်း {trimmed} ခုကို အချိန်နှင့် ကိုက်ညီစေရန် အနည်းငယ် ဖြတ်ခဲ့ပါသည်")
+        spoken = sum(max(0.0, e - s) for s, e in placed)
+        return MixResult(str(final_wav), get_media_duration(final_wav), planned, warnings,
+                         gaps=silent_windows, spoken_seconds=spoken)
+
+    def _assemble_timeline(
+        self,
+        planned: list[PlannedLine],
+        clips: dict[int, Path],
+        duration: float,
+        out_path: Path,
+    ) -> list[tuple[float, float]]:
+        """Sample-accurate multi-track timeline placement (International Dubbing Standard).
+
+        Places each synthesized audio clip at its exact timestamp in the timeline
+        buffer. Clips never shift or drift; clips are faded out smoothly before the
+        next line starts, preventing any collision or stutter.
+        """
+        sr = 44100
+        total_samples = max(int(math.ceil(duration * sr)), sr)
+        timeline = np.zeros((total_samples, 2), dtype=np.int32)
+        placed: list[tuple[float, float]] = []
+
+        valid_lines = [line for line in planned if clips.get(line.index) and Path(clips[line.index]).exists()]
+
+        for idx, line in enumerate(valid_lines):
+            clip_path = clips[line.index]
+            try:
+                with wave.open(str(clip_path), "rb") as wf:
+                    n_ch = wf.getnchannels()
+                    sw = wf.getsampwidth()
+                    clip_sr = wf.getframerate()
+                    n_frames = wf.getnframes()
+                    raw_bytes = wf.readframes(n_frames)
+            except Exception as exc:
+                log.warning("could not read audio clip %s: %s", clip_path, exc)
+                continue
+
+            if not raw_bytes or n_frames <= 0:
+                continue
+
+            if sw == 2:
+                samples = np.frombuffer(raw_bytes, dtype=np.int16)
+            else:
+                samples = (np.frombuffer(raw_bytes, dtype=np.int8).astype(np.int16) * 256)
+
+            if n_ch == 1:
+                clip_data = np.column_stack([samples, samples])
+            elif n_ch == 2:
+                clip_data = samples.reshape(-1, 2)
+            else:
+                clip_data = np.column_stack([samples[::n_ch], samples[1::n_ch]])
+
+            start_sample = max(0, int(round(line.start * sr)))
+            if start_sample >= total_samples:
+                continue
+
+            # Hard boundary: a line must finish before the next line starts
+            if idx + 1 < len(valid_lines):
+                next_start_sample = max(start_sample + int(0.25 * sr), int(round(valid_lines[idx + 1].start * sr)))
+                max_allowed_samples = max(int(0.2 * sr), next_start_sample - start_sample - int(0.04 * sr))
+            else:
+                max_allowed_samples = total_samples - start_sample
+
+            if len(clip_data) > max_allowed_samples:
+                clip_data = clip_data[:max_allowed_samples].copy()
+                fade_len = min(len(clip_data), int(0.04 * sr))
+                if fade_len > 0:
+                    fade_curve = np.linspace(1.0, 0.0, fade_len)[:, None]
+                    clip_data[-fade_len:] = (clip_data[-fade_len:] * fade_curve).astype(clip_data.dtype)
+                line.trimmed = True
+
+            take_samples = min(len(clip_data), total_samples - start_sample)
+            end_sample = start_sample + take_samples
+
+            timeline[start_sample:end_sample] += clip_data[:take_samples]
+            placed_start = start_sample / sr
+            placed_end = end_sample / sr
+            placed.append((placed_start, placed_end))
+            line.speech_seconds = take_samples / sr
+
+        clamped = np.clip(timeline, -32767, 32767).astype(np.int16)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with wave.open(str(out_path), "wb") as wf:
+            wf.setnchannels(2)
+            wf.setsampwidth(2)
+            wf.setframerate(sr)
+            wf.writeframes(clamped.tobytes())
+
+        return placed
+
+    def _assemble_concat(
+        self,
+        planned: list[PlannedLine],
+        clips: dict[int, Path],
+        duration: float,
+        work_dir: Path,
+        tag: str,
+        out_path: Path,
+    ) -> list[tuple[float, float]]:
         segments: list[Path] = []
         cursor = 0.0
-        silent_windows: list[dict] = []
         placed: list[tuple[float, float]] = []
-        if planned and planned[0].start > 0.4:
-            silent_windows.append({"start": 0.0, "end": round(planned[0].start, 2)})
         for line in planned:
             clip = clips.get(line.index)
             if clip is None:
@@ -495,16 +625,11 @@ class TTSEngine:
                 segments.append(gap_file)
                 cursor = line.start
             elif gap < -0.02:
-                # The fitting above guarantees this cannot happen; if it ever
-                # did we would rather log it than silently drift out of sync.
                 log.warning("timeline overlap of %.3fs at line %d", -gap, line.index)
                 cursor = line.start
             segments.append(clip)
             length = get_media_duration(clip) or line.target_seconds
             if length > (line.hard_limit_seconds or length) + 0.05:
-                # safety net: never let one line push the rest of the timeline
-                log.warning("clip %d overruns its window by %.2fs - trimming",
-                            line.index, length - line.hard_limit_seconds)
                 length = line.hard_limit_seconds
                 line.trimmed = True
             placed.append((line.start, line.start + length))
@@ -515,32 +640,11 @@ class TTSEngine:
             make_silence_wav(duration - cursor, tail)
             segments.append(tail)
 
-        # Report the windows that really are silent so the caller can fill
-        # them (AI gap-fill → re-synthesis) instead of shipping a video where
-        # the narrator stops for a minute.
-        for idx, (start, end) in enumerate(placed):
-            if idx + 1 < len(placed):
-                next_start = placed[idx + 1][0]
-                if next_start - end > 1.2:
-                    silent_windows.append({"start": round(end, 2), "end": round(next_start, 2)})
-            elif duration - end > 1.2:
-                silent_windows.append({"start": round(end, 2), "end": round(duration, 2)})
-
-        final_wav = work_dir / f"narration_{tag}.wav"
-        self._concat(segments, final_wav, duration)
+        self._concat(segments, out_path, duration)
         for seg in segments:
             if seg.parent == work_dir and seg.name.startswith(("gap_", "tail_")):
                 seg.unlink(missing_ok=True)
-
-        if progress:
-            progress(100, f"🎧 အသံ ပြီးစီးပါပြီ ({human_time(get_media_duration(final_wav))})")
-
-        trimmed = sum(1 for line in planned if line.trimmed)
-        if trimmed:
-            warnings.append(f"လိုင်း {trimmed} ခုကို အချိန်နှင့် ကိုက်ညီစေရန် အနည်းငယ် ဖြတ်ခဲ့ပါသည်")
-        spoken = sum(max(0.0, e - s) for s, e in placed)
-        return MixResult(str(final_wav), get_media_duration(final_wav), planned, warnings,
-                         gaps=silent_windows, spoken_seconds=spoken)
+        return placed
 
     def _concat(self, segments: list[Path], out_path: Path, duration: float) -> None:
         if not segments:
