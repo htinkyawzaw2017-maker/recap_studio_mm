@@ -755,11 +755,21 @@ class RecapPipeline:
             ], check=True, cancel=cancel, owner=owner)
         if not out_path.exists() or out_path.stat().st_size < 2048:
             return None
+        # width/height + the workspace-relative path let the SPA hand a part
+        # straight back to the Studio ("✂ Splitter → 🎬 Studio → recap").
+        try:
+            part_info = get_video_info(str(out_path))
+        except Exception:  # noqa: BLE001 - probing a part must never fail the split
+            part_info = {}
         return {
             "part": index + 1,
             "filename": name,
             "url": f"/api/download/{name}",
             "preview_url": f"/api/asset?path={config.rel(out_path)}",
-            "duration": round(get_media_duration(out_path), 2),
+            "path": config.rel(out_path),
+            "width": part_info.get("width"),
+            "height": part_info.get("height"),
+            "duration": round(float(part_info.get("duration")
+                                    or get_media_duration(out_path)), 2),
             "size": out_path.stat().st_size,
         }

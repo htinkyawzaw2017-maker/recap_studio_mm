@@ -266,10 +266,19 @@ def main() -> int:
         "account chip": 'id="chip-account"',
         "admin accounts panel": 'id="admin-card"',
     }
+    v43 = {
+        "output-frame chip": 'id="preview-frame"',
+        "preview stage wrapper": 'class="preview-stage"',
+        "mobile action bar": 'id="mobile-run-bar"',
+    }
     missing42 = [name for name, marker in v42.items() if marker not in text]
     check("v4.2 auth UI served", not missing42,
           "missing: " + ", ".join(missing42) if missing42
           else f"{len(v42)} markers found")
+    missing43 = [name for name, marker in v43.items() if marker not in text]
+    check("v4.3 responsive preview UI served", not missing43,
+          "missing: " + ", ".join(missing43) + "  → browser cache သို့မဟုတ် အဟောင်း build"
+          if missing43 else f"{len(v43)} markers found")
     missing = [name for name, marker in v41.items() if marker not in text]
     check("v4.1 UI features served", not missing,
           "missing: " + ", ".join(missing) if missing else f"{len(v41)} markers found")
@@ -278,6 +287,14 @@ def main() -> int:
     check("app.js has the resilient polling/upload code",
           "pollErrors" in js_text and "received_chunks" in js_text,
           "" if js_text else "app.js not readable")
+    check("app.js previews the real output frame (v4.3)",
+          "applyPreviewGeometry" in js_text and "sendPartToStudio" in js_text,
+          "" if js_text else "app.js not readable")
+    status, css_blob = client.request("GET", "/static/styles.css")
+    css_text = css_blob.decode("utf-8", "replace") if status == 200 else ""
+    check("styles.css is the responsive v4.3 sheet",
+          "--preview-max-h" in css_text and "pointer: coarse" in css_text,
+          "" if css_text else "styles.css not readable")
     for asset in ("/static/app.js", "/static/styles.css",
                   "/static/fonts/NotoSansMyanmar-Regular.ttf"):
         status, blob = client.request("GET", asset)

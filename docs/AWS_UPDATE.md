@@ -1,4 +1,4 @@
-# AWS ပေါ်မှာ Update တင်နည်း (Runbook) — v4.2
+# AWS ပေါ်မှာ Update တင်နည်း (Runbook) — v4.3
 
 ## 0. အခု အခြေအနေ
 
@@ -6,7 +6,7 @@
 အသေးစိတ် + သင် ကိုယ်တိုင်လုပ်ရမည့် အဆင့်များ → **[PHASE2_AUTH.md](PHASE2_AUTH.md)**
 
 ```
-origin/arena/01a105ed-recap-studio-mm   ← v4.2 (အသစ်ဆုံး — အကောင့်စနစ်)
+origin/arena/01a105ed-recap-studio-mm   ← v4.3 (အသစ်ဆုံး — အကောင့်စနစ် + WYSIWYG preview)
 origin/arena/01a1027a-recap-studio-mm   ← v4.1
 origin/main                             ← ဟောင်း (v4.0)
 ```
@@ -49,7 +49,7 @@ ua create myname --admin --random
 
 # 3) restart + စစ်ဆေး
 sudo systemctl restart recap-studio
-curl -s http://localhost/healthz      # "version":"4.2.0" ဖြစ်ရမည်
+curl -s http://localhost/healthz      # "version":"4.3.0" ဖြစ်ရမည်
 curl -s http://localhost/api/auth/me  # "mode":"users" ဖြစ်ရမည် ← login ပေါ်/မပေါ် ဒီမှာ သိသည်
 ua status                             # accounts : 1
 ```

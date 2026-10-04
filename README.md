@@ -45,6 +45,32 @@ Timeline အလိုက် အသံ ပေါင်းစပ် (drift-free) +
 ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → MP4 + SRT + MP3
 ```
 
+### 🎛️ v4.3 — WYSIWYG Live Preview + ဖုန်း/တက်ဘလက်/ကွန်ပျူတာ အားလုံး အဆင်ပြေ (Phase 3 · Batch A)
+
+Live Preview သည် ယခင်က **9:16 box တစ်မျိုးတည်း** ဖြစ်နေသဖြင့် 16:9 / 1:1 /
+မူရင်း အချိုးရွေးလျှင် ဗီဒီယိုက အပေါ်ပိုင်းသို့ တက်သွားပြီး စာတန်းနေရာလည်း
+ထွက်လာသော ဖိုင်နှင့် မကိုက်ပါ။ ယခု preview သည် **ffmpeg ထုတ်မည့် ဖရိမ်အတိအကျ**
+ဖြစ်သည် —
+
+* **Frame-accurate box** — `aspect` ရွေးလိုက်သည်နှင့် box က `720×1280` /
+  `1080×1080` / `1280×720` / မူရင်းအရွယ် သို့ ချက်ချင်း ပြောင်းသည်
+  (chip တွင် ထွက်မည့် pixel အရွယ် ပြသည်)
+* **စာတန်း/hook အတိအကျ** — စာလုံးအရွယ်ကို `box height ÷ output height` ဖြင့်
+  တွက်သည် (ASS PlayRes နှင့် တူညီ)၊ အနားသတ် 5% / 4%၊ hook top 6% — ဆွဲချထားသည့်
+  နေရာအတိုင်း render ထဲတွင် ထွက်သည်
+* **Logo** — ffmpeg `overlay=(W-w)·p` နှင့် တစ်ထပ်တည်း ကျအောင် ပြင်ထားသည်
+  (100% ဆိုလျှင် ဘေးနားကပ်၊ ယခင်က ဖရိမ်ပြင်ပ ထွက်သွားသည်)
+* **Center Crop** preview သည် crop အတိုင်း ဖြည့်ပြသည် (ကျန် mode = letterbox)
+* **အားလုံးသော device** — ဖုန်း (≤430 / ≤620)၊ တက်ဘလက် (≤1024)၊ laptop (≤1400)၊
+  4K အထိ breakpoint ladder၊ touch target 44px၊ iOS zoom-on-focus ပိတ်၊
+  landscape ဖုန်း၊ safe-area (notch)၊ reduced-motion
+* **⚡ One-Click bar** — ဖုန်း/တက်ဘလက်တွင် ခလုတ်ကြီး အပေါ်ရောက်သွားလျှင်
+  အောက်ခြေတွင် sticky bar အဖြစ် လိုက်ပါလာသည်
+* **🍿 Splitter → 🎬 Studio** — ခွဲထုတ်ပြီးသော အပိုင်းတိုင်းတွင်
+  **"🎬 Studio သို့ ပို့မည်"** ခလုတ် — နှိပ်လိုက်သည်နှင့် Studio သို့ ရောက်ပြီး
+  One-Click နှိပ်ရုံဖြင့် recap ထုတ်နိုင်သည် (ပြန်တင်စရာ မလို)
+* **Tests** — `tests/test_ui_preview.mjs` (31 checks, server မလိုပါ)
+
 ### 🔐 v4.2 — အကောင့်စနစ် + Database လုံခြုံရေး + User အများသုံး (Phase 2)
 
 Site ကို link သိသူတိုင်း ဝင်နိုင်ခြင်း ပြီးဆုံးပါပြီ။ ယခု **username + password**
@@ -213,9 +239,10 @@ python tests/test_key_ring.py         # API key ၃ ခု + quota failover (27 
 python tests/test_auth.py             # အကောင့်/session/CSRF/quota/isolation (69 checks, offline)
 python tests/test_audio_coverage.py   # narration အစအဆုံး ရောက်/မရောက် (16 checks, ffmpeg လိုသည်)
 
-# Front-end (jsdom) — server တစ်ခု run ထားပြီးမှ
+# Front-end (jsdom)
 npm install jsdom
-node tests/test_ui_auth.mjs http://127.0.0.1:8000 myname 'မိမိစကားဝှက်'   # 17 checks
+node tests/test_ui_preview.mjs                                           # 31 checks (server မလိုပါ)
+node tests/test_ui_auth.mjs http://127.0.0.1:8000 myname 'မိမိစကားဝှက်'   # 17 checks (server လိုသည်)
 
 # Deploy လုပ်ပြီးသော server (AWS/Render) ကို စစ်ရန် — dependencies မလိုပါ
 python tests/verify_deployment.py https://your-domain.com

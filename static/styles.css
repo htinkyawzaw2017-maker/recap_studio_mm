@@ -49,6 +49,10 @@
   --fs-help: 12.5px;
   --ctl-h: 46px;
 
+  /* preview box height budget — the box width is derived from it so the
+     frame ratio is never distorted (see .preview-wrap) */
+  --preview-max-h: min(62vh, 600px);
+
   --radius: 18px;
   --radius-sm: 12px;
   --shadow: 0 18px 45px rgba(2, 8, 22, 0.55);
@@ -198,7 +202,6 @@ main { max-width: var(--maxw); margin: 0 auto; padding: var(--pad-page) var(--pa
   .card.sticky-fit { position: sticky; top: 96px; }
 }
 #preview-card { position: static; }
-.preview-wrap { max-height: min(64vh, 620px); }
 #job-card.is-live {
   position: sticky;
   top: 96px;
@@ -323,34 +326,44 @@ input[type=file].hidden-input { display: none; }
 .file-pill .meta b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
 .file-pill .meta span { color: var(--text-mute); font-size: 12.5px; }
 
-/* ── preview ──────────────────────────────────────────────────────────── */
+/* ── preview (v4.3: WYSIWYG frame) ─────────────────────────────────────
+   The box is a scale model of the real export frame. JS writes
+   `aspect-ratio` + `--frame-ar-num` (width ÷ height of the output) and the
+   width is derived from the height budget, so the ratio can never be
+   squashed by a max-height clamp — the bug that made 16:9 and 1:1 exports
+   preview inside a 9:16 letterbox and pushed every overlay out of place. */
+.preview-stage { display: flex; justify-content: center; width: 100%; }
 .preview-wrap {
-  position: relative; width: 100%; aspect-ratio: 9 / 16; max-height: min(64vh, 620px);
+  position: relative;
+  width: 100%;
+  max-width: calc(var(--preview-max-h) * var(--frame-ar-num, 0.5625));
+  aspect-ratio: var(--frame-ar, 9 / 16);
   margin: 0 auto; border-radius: 16px; overflow: hidden;
   background: #000; border: 1px solid var(--line); touch-action: none;
+  box-shadow: 0 18px 44px rgba(2, 8, 22, 0.55);
 }
 .preview-wrap video { width: 100%; height: 100%; object-fit: contain; display: block; }
 .overlay-hook {
-  position: absolute; top: 3.2%; left: 50%; transform: translateX(-50%);
+  position: absolute; top: 6%; left: 50%; transform: translateX(-50%);
   width: 92%; text-align: center; font-weight: 700; font-size: 15px;
-  color: #ffd60a; text-shadow: 0 2px 10px #000, 0 0 3px #000; line-height: 1.35;
+  color: #ffd60a; text-shadow: 0 2px 10px #000, 0 0 3px #000; line-height: 1.3;
   pointer-events: none; z-index: 8;
 }
-.overlay-hook small { display: block; color: var(--cyan); font-size: 13px; }
+.overlay-hook small { display: block; color: var(--cyan); font-size: 0.68em; }
 .overlay-sub {
   position: absolute; left: 50%; transform: translateX(-50%); bottom: 22%;
-  max-width: 92%; text-align: center; font-weight: 700; white-space: pre-wrap;
-  padding: 5px 13px; border-radius: 7px; cursor: grab; z-index: 20;
-  font-family: var(--font); user-select: none; touch-action: none;
+  max-width: 90%; text-align: center; font-weight: 700; white-space: pre-wrap;
+  padding: 4px 10px; border-radius: 7px; cursor: grab; z-index: 20;
+  line-height: 1.25; font-family: var(--font); user-select: none; touch-action: none;
 }
 .overlay-sub:active { cursor: grabbing; }
 .overlay-logo {
-  position: absolute; width: 15%; aspect-ratio: 1; border-radius: 999px;
-  border: 2px solid var(--cyan); box-shadow: 0 0 14px rgba(34, 211, 238, 0.6);
-  overflow: hidden; cursor: grab; z-index: 21; background: rgba(0, 0, 0, 0.35);
-  user-select: none; touch-action: none;
+  position: absolute; width: 16%; border-radius: 10px;
+  outline: 1px dashed rgba(34, 211, 238, 0.55); outline-offset: 2px;
+  overflow: hidden; cursor: grab; z-index: 21;
+  user-select: none; touch-action: none; line-height: 0;
 }
-.overlay-logo img { width: 100%; height: 100%; object-fit: cover; }
+.overlay-logo img { width: 100%; height: auto; display: block; object-fit: contain; }
 .overlay-logo:active { cursor: grabbing; }
 .hidden { display: none !important; }
 
@@ -485,14 +498,132 @@ input[type=file].hidden-input { display: none; }
 ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.25); border-radius: 999px; }
 ::-webkit-scrollbar-track { background: transparent; }
 
-/* auto-fit the big CTA on narrow screens */
-@media (max-width: 620px) {
-  :root { --pad-page: 16px; --gap: 16px; }
-  .btn.cta { font-size: 15px; padding: 16px 18px; }
-  .dropzone { padding: 26px 16px; }
-  .dropzone .dz-title { font-size: 16.5px; }
-  .brand p { display: none; }
+/* ══════════════════════════════════════════════════════════════════════
+   v4.3 — responsive system (phone → tablet → laptop → big desktop)
+   One ladder of breakpoints instead of three ad-hoc ones. The layout
+   constants in :root do the heavy lifting, so each step only re-scales
+   the page instead of re-inventing it.
+     1601+  big desktop   · 1400 laptop  · 1200 studio stacks
+     1024   tablet        ·  760 2-col rows collapse (above)
+      620   phone         ·  430 small phone
+   plus landscape-phone, coarse-pointer and reduced-motion rules.
+   ══════════════════════════════════════════════════════════════════════ */
+@media (min-width: 1601px) {
+  :root { --preview-max-h: min(66vh, 680px); }
 }
+
+@media (max-width: 1400px) {
+  :root { --pad-page: 24px; --gap: 18px; }
+  .grid.studio { grid-template-columns: minmax(0, 1.4fr) minmax(380px, 1fr); }
+}
+
+/* ── stacked layout (tablet & phone) ───────────────────────────────────
+   One column means the Live Preview would otherwise land *below* the
+   settings you are adjusting. `display: contents` dissolves the two column
+   wrappers so every card becomes a direct grid item and can be re-ordered:
+   upload → preview → settings → style → CTA → progress. */
+@media (max-width: 1200px) {
+  :root { --preview-max-h: min(56vh, 520px); }
+  .grid.studio > div { display: contents; }
+  .grid.studio .card + .card { margin-top: 0; }   /* the grid gap spaces them now */
+  #upload-card { order: 1; }
+  #preview-card { order: 2; }
+  #setup-card { order: 3; }
+  #style-card { order: 4; }
+  .cta-card { order: 5; }
+  #job-card { order: 6; }
+  #coverage-card { order: 7; }
+  #preview-card .card-head { flex-wrap: wrap; }
+}
+
+@media (max-width: 1024px) {
+  :root { --pad-page: 20px; --gap: 16px; --fs-h3: 17px; }
+  .card { padding: 20px 18px; }
+  .nav { gap: 6px; scroll-snap-type: x proximity; scrollbar-width: none; }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav button { padding: 11px 15px; font-size: 14.5px; scroll-snap-align: start; }
+  .grid.two { grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); }
+  main { padding-bottom: 96px; }
+  .table { font-size: 12.5px; }
+}
+
+@media (max-width: 620px) {
+  :root {
+    --pad-page: 14px; --gap: 14px; --radius: 15px; --radius-sm: 10px;
+    --fs-body: 14.5px; --fs-h3: 16.5px; --ctl-h: 44px;
+    --preview-max-h: min(52vh, 440px);
+  }
+  .topbar { gap: 10px; padding: 11px var(--pad-page); }
+  .topbar-spacer { display: none; }
+  .brand-mark { width: 40px; height: 40px; font-size: 21px; border-radius: 12px; }
+  .brand h1 { font-size: 17px; }
+  .brand p { display: none; }
+  #status-chips { order: 3; width: 100%; }
+  .account-box { margin-left: auto; }
+  .card { padding: 16px 14px; }
+  .card-head { gap: 9px; margin-bottom: 13px; }
+  .btn.cta { font-size: 15px; padding: 15px 16px; }
+  .dropzone { padding: 22px 14px; }
+  .dropzone .dz-title { font-size: 15.5px; }
+  /* iOS zooms the whole page when a focused control is below 16px */
+  input[type=text], input[type=password], input[type=number], select, textarea { font-size: 16px; }
+  main { padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px)); }
+  .scroll-y { max-height: 360px; }
+  .toast-stack {
+    right: 10px; left: 10px; max-width: none;
+    bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  }
+  .auth-card { padding: 22px 16px 18px; border-radius: 16px; }
+  .table { display: block; overflow-x: auto; white-space: nowrap; }
+}
+
+@media (max-width: 430px) {
+  :root { --fs-body: 14px; --preview-max-h: min(48vh, 380px); }
+  .nav button { padding: 10px 12px; font-size: 13.5px; }
+  .chip { padding: 5px 10px; font-size: 11.5px; }
+  .btn-row { gap: 7px; }
+}
+
+/* a phone held sideways has height, not width, as the scarce axis */
+@media (max-height: 560px) and (orientation: landscape) {
+  :root { --preview-max-h: 76vh; }
+  .topbar { position: static; }
+}
+
+/* fingers need 44px; a mouse does not */
+@media (pointer: coarse) {
+  .btn, .nav button { min-height: 44px; }
+  .btn.small { min-height: 38px; }
+  .check input { width: 22px; height: 22px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important; scroll-behavior: auto !important;
+  }
+}
+
+/* ── sticky action bar: the One-Click button follows you down the page ──
+   (phones/tablets only — on desktop the CTA is always in view) */
+.mobile-run-bar {
+  display: none;
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 70;
+  padding: 10px var(--pad-page) calc(10px + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(180deg, rgba(5, 8, 18, 0), rgba(5, 8, 18, .94) 38%);
+  backdrop-filter: blur(10px);
+  border-top: 1px solid var(--line);
+}
+@media (max-width: 1200px) { .mobile-run-bar.show { display: block; } }
+
+/* the CTA flashes when a clip is handed over from the Shorts Splitter */
+.pulse { animation: pulse-cta 1.15s ease-in-out 3; }
+@keyframes pulse-cta {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34, 211, 238, .45); }
+  50% { box-shadow: 0 0 0 14px rgba(34, 211, 238, 0); }
+}
+.part-card { transition: transform .15s ease, border-color .15s ease; }
+.part-card:hover { transform: translateY(-2px); border-color: var(--line-strong); }
 
 /* tab panels fade in so switching tabs feels deliberate */
 .tab-panel { animation: fadein .18s ease; }

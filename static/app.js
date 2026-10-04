@@ -32,8 +32,10 @@
     pollErrors: 0,
     lastJobId: localStorage.getItem('rs_last_job') || null,
     splitJobId: null,
+    splitParts: [],          // last Shorts Splitter result (→ Studio hand-off)
     logoPos: { x: 82, y: 4 },
     subPosPercent: 22,
+    ctaVisible: true,        // is the big One-Click button on screen?
     accessOk: true,
     auth: null,              // /api/auth/me payload
     authReady: false,
@@ -182,6 +184,12 @@
       b.classList.toggle('active', b.dataset.tab === name));
     if (name === 'jobs') loadJobs();
     if (name === 'settings') refreshSystem();
+    // a hidden panel measures 0×0 — re-measure once it is on screen again
+    if (name === 'studio') {
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(applyPreviewGeometry);
+      else applyPreviewGeometry();
+    }
+    syncRunBar();
   }
 
   /* ══════════════════════════ UPLOADS ═══════════════════════════════ */
@@ -220,7 +228,8 @@
   function renderPreviewMeta() {
     const box = $('preview-meta');
     if (!box) return;
-    const src = state.splitVideo || state.video;
+    // the Studio source is what One-Click renders, so it owns the preview
+    const src = state.video || state.splitVideo;
     if (!src) { box.innerHTML = '<span class="chip muted">ဗီဒီယို မတင်ရသေးပါ</span>'; return; }
     box.innerHTML = [
       `<span class="chip violet">🎞️ ${escapeHtml(String(src.name || 'video')).slice(0, 42)}</span>`,
@@ -256,6 +265,8 @@
     }, localThumb);
     if (localThumb) $('preview-video').src = localThumb;
     $('parts-estimate').style.display = 'none';
+    syncRunBar();
+    applyPreviewGeometry();          // "မူရင်း" aspect depends on the source
     estimateSplitParts();
   }
 
@@ -484,15 +495,85 @@
     }
   };
 
-  /* ══════════════════ PREVIEW OVERLAYS (drag) ═══════════════════════ */
-  function styleSubtitleOverlay() {
+  /* ══════════════════ PREVIEW GEOMETRY + OVERLAYS (drag) ════════════
+     v4.3 — WYSIWYG preview.
+     The box used to be locked to 9:16 by CSS, so a 16:9 or 1:1 export was
+     previewed inside the wrong frame and every overlay percentage was
+     measured against a box that did not exist in the render. Now the box
+     copies the exact output frame (pipeline._target_size) and every overlay
+     is scaled by  (box height in px ÷ output height in px), which is the
+     same transform libass applies to the ASS PlayRes (subtitles.build_ass).
+       · subtitle px   = sub_font_size × scale          (ASS Fontsize)
+       · hook px       = 0.058 × output width × scale   (ASS HookStyle)
+       · subtitle bottom = sub_v_pos_percent %          (ASS MarginV)
+       · hook top        = 6 %                          (ASS MarginV 0.06·h)
+       · side margins    = 5 % / 4 %                    (ASS MarginL/R)
+       · logo width      = 16 %                         (render.py scale) */
+  const FRAME_PRESETS = { '9:16': [720, 1280], '1:1': [1080, 1080], '16:9': [1280, 720] };
+
+  /** The frame ffmpeg will actually produce for the current settings. */
+  function targetFrame() {
+    const sel = $('aspect');
+    const aspect = (sel && sel.value) || '9:16';
+    const preset = FRAME_PRESETS[aspect];
+    if (preset) return { w: preset[0], h: preset[1], label: aspect };
+    const src = state.video || state.splitVideo || {};      // "original"
+    let w = Number(src.width) || 1280;
+    let h = Number(src.height) || 720;
+    const k = Math.min(1, 1920 / Math.max(w, h));           // pipeline caps the long edge
+    w = Math.max(2, Math.round((w * k) / 2) * 2);
+    h = Math.max(2, Math.round((h * k) / 2) * 2);
+    return { w, h, label: 'မူရင်း' };
+  }
+
+  /** px-per-output-pixel for the preview box (0 while the panel is hidden). */
+  function previewScale(frame) {
+    const wrap = $('preview-wrap');
+    if (!wrap) return 0;
+    const f = frame || targetFrame();
+    const rect = wrap.getBoundingClientRect();
+    const h = rect.height || (rect.width ? (rect.width * f.h) / f.w : 0)
+              || (wrap.clientWidth ? (wrap.clientWidth * f.h) / f.w : 0);
+    return h ? h / f.h : 0;
+  }
+
+  /** Re-shape the preview box to the output frame and restyle every overlay. */
+  function applyPreviewGeometry() {
+    const wrap = $('preview-wrap');
+    if (!wrap) return;
+    const frame = targetFrame();
+    wrap.style.aspectRatio = `${frame.w} / ${frame.h}`;
+    wrap.style.setProperty('--frame-ar-num', (frame.w / frame.h).toFixed(5));
+    const video = $('preview-video');
+    const reframe = $('reframe');
+    if (video) {
+      // "Center Crop" fills the frame exactly like ffmpeg's crop filter,
+      // every other mode letterboxes — mirror that instead of always fitting.
+      video.style.objectFit = (reframe && /crop/i.test(reframe.value)) ? 'cover' : 'contain';
+    }
+    const chip = $('preview-frame');
+    if (chip) chip.textContent = `${frame.w}×${frame.h} · ${frame.label}`;
+    styleSubtitleOverlay(frame);
+    styleHookOverlay(frame);
+    const lbl = $('lbl-preview-scale');
+    if (lbl) {
+      const pct = Math.round(previewScale(frame) * 100);
+      lbl.textContent = pct ? pct + '%' : '—';
+    }
+  }
+
+  function styleSubtitleOverlay(frame) {
     const el = $('overlay-sub');
+    if (!el) return;
+    const f = frame || targetFrame();
     const size = Number($('sub-font').value);
     const color = $('sub-color').value;
     const bg = $('sub-bg').value;
     $('lbl-font').textContent = size;
     el.style.color = color;
-    el.style.fontSize = Math.max(10, Math.round(size * 0.5)) + 'px';
+    const scale = previewScale(f);
+    el.style.fontSize = Math.max(9, Math.round(size * (scale || 0.44))) + 'px';
+    el.style.maxWidth = '90%';                     // ASS MarginL/R = 5% each
     if (bg === 'Outline Only') {
       el.style.background = 'transparent';
       el.style.textShadow = '0 0 6px #000, 0 0 6px #000';
@@ -502,10 +583,22 @@
     }
   }
 
+  function styleHookOverlay(frame) {
+    const el = $('overlay-hook');
+    if (!el) return;
+    const f = frame || targetFrame();
+    const scale = previewScale(f);
+    const px = 0.058 * f.w * (scale || 0.44);      // ASS HookStyle Fontsize
+    el.style.fontSize = Math.max(10, Math.round(px)) + 'px';
+    el.style.top = '6%';                           // ASS MarginV = 0.06 · height
+    el.style.width = '92%';                        // ASS MarginL/R = 4% each
+  }
+
   function updateHookOverlay() {
     const h1 = $('hook1').value.trim(), h2 = $('hook2').value.trim();
     $('overlay-hook').innerHTML = h1 || h2
       ? `${escapeHtml(h1)}<small>${escapeHtml(h2)}</small>` : '';
+    styleHookOverlay();
   }
 
   function setSubPos(percent) {
@@ -516,12 +609,17 @@
 
   function setLogoPos(x, y) {
     state.logoPos = {
-      x: Math.max(0, Math.min(88, Math.round(x))),
-      y: Math.max(0, Math.min(88, Math.round(y)))
+      x: Math.max(0, Math.min(100, Math.round(x))),
+      y: Math.max(0, Math.min(100, Math.round(y)))
     };
     const el = $('overlay-logo');
+    // ffmpeg places the badge at (main_w-overlay_w)·p — i.e. the percentage is
+    // an *inset inside the free space*, not a raw left offset. left:p% plus
+    // translate(-p%) reproduces that identity exactly, so 100% sits flush with
+    // the right/bottom edge in the preview and in the render alike.
     el.style.left = state.logoPos.x + '%';
     el.style.top = state.logoPos.y + '%';
+    el.style.transform = `translate(${-state.logoPos.x}%, ${-state.logoPos.y}%)`;
     $('lbl-logo-pos').textContent = `x:${state.logoPos.x}% y:${state.logoPos.y}%`;
   }
 
@@ -535,7 +633,7 @@
       const point = e.touches ? e.touches[0] : e;
       const xPct = ((point.clientX - rect.left) / rect.width) * 100;
       const yPct = ((point.clientY - rect.top) / rect.height) * 100;
-      handler(Math.max(0, Math.min(100, xPct)), Math.max(0, Math.min(100, yPct)));
+      handler(Math.max(0, Math.min(100, xPct)), Math.max(0, Math.min(100, yPct)), rect, el);
       e.preventDefault();
     };
     const end = () => { dragging = false; };
@@ -546,8 +644,22 @@
     window.addEventListener('mouseup', end);
     window.addEventListener('touchend', end);
   }
-  bindDrag($('overlay-sub'), (x, y) => setSubPos(100 - y));
-  bindDrag($('overlay-logo'), (x, y) => setLogoPos(x, y));
+  // grab the subtitle by its middle, not by its baseline
+  bindDrag($('overlay-sub'), (x, y, rect, el) => {
+    const half = rect.height ? ((el.offsetHeight || 0) / 2 / rect.height) * 100 : 0;
+    setSubPos(100 - y - half);
+  });
+  // the logo follows the cursor centre, mapped into ffmpeg's free-space ratio
+  bindDrag($('overlay-logo'), (x, y, rect, el) => {
+    const lw = el.offsetWidth || rect.width * 0.16;
+    const lh = el.offsetHeight || lw;
+    const freeW = Math.max(1, rect.width - lw);
+    const freeH = Math.max(1, rect.height - lh);
+    setLogoPos(
+      (((x / 100) * rect.width - lw / 2) / freeW) * 100,
+      (((y / 100) * rect.height - lh / 2) / freeH) * 100
+    );
+  });
   setSubPos(22);
 
   /* ══════════════════════ VOICES / SETTINGS ════════════════════════ */
@@ -648,6 +760,38 @@
       btn.disabled = false;
     }
   };
+
+  /* ── phones & tablets: a sticky One-Click bar once the big CTA scrolls
+     out of view, so the main action is always one thumb-tap away ─────── */
+  function syncRunBar() {
+    const bar = $('mobile-run-bar');
+    if (!bar) return;
+    const studio = $('tab-studio');
+    const onStudio = !!studio && !studio.classList.contains('hidden');
+    const ready = !!(state.video && state.video.path);
+    bar.classList.toggle('show', onStudio && ready && state.ctaVisible === false);
+    const btn = $('btn-run-mobile');
+    const cta = $('btn-start');
+    if (btn && cta) {
+      btn.disabled = cta.disabled;
+      btn.textContent = cta.disabled ? '⏳ လုပ်ဆောင်နေသည်…' : '⚡ One-Click Recap စမည်';
+    }
+  }
+
+  function bindRunBar() {
+    const bar = $('mobile-run-bar');
+    const cta = $('btn-start');
+    if (!bar || !cta) return;
+    const btn = $('btn-run-mobile');
+    if (btn) btn.onclick = () => { cta.click(); syncRunBar(); };
+    if (typeof IntersectionObserver === 'function') {
+      new IntersectionObserver((entries) => {
+        entries.forEach((entry) => { state.ctaVisible = entry.isIntersecting; });
+        syncRunBar();
+      }, { rootMargin: '-10px 0px -70px 0px' }).observe(cta);
+    }
+    setInterval(syncRunBar, 2000);   // mirrors the CTA's disabled state
+  }
 
   function renderStages(stages = {}) {
     const defs = [
@@ -1095,16 +1239,47 @@
     if (parts.length) toast(`အပိုင်း ${parts.length} ခု ခွဲထုတ်ပြီးပါပြီ`, 'ok');
   }
 
+  /** Hand a finished clip straight back to the Studio for a one-click recap. */
+  function sendPartToStudio(part) {
+    if (!part) return;
+    if (!part.path) {
+      return toast('ဤအပိုင်းကို Studio သို့ မပို့နိုင်ပါ — ပြန်ခွဲထုတ်ကြည့်ပါ', 'err', 8000);
+    }
+    applyVideoResult({
+      video_path: part.path,
+      duration: part.duration,
+      width: part.width,
+      height: part.height,
+      size: part.size,
+      preview_url: part.preview_url || part.url,
+      filename: part.filename || `part_${part.part}.mp4`
+    }, null);
+    switchTab('studio');
+    const card = $('preview-card');
+    if (card && card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const cta = $('btn-start');
+    if (cta) {
+      cta.classList.add('pulse');
+      setTimeout(() => cta.classList.remove('pulse'), 4200);
+    }
+    toast(`Part ${part.part} ကို Studio သို့ ပို့ပြီးပါပြီ — ⚡ One-Click နှိပ်ရုံပါပဲ`, 'ok', 8000);
+  }
+
   function renderSplitParts(parts) {
-    $('split-results').innerHTML = (parts || []).map((p) => `
-      <div class="card" style="padding:12px">
+    state.splitParts = parts || [];
+    $('split-results').innerHTML = (parts || []).map((p, i) => `
+      <div class="card part-card" style="padding:12px">
         <b>Part ${p.part}</b>
         <p class="sub">${p.duration}s · ${fmtBytes(p.size)}</p>
         <div class="btn-row">
+          ${p.path ? `<button class="btn small primary" data-to-studio="${i}">🎬 Studio သို့ ပို့မည်</button>` : ''}
           <a class="btn small success" href="${p.url}" download>📥 ဒေါင်းလုဒ်</a>
           <a class="btn small ghost" href="${p.preview_url || p.url}" target="_blank" rel="noopener">▶ ကြည့်</a>
         </div>
       </div>`).join('') || '<p class="empty">အပိုင်း မထွက်ပါ</p>';
+    $('split-results').querySelectorAll('[data-to-studio]').forEach((btn) => {
+      btn.onclick = () => sendPartToStudio(state.splitParts[Number(btn.dataset.toStudio)]);
+    });
     if (parts && parts.length) {
       const bar = document.createElement('div');
       bar.className = 'btn-row';
@@ -1413,12 +1588,41 @@
   function bindUiSync() {
     $('lang').addEventListener('change', () => { renderVoices(); persistUiState(); });
     $('voice').addEventListener('change', persistUiState);
-    ['mode', 'fill-mode', 'quality', 'aspect', 'reframe'].forEach((id) =>
+    ['mode', 'fill-mode', 'quality'].forEach((id) =>
       $(id).addEventListener('change', persistUiState));
+    // the output frame changed → the preview box must change with it
+    ['aspect', 'reframe'].forEach((id) =>
+      $(id).addEventListener('change', () => { applyPreviewGeometry(); persistUiState(); }));
     $('model').addEventListener('change', () => { LS.set('rs_model', $('model').value); });
     ['sub-font', 'sub-color', 'sub-bg'].forEach((id) => {
       $(id).addEventListener('input', () => { styleSubtitleOverlay(); persistUiState(); });
     });
+    // keep the overlays pixel-accurate on rotate / resize / responsive reflow
+    let geomRaf = 0;
+    const reflow = () => {
+      if (geomRaf) return;
+      const run = () => { geomRaf = 0; applyPreviewGeometry(); };
+      geomRaf = (typeof requestAnimationFrame === 'function')
+        ? requestAnimationFrame(run) : setTimeout(run, 60);
+    };
+    window.addEventListener('resize', reflow);
+    window.addEventListener('orientationchange', reflow);
+    if (typeof ResizeObserver === 'function' && $('preview-wrap')) {
+      new ResizeObserver(reflow).observe($('preview-wrap'));
+    }
+    const pv = $('preview-video');
+    if (pv) {
+      pv.addEventListener('loadedmetadata', () => {
+        // a source without probe data (restored entry, split part) still gets
+        // a correct "မူရင်း" frame once the browser knows the real size
+        if (state.video && (!state.video.width || !state.video.height)
+            && pv.videoWidth && pv.videoHeight) {
+          state.video.width = pv.videoWidth;
+          state.video.height = pv.videoHeight;
+        }
+        applyPreviewGeometry();
+      });
+    }
     ['hook1', 'hook2'].forEach((id) => $(id).addEventListener('input', () => {
       updateHookOverlay(); persistUiState();
     }));
@@ -1486,6 +1690,7 @@
             info: `${fmtTime(saved.duration)} · ${saved.width || '?'}×${saved.height || '?'} · ${fmtBytes(saved.size)}`
           }, saved.previewUrl);
           if (saved.previewUrl) $('preview-video').src = saved.previewUrl;
+          applyPreviewGeometry();
           estimateSplitParts();
         } else {
           LS.del('rs_video');
@@ -1871,8 +2076,9 @@
     restoreUiState();
     bindUiSync();
     bindAuthUi();
-    styleSubtitleOverlay();
+    bindRunBar();
     updateHookOverlay();
+    applyPreviewGeometry();
     renderPreviewMeta();
     $('original-audio-row').classList.toggle('hidden', $('mute-original').checked);
 

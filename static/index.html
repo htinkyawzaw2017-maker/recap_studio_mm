@@ -143,7 +143,7 @@
     <div class="grid studio">
       <div>
         <!-- STEP 1 -->
-        <div class="card">
+        <div class="card" id="upload-card">
           <div class="card-head">
             <span class="step">1</span>
             <div class="head-text">
@@ -195,7 +195,7 @@
         </div>
 
         <!-- STEP 2 -->
-        <div class="card">
+        <div class="card" id="setup-card">
           <div class="card-head">
             <span class="step violet">2</span>
             <div class="head-text">
@@ -266,7 +266,7 @@
         </div>
 
         <!-- STEP 3 -->
-        <div class="card">
+        <div class="card" id="style-card">
           <div class="card-head">
             <span class="step">3</span>
             <div class="head-text">
@@ -355,19 +355,23 @@
           <div class="card-head" style="margin-bottom:10px">
             <div class="head-text">
               <h3>📱 Live Preview</h3>
-              <p class="sub">စာတန်းနှင့် Logo ကို ဆွဲ၍ နေရာချနိုင်သည်</p>
+              <p class="sub">ထွက်မည့် ဖရိမ်အတိုင်းအတာ အတိအကျ — စာတန်းနှင့် Logo ကို ဆွဲ၍ နေရာချပါ</p>
             </div>
+            <span class="chip" id="preview-frame" title="ထွက်မည့် ဗီဒီယို ဖရိမ်"
+                  style="margin-left:auto">720×1280 · 9:16</span>
           </div>
+          <div class="preview-stage">
           <div class="preview-wrap" id="preview-wrap">
             <video id="preview-video" controls playsinline preload="metadata"></video>
             <div class="overlay-hook" id="overlay-hook"></div>
             <div class="overlay-sub" id="overlay-sub">နမူနာ စာတန်းထိုး</div>
             <div class="overlay-logo hidden" id="overlay-logo"><img id="overlay-logo-img" alt="logo"></div>
           </div>
+          </div>
           <div class="chips" id="preview-meta" style="margin-top:12px">
             <span class="chip muted">ဗီဒီယို မတင်ရသေးပါ</span>
           </div>
-          <p class="help" id="position-help">Subtitle အနိမ့်: <b id="lbl-sub-pos">22</b>% · Logo: <b id="lbl-logo-pos">မထည့်ရသေးပါ</b></p>
+          <p class="help" id="position-help">Subtitle အနိမ့်: <b id="lbl-sub-pos">22</b>% · Logo: <b id="lbl-logo-pos">မထည့်ရသေးပါ</b> · Preview စကေး: <b id="lbl-preview-scale">—</b></p>
         </div>
 
         <div class="card" id="job-card">
@@ -703,6 +707,11 @@
     </div>
   </section>
 </main>
+
+<!-- phones/tablets: the main action stays reachable while scrolling -->
+<div class="mobile-run-bar" id="mobile-run-bar">
+  <button class="btn primary block" id="btn-run-mobile">⚡ One-Click Recap စမည်</button>
+</div>
 
 <div class="toast-stack" id="toasts"></div>
 <script src="/static/app.js"></script>
