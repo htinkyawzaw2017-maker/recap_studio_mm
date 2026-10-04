@@ -86,10 +86,18 @@ sudo sed -i "s|^RECAP_SECRET_KEY=.*|RECAP_SECRET_KEY=$(openssl rand -hex 32)|" /
 ### အဆင့် 3 — Database ကို migrate လုပ်ပါ
 
 ```bash
-cd /opt/recap-studio
-sudo -u ubuntu env $(grep -v '^#' .env | xargs) \
-  .venv/bin/python -m recapstudio.useradmin migrate
+# ① တစ်ကြိမ်သာ — command အတို "ua" ကို သတ်မှတ်ပါ (.env ကို လုံခြုံစွာ ဖတ်သည်)
+ua() { sudo -u ubuntu bash -c "set -a; . /opt/recap-studio/.env; set +a; cd /opt/recap-studio && .venv/bin/python -m recapstudio.useradmin $*"; }
 ```
+
+```bash
+# ② migrate
+ua migrate
+```
+
+> ⚠️ `env $(grep -v '^#' .env | xargs)` ပုံစံကို မသုံးပါနှင့် — `.env` ထဲ space ပါသော တန်ဖိုး
+> (ဥပမာ စကားဝှက်) ရှိလျှင် env မပါဘဲ run သွားပြီး **DB မှားသော နေရာတွင်** ဆောက်မိတတ်သည်။
+> အပေါ်က `ua` function သည် `.env` ကို source လုပ်သဖြင့် အမြဲ မှန်ကန်သည်။
 
 ဤ command က schema အသစ် ဆောက်ပြီး `.env` ထဲက Gemini key များကို encrypt လုပ်ကာ DB ထဲ ထည့်သည်။
 (Installer က run ပြီးသားဖြစ်နိုင်သည် — ထပ်run လျှင် ဘာမှ မပျက်ပါ။)
@@ -97,9 +105,7 @@ sudo -u ubuntu env $(grep -v '^#' .env | xargs) \
 ### အဆင့် 4 — ပထမဆုံး admin အကောင့် ဖန်တီးပါ ⭐
 
 ```bash
-cd /opt/recap-studio
-sudo -u ubuntu env $(grep -v '^#' .env | xargs) \
-  .venv/bin/python -m recapstudio.useradmin create myname --admin --random
+ua create myname --admin --random
 ```
 
 - `myname` နေရာတွင် သင် သုံးလိုသော username (ဥပမာ `htin`) ထည့်ပါ။
@@ -117,9 +123,7 @@ sudo systemctl status recap-studio --no-pager | head -12
 ### အဆင့် 6 — စစ်ဆေးပါ
 
 ```bash
-cd /opt/recap-studio
-sudo -u ubuntu env $(grep -v '^#' .env | xargs) \
-  .venv/bin/python -m recapstudio.useradmin status
+ua status
 ```
 
 အောက်ပါအတိုင်း မြင်ရမည် —
@@ -170,22 +174,24 @@ sudo systemctl restart recap-studio
 
 ## 5. `useradmin` CLI — အမိန့် အားလုံး
 
-အရင်ဆုံး `cd /opt/recap-studio` ပြီး command တိုင်းရှေ့တွင်
-`sudo -u ubuntu env $(grep -v '^#' .env | xargs) .venv/bin/python -m recapstudio.useradmin` ကို ထည့်ပါ
-(အောက်တွင် `useradmin` ဟု အတိုကောက် ရေးထားသည်)။
+အောက်ပါ `ua` function ကို တစ်ကြိမ် သတ်မှတ်ပြီး သုံးပါ —
+
+```bash
+ua() { sudo -u ubuntu bash -c "set -a; . /opt/recap-studio/.env; set +a; cd /opt/recap-studio && .venv/bin/python -m recapstudio.useradmin $*"; }
+```
 
 | အမိန့် | အလုပ် |
 |---|---|
-| `useradmin status` | auth mode, အကောင့်အရေအတွက်, DB path, secret storage |
-| `useradmin migrate` | schema migrate + `.env` key များ encrypt သိမ်း |
-| `useradmin create NAME --admin --random` | အကောင့်ဖန်တီး (`--password X`, `--must-change` ရှိ) |
-| `useradmin list` / `list --json` | အကောင့် စာရင်း |
-| `useradmin passwd NAME --random` | password reset (session အားလုံး ပြုတ်မည်) |
-| `useradmin disable NAME` / `enable NAME` | ခေတ္တ ပိတ် / ပြန်ဖွင့် |
-| `useradmin promote NAME` / `demote NAME` | admin ပေး / ရုပ်သိမ်း |
-| `useradmin delete NAME --yes` | အကောင့် + ဖိုင်များ ဖျက် |
-| `useradmin sessions NAME [--revoke]` | ဝင်ထားသော device များ ကြည့် / ထွက်ခိုင်း |
-| `useradmin audit --limit 50` | security log (login, create, delete, …) |
+| `ua status` | auth mode, အကောင့်အရေအတွက်, DB path, secret storage |
+| `ua migrate` | schema migrate + `.env` key များ encrypt သိမ်း |
+| `ua create NAME --admin --random` | အကောင့်ဖန်တီး (`--password X`, `--must-change` ရှိ) |
+| `ua list` / `list --json` | အကောင့် စာရင်း |
+| `ua passwd NAME --random` | password reset (session အားလုံး ပြုတ်မည်) |
+| `ua disable NAME` / `enable NAME` | ခေတ္တ ပိတ် / ပြန်ဖွင့် |
+| `ua promote NAME` / `demote NAME` | admin ပေး / ရုပ်သိမ်း |
+| `ua delete NAME --yes` | အကောင့် + ဖိုင်များ ဖျက် |
+| `ua sessions NAME [--revoke]` | ဝင်ထားသော device များ ကြည့် / ထွက်ခိုင်း |
+| `ua audit --limit 50` | security log (login, create, delete, …) |
 
 ---
 
@@ -236,6 +242,27 @@ sudo systemctl restart recap-studio
 ---
 
 ## 8. ပြဿနာ ဖြေရှင်းချက်
+
+### 8.1 `/healthz` က 4.2.0 ပြနေပြီး web မှာ login မပေါ်ဘူး ⭐
+
+အောက်ပါ command ၄ ကြောင်းကို server terminal တွင် run ပြီး ဘယ်ဟာလဲ ခွဲခြားပါ —
+
+```bash
+curl -s http://localhost/healthz;        echo      # version
+curl -s http://localhost/api/auth/me;    echo      # mode + has_users  ← အဓိက
+curl -s http://localhost/ | grep -c 'id="auth-overlay"'   # 1 = HTML အသစ် မှန်
+ua status                                          # accounts ဘယ်နှစ်ယောက်
+```
+
+| ရလဒ် | အဓိပ္ပာယ် | ဖြေရှင်းနည်း |
+|---|---|---|
+| `"mode":"open"` / `accounts : 0` | **code အသစ် မှန်သည် — ဒါပေမဲ့ အကောင့် မရှိသေး** (login စနစ် မဖွင့်ရသေး) | `ua create myname --admin --random` → `sudo systemctl restart recap-studio` |
+| `grep -c` က `0` ပြ | static ဖိုင်များ အဟောင်း ကျန်နေသည် | installer ကို ပြန် run ပါ |
+| `"mode":"users"` ဖြစ်ပြီး browser မှာသာ အဟောင်း | **browser cache** | **Ctrl + Shift + R** (Mac: ⌘ + Shift + R) / incognito window / ဖုန်းဖြစ်လျှင် browser cache ရှင်းပါ |
+
+> v4.2.0 မှစ၍ စာမျက်နှာ ခေါင်းစဉ်တွင် **server မှ ပြန်ပေးသော version အစစ်** (ဥပမာ `v4.2.0`) ပေါ်ပါမည်။
+> `v4.1` ဟု ပြနေလျှင် သင်မြင်နေသည်မှာ **cache ထဲက စာမျက်နှာအဟောင်း** ဖြစ်သည်။
+> အကောင့် မရှိသေးလျှင်လည်း စာမျက်နှာ အပေါ်ဆုံးတွင် 🟡 သတိပေးစာတန်း တိုက်ရိုက် ပေါ်ပါမည်။
 
 | လက္ခဏာ | အကြောင်းရင်း | ဖြေရှင်းနည်း |
 |---|---|---|

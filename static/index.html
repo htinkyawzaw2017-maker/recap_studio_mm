@@ -14,7 +14,7 @@
     <div class="brand-mark">🎬</div>
     <div>
       <h1>RECAP STUDIO MM</h1>
-      <p>AI Recap · Zero-Drift Dubbing · Myanmar Subtitles · v4.1</p>
+      <p>AI Recap · Zero-Drift Dubbing · Myanmar Subtitles · <span id="app-version">v4.2</span></p>
     </div>
   </div>
   <div class="topbar-spacer"></div>
@@ -80,6 +80,13 @@
 <div class="banner hidden" id="conn-banner">
   <span id="conn-banner-text">Server ချိတ်ဆက်မှု စစ်ဆေးနေသည်…</span>
   <button class="btn small ghost" id="btn-retry-conn">🔄 ပြန်စမ်း</button>
+</div>
+
+<div class="banner banner-open hidden" id="open-banner">
+  <span>⚠️ <b>အကောင့် မရှိသေးပါ</b> — ဤ server ကို link သိသူတိုင်း ဝင်နိုင်နေပါသည်။
+    server terminal တွင်
+    <code>python -m recapstudio.useradmin create myname --admin --random</code>
+    ဖြင့် admin အကောင့် ဖန်တီးပြီး service ကို restart ပါ (ထို့နောက် login စာမျက်နှာ ပေါ်လာပါမည်)။</span>
 </div>
 
 <div class="banner banner-key hidden" id="access-banner">

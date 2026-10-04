@@ -1201,6 +1201,7 @@
       const info = await api('/api/system', { timeout: 15000, retries: 1 });
       state.catalog = info;
       state.serverOk = true;
+      if (info.version && $('app-version')) $('app-version').textContent = `v${info.version}`;
       state.accessOk = info.access_ok !== false;
       renderStatusChips(info);
       setConnBanner(false);
@@ -1595,6 +1596,11 @@
     const chip = $('chip-account');
     const user = state.auth && state.auth.user;
     if (!box || !chip) return;
+    const openBanner = $('open-banner');
+    if (openBanner) {
+      openBanner.classList.toggle('hidden',
+        !(authMode === 'open' && state.auth && state.auth.has_users === false));
+    }
     if (!user || authMode === 'open') { box.classList.add('hidden'); return; }
     box.classList.remove('hidden');
     const role = user.role === 'admin' ? ' · admin' : '';

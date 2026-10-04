@@ -42,16 +42,16 @@ curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_
 rm -rf recap_studio_mm-arena-* && tar xzf recap.tgz
 sudo bash /tmp/recap_studio_mm-arena-01a105ed-recap-studio-mm/deploy/ec2_install.sh
 
-# 2) ⭐ admin အကောင့် ဖန်တီးပါ (v4.2 — password ကို တစ်ကြိမ်သာ ပြမည်၊ မှတ်ထားပါ)
-cd /opt/recap-studio
-sudo -u ubuntu env $(grep -v '^#' .env | xargs) \
-  .venv/bin/python -m recapstudio.useradmin create myname --admin --random
+# 2) ⭐ admin အကောင့် — installer က အလိုအလျောက် ဖန်တီးပြီး password ကို ပြပါမည်
+#    (အကောင့် မရှိသေးမှသာ)။ ကိုယ်တိုင် ထပ်ဖန်တီးလိုလျှင် —
+ua() { sudo -u ubuntu bash -c "set -a; . /opt/recap-studio/.env; set +a; cd /opt/recap-studio && .venv/bin/python -m recapstudio.useradmin $*"; }
+ua create myname --admin --random
 
 # 3) restart + စစ်ဆေး
 sudo systemctl restart recap-studio
 curl -s http://localhost/healthz      # "version":"4.2.0" ဖြစ်ရမည်
-sudo -u ubuntu env $(grep -v '^#' .env | xargs) \
-  .venv/bin/python -m recapstudio.useradmin status   # auth mode: users
+curl -s http://localhost/api/auth/me  # "mode":"users" ဖြစ်ရမည် ← login ပေါ်/မပေါ် ဒီမှာ သိသည်
+ua status                             # accounts : 1
 ```
 
 Browser တွင် `http://<EC2-IP>` ဖွင့်ပြီး **Ctrl + Shift + R** (hard refresh) နှိပ်ပါ။

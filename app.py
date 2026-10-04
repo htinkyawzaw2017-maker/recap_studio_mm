@@ -321,10 +321,24 @@ def _register_job(job, principal: Principal) -> None:
 # ── static SPA ───────────────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 def serve_ui() -> HTMLResponse:
+    """Serve the SPA shell with version-stamped asset URLs.
+
+    Browsers cached ``/static/app.js`` aggressively, so after an update the old
+    UI kept running (no login screen even though the new build was deployed).
+    Stamping ``?v=<app_version>`` makes every release a new URL, and the shell
+    itself is never cached.
+    """
     index = config.STATIC_DIR / "index.html"
     if not index.exists():
         return HTMLResponse("<h1>Recap Studio</h1><p>static/index.html missing</p>", status_code=500)
-    return HTMLResponse(index.read_text(encoding="utf-8"))
+    version = config.settings.app_version
+    html = (index.read_text(encoding="utf-8")
+            .replace("/static/app.js", f"/static/app.js?v={version}")
+            .replace("/static/styles.css", f"/static/styles.css?v={version}"))
+    return HTMLResponse(html, headers={
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma": "no-cache",
+    })
 
 
 @app.get("/healthz")

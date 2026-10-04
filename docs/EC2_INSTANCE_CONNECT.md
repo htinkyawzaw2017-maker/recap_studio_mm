@@ -187,9 +187,10 @@ v4.2 မှစ၍ site ကို **username + password** ဖြင့် ကာ�
 အကောင့် တစ်ခုမှ မဖန်တီးမချင်း စာမျက်နှာသည် ယခင်အတိုင်း ဖွင့်လျက်သာ ရှိနေမည်။
 
 ```bash
-cd /opt/recap-studio
-sudo -u ubuntu env $(grep -v '^#' .env | xargs) \
-  .venv/bin/python -m recapstudio.useradmin create myname --admin --random
+# .env ကို လုံခြုံစွာ ဖတ်သော command အတို
+ua() { sudo -u ubuntu bash -c "set -a; . /opt/recap-studio/.env; set +a; cd /opt/recap-studio && .venv/bin/python -m recapstudio.useradmin $*"; }
+
+ua create myname --admin --random
 sudo systemctl restart recap-studio
 ```
 
@@ -200,9 +201,11 @@ sudo systemctl restart recap-studio
 
 ```bash
 # စစ်ဆေးရန်
-sudo -u ubuntu env $(grep -v '^#' .env | xargs) \
-  .venv/bin/python -m recapstudio.useradmin status      # auth mode: users ဖြစ်ရမည်
+ua status                              # auth mode: users / accounts: 1 ဖြစ်ရမည်
+curl -s http://localhost/api/auth/me   # "mode":"users" ဖြစ်ရမည်
 ```
+
+> login မပေါ်သေးလျှင် → `docs/PHASE2_AUTH.md` §8.1 (စစ်ဆေးရန် command ၄ ကြောင်း) ကို ကြည့်ပါ။
 
 ---
 

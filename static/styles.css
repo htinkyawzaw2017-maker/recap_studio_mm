@@ -606,3 +606,17 @@ input[type=file].hidden-input { display: none; }
   line-height: 1.8;
   white-space: pre-wrap;
 }
+
+/* unprotected-deployment warning (v4.2) */
+.banner-open {
+  background: linear-gradient(90deg, rgba(248, 180, 0, .16), rgba(248, 120, 0, .10));
+  border: 1px solid rgba(248, 180, 0, .45);
+  color: #ffd98a;
+}
+.banner-open code {
+  background: rgba(0, 0, 0, .35);
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: .92em;
+  white-space: nowrap;
+}

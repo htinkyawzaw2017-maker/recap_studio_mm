@@ -293,27 +293,32 @@ else
   tail -5 /tmp/recap-useradmin.log 2>/dev/null || true
 fi
 
-# RECAP_ADMIN_USER=... ပေးထားလျှင် ပထမဆုံး admin အကောင့်ကို အလိုအလျောက် ဖန်တီးပေးသည်
+# အကောင့် တစ်ခုမှ မရှိလျှင် admin အကောင့်ကို အလိုအလျောက် ဖန်တီးပေးသည်
+# (ကျော်လိုလျှင် RECAP_SKIP_ADMIN=1 ၊ အမည်ပြောင်းလိုလျှင် RECAP_ADMIN_USER=myname)
 ADMIN_CREATED=""
-if [ "$ACCOUNTS" = "0" ] && [ -n "${RECAP_ADMIN_USER:-}" ]; then
+ADMIN_PASSWORD_SHOWN=""
+ADMIN_USER="${RECAP_ADMIN_USER:-admin}"
+AUTH_MODE_ENV="$(sed -n 's/^RECAP_AUTH_MODE=//p' "$ENV_FILE" 2>/dev/null | tail -1 | tr -d '"'"'"'"' )"
+if [ "$ACCOUNTS" = "0" ] && [ "${RECAP_SKIP_ADMIN:-0}" != "1" ] \
+   && [ "$AUTH_MODE_ENV" != "legacy" ] && [ "$AUTH_MODE_ENV" != "open" ]; then
   if [ -n "${RECAP_ADMIN_PASSWORD:-}" ]; then
-    if useradmin_cmd create "$RECAP_ADMIN_USER" --admin --password "$RECAP_ADMIN_PASSWORD" \
+    if useradmin_cmd create "$ADMIN_USER" --admin --password "$RECAP_ADMIN_PASSWORD" \
          >/tmp/recap-admin.log 2>&1; then
-      ADMIN_CREATED="$RECAP_ADMIN_USER"
-      ok "admin အကောင့် '$RECAP_ADMIN_USER' ဖန်တီးပြီး (သင်ပေးထားသော password)"
+      ADMIN_CREATED="$ADMIN_USER"
+      ok "admin အကောင့် '$ADMIN_USER' ဖန်တီးပြီး (သင်ပေးထားသော password)"
     else
       warn "admin အကောင့် ဖန်တီး၍ မရပါ:"; tail -5 /tmp/recap-admin.log 2>/dev/null || true
     fi
+  elif useradmin_cmd create "$ADMIN_USER" --admin --random >/tmp/recap-admin.log 2>&1; then
+    ADMIN_CREATED="$ADMIN_USER"
+    ADMIN_PASSWORD_SHOWN="$(sed 's/\x1b\[[0-9;]*m//g' /tmp/recap-admin.log \
+      | sed -n 's/.*စကားဝှက်[^:]*: *//p' | head -1)"
+    ok "admin အကောင့် '$ADMIN_USER' ကို အလိုအလျောက် ဖန်တီးပြီးပါပြီ"
   else
-    if useradmin_cmd create "$RECAP_ADMIN_USER" --admin --random >/tmp/recap-admin.log 2>&1; then
-      ADMIN_CREATED="$RECAP_ADMIN_USER"
-      ok "admin အကောင့် '$RECAP_ADMIN_USER' ဖန်တီးပြီး — password ကို အောက်တွင် ကြည့်ပါ"
-      grep -i -E "password|စကားဝှက်" /tmp/recap-admin.log 2>/dev/null | head -3 || true
-    else
-      warn "admin အကောင့် ဖန်တီး၍ မရပါ:"; tail -5 /tmp/recap-admin.log 2>/dev/null || true
-    fi
+    warn "admin အကောင့် ဖန်တီး၍ မရပါ:"; tail -5 /tmp/recap-admin.log 2>/dev/null || true
   fi
   ACCOUNTS="$(useradmin_cmd status 2>/dev/null | sed -n 's/.*accounts *: *\([0-9]*\).*/\1/p' | head -1)"
+  [ -z "$ACCOUNTS" ] && ACCOUNTS="?"
 fi
 
 if [ "$ACCOUNTS" = "0" ]; then
@@ -451,15 +456,26 @@ else
 fi
 if [ -n "$ADMIN_CREATED" ]; then
   say "  2) admin အကောင့် '$ADMIN_CREATED' ဖြင့် browser မှ login ဝင်ပါ"
+  if [ -n "$ADMIN_PASSWORD_SHOWN" ]; then
+    say ""
+    say "     ┌────────────────────────────────────────────────┐"
+    say "     │  username : $ADMIN_CREATED"
+    say "     │  password : $ADMIN_PASSWORD_SHOWN"
+    say "     └────────────────────────────────────────────────┘"
+    say "     ⚠️ ဤ password ကို ယခုပဲ မှတ်ထားပါ — နောက်တစ်ခါ ပြမည် မဟုတ်ပါ"
+    say ""
+  fi
   say "                        password ပြောင်းရန်: ⚙️ Settings → အကောင့် → စကားဝှက် ပြောင်းရန်"
 else
-  say "  2) admin အကောင့် ဖန်တီးပါ (v4.2 — ဤအဆင့် မလုပ်လျှင် site ကာကွယ်မှု မရှိပါ):"
-  say "        cd $APP_DIR && sudo -u $SERVICE_USER env \$(grep -v '^#' .env | xargs) \\"
-  say "          .venv/bin/python -m recapstudio.useradmin create myname --admin --random"
+  say "  2) admin အကောင့် ဖန်တီးပါ (v4.2 — ဤအဆင့် မလုပ်လျှင် login စာမျက်နှာ ပေါ်မည် မဟုတ်ပါ):"
+  say "        ua() { sudo -u $SERVICE_USER bash -c \"set -a; . $ENV_FILE; set +a; cd $APP_DIR && .venv/bin/python -m recapstudio.useradmin \$*\"; }"
+  say "        ua create myname --admin --random"
   say "        ${SUDO_PREFIX}systemctl restart $SERVICE"
 fi
 say ""
+say " စစ်ဆေးရန် (server မှ):  curl -s http://localhost/api/auth/me   → \"mode\":\"users\" ဖြစ်ရမည်"
 say " စစ်ဆေးရန် (laptop မှ):  python tests/verify_deployment.py http://${PUBLIC_IP:-YOUR-IP}"
+say " ⚠️  Browser တွင် အဟောင်း မြင်နေလျှင် Ctrl+Shift+R (Mac: ⌘+Shift+R) နှိပ်ပါ"
 say " နောက်တစ်ခါ update လုပ်ရန်:  sudo bash $0   (ဤ script ကိုပဲ ပြန် run ပါ)"
 say " ⚠️  Security Group တွင် HTTP (port ${PORT}) inbound ဖွင့်ထားရန် မမေ့ပါနှင့်"
 say "════════════════════════════════════════════════════════════════"
