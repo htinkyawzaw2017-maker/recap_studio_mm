@@ -45,6 +45,81 @@ Timeline အလိုက် အသံ ပေါင်းစပ် (drift-free) +
 ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → MP4 + SRT + MP3
 ```
 
+### 🗣️ v4.3.1 — Link import, narration အရှည်အတို, Recap ⇄ Dubbing ခွဲခြားမှု (Phase 3 · Batch B-1)
+
+* **#1 Link import** — `youtu.be` / `shorts` / `live` / `&list=` ပါသော link များကို သန့်စင်ပြီး
+  yt-dlp ကို **နည်းလမ်း ၄ မျိုး** (default → android → ios+IPv4 → tv) ဖြင့် အဆင့်ဆင့် စမ်းသည်။
+  မအောင်မြင်လျှင် မြန်မာလို အကြောင်းပြချက် + ပြင်နည်း (cookies / yt-dlp update / proxy) ပြသည်။
+* **#2 narration မြန်လွန်းခြင်း** — မြန်မာ **10.5 စာလုံး/စက္ကန့်** budget ဖြင့် window ထက်
+  ရှည်သော စာကြောင်းကို TTS မလုပ်မီ သဘာဝကျစွာ ချုံ့သည် (စာတန်းနှင့် အသံ တစ်ထပ်တည်း)။
+* **#4 တို/ပြတ်သား/သဘာဝကျ** — prompt တွင် budget ကိန်းဂဏန်း အတိအကျ + filler စကား ပိတ်ပင်ချက်။
+* **#6 Recap ⇄ Dubbing** — 🎭 dubbing mode တွင် တိတ်ဆိတ်ချိန်ကို **စကား လုံးဝ မဖြည့်တော့**၊
+  speech boundary ±0.3s တိကျရန် တောင်းဆိုသည်။ 🎬 recap mode သာ အစအဆုံး narration ထည့်သည်။
+* **Tests** — `tests/test_narration_fit.py` (39 checks, offline)
+
+### 🎛️ v4.3 — WYSIWYG Live Preview + ဖုန်း/တက်ဘလက်/ကွန်ပျူတာ အားလုံး အဆင်ပြေ (Phase 3 · Batch A)
+
+Live Preview သည် ယခင်က **9:16 box တစ်မျိုးတည်း** ဖြစ်နေသဖြင့် 16:9 / 1:1 /
+မူရင်း အချိုးရွေးလျှင် ဗီဒီယိုက အပေါ်ပိုင်းသို့ တက်သွားပြီး စာတန်းနေရာလည်း
+ထွက်လာသော ဖိုင်နှင့် မကိုက်ပါ။ ယခု preview သည် **ffmpeg ထုတ်မည့် ဖရိမ်အတိအကျ**
+ဖြစ်သည် —
+
+* **Frame-accurate box** — `aspect` ရွေးလိုက်သည်နှင့် box က `720×1280` /
+  `1080×1080` / `1280×720` / မူရင်းအရွယ် သို့ ချက်ချင်း ပြောင်းသည်
+  (chip တွင် ထွက်မည့် pixel အရွယ် ပြသည်)
+* **စာတန်း/hook အတိအကျ** — စာလုံးအရွယ်ကို `box height ÷ output height` ဖြင့်
+  တွက်သည် (ASS PlayRes နှင့် တူညီ)၊ အနားသတ် 5% / 4%၊ hook top 6% — ဆွဲချထားသည့်
+  နေရာအတိုင်း render ထဲတွင် ထွက်သည်
+* **Logo** — ffmpeg `overlay=(W-w)·p` နှင့် တစ်ထပ်တည်း ကျအောင် ပြင်ထားသည်
+  (100% ဆိုလျှင် ဘေးနားကပ်၊ ယခင်က ဖရိမ်ပြင်ပ ထွက်သွားသည်)
+* **Center Crop** preview သည် crop အတိုင်း ဖြည့်ပြသည် (ကျန် mode = letterbox)
+* **အားလုံးသော device** — ဖုန်း (≤430 / ≤620)၊ တက်ဘလက် (≤1024)၊ laptop (≤1400)၊
+  4K အထိ breakpoint ladder၊ touch target 44px၊ iOS zoom-on-focus ပိတ်၊
+  landscape ဖုန်း၊ safe-area (notch)၊ reduced-motion
+* **⚡ One-Click bar** — ဖုန်း/တက်ဘလက်တွင် ခလုတ်ကြီး အပေါ်ရောက်သွားလျှင်
+  အောက်ခြေတွင် sticky bar အဖြစ် လိုက်ပါလာသည်
+* **🍿 Splitter → 🎬 Studio** — ခွဲထုတ်ပြီးသော အပိုင်းတိုင်းတွင်
+  **"🎬 Studio သို့ ပို့မည်"** ခလုတ် — နှိပ်လိုက်သည်နှင့် Studio သို့ ရောက်ပြီး
+  One-Click နှိပ်ရုံဖြင့် recap ထုတ်နိုင်သည် (ပြန်တင်စရာ မလို)
+* **Tests** — `tests/test_ui_preview.mjs` (31 checks, server မလိုပါ)
+
+### 🔐 v4.2 — အကောင့်စနစ် + Database လုံခြုံရေး + User အများသုံး (Phase 2)
+
+Site ကို link သိသူတိုင်း ဝင်နိုင်ခြင်း ပြီးဆုံးပါပြီ။ ယခု **username + password**
+အကောင့်စနစ်၊ user တစ်ယောက်ချင်း သီးသန့် workspace၊ encrypt လုပ်ထားသော API key
+သိမ်းဆည်းမှု တို့ ပါဝင်သည်။
+
+* **အကောင့်** — PBKDF2-SHA256 (240k rounds) + salt၊ session cookie (HttpOnly/SameSite/Secure)၊
+  CSRF token၊ ၈ ကြိမ် မှားလျှင် ၁၅ မိနစ် lock၊ IP rate limit
+* **User ခွဲခြားမှု** — job တိုင်းတွင် ပိုင်ရှင်ရှိ (သူများ job → **404**)၊
+  `workspace/users/<user>/` + `outputs/u_<user>/` သီးသန့်၊ per-user quota (job/disk)
+* **Database** — JSON အစား SQLite `data/recap.db` (0600 permission, schema migration, WAL)၊
+  audit log (login/create/delete/role အပြောင်းအလဲ)
+* **API key** — server ring အပြင် **user တစ်ယောက်ချင်း key** ကို Fernet ဖြင့် encrypt သိမ်း
+* **UI** — login/sign-up screen၊ 👤 account chip + logout၊
+  Settings → **အကောင့်** (password ပြောင်း / device အားလုံး ထွက်) နှင့်
+  **အကောင့် စီမံခန့်ခွဲမှု** (admin: user ဖန်တီး/ပိတ်/reset/ဖျက် + audit log)
+* **CLI** — `python -m recapstudio.useradmin status|migrate|create|list|passwd|disable|promote|delete|sessions|audit`
+* **Tests** — `tests/test_auth.py` (69 checks, offline)
+
+👉 သင် ကိုယ်တိုင် လုပ်ရမည့် အဆင့်များ (secret key, admin အကောင့်, restart, စစ်ဆေးချက်) —
+**[docs/PHASE2_AUTH.md](docs/PHASE2_AUTH.md)**
+
+👉 v4.3 ကို **Windows CMD မှ AWS EC2 ပေါ် အစအဆုံး ပြန်တင်နည်း** —
+**[docs/REDEPLOY_V43_CMD.md](docs/REDEPLOY_V43_CMD.md)**
+
+### ⚡ v4.1.2 — hotfix: `'TimelineExtractor' object has no attribute 'sdk'`
+
+v4.1.1 တွင် ထည့်လိုက်သော log line တစ်ကြောင်းက `self.sdk` (မှန်သည် `self.client.sdk`)
+ဟု ဖတ်မိသဖြင့် **အလုပ် စတင်သည်နှင့် ချက်ချင်း ကျ**ခဲ့သည် (Gemini သို့ request မရောက်မီ၊
+quota မကုန်)။ Demo mode က ထို line မရောက်သဖြင့် tests မမိခဲ့ပါ။ ယခု ပြင်ပြီး၊
+ထပ်မဖြစ်စေရန် —
+
+* `tests/test_real_run.py` — demo mode **ပိတ်ပြီး** `extract_timeline()` ကို
+  offline stub client ဖြင့် အပြည့်အဝ run (7 checks)
+* `tests/test_self_attrs.py` — code တစ်ခုလုံးရှි `self.<name>` အားလုံး ရှိ/မရှိ
+  static စစ်ဆေးခြင်း (12 module)
+
 ### 🔧 v4.1.1 — "file uri and mime_type are required" ပြင်ဆင်ချက် (အရေးကြီး)
 
 တကယ့် job များတွင် `AI request failed: file uri and mime_type are required.` ဖြင့်
@@ -122,6 +197,11 @@ running job ကို refresh လုပ်လျှင် ပြန်ချိ�
 | POST | `/api/tasks/{id}/cancel` · `/rerender` · DELETE | ရပ် / ပြန် render / ဖျက် |
 | GET | `/api/download/{file}` | MP4 · SRT · ASS · MP3 |
 | POST | `/api/thumbnail` · `/api/split-video` · `/api/estimate-parts` | tools |
+| GET | `/api/auth/me` | login အခြေအနေ + mode (v4.2) |
+| POST | `/api/auth/login` · `/logout` · `/register` | အကောင့် ဝင်/ထွက်/ဖွင့် |
+| POST | `/api/auth/password` · `/api/auth/sessions/revoke` | password ပြောင်း / device အားလုံး ထွက် |
+| GET/POST/PATCH/DELETE | `/api/admin/users` | admin — user စီမံခန့်ခွဲမှု |
+| GET | `/api/admin/audit` | admin — security log |
 
 ---
 
@@ -131,7 +211,11 @@ running job ကို refresh လုပ်လျှင် ပြန်ချိ�
 |---|---|---|
 | `GEMINI_API_KEY` | — | AI timeline extraction အတွက် |
 | `RECAP_DATA_DIR` | app folder | workspace/output/tasks ထားမည့်နေရာ (AWS တွင် `/data`) |
-| `RECAP_ACCESS_PASSWORD` | — | public deployment အတွက် shared secret |
+| `RECAP_SECRET_KEY` | auto | **v4.2** session + API key encryption သော့ (`openssl rand -hex 32`) ⚠️ မပြောင်းပါနှင့် |
+| `RECAP_AUTH_MODE` | `auto` | `auto` / `users` / `legacy` / `open` |
+| `RECAP_ALLOW_SIGNUP` | `0` | user ကိုယ်တိုင် အကောင့်ဖွင့်ခွင့် (+ `RECAP_SIGNUP_CODE`) |
+| `RECAP_USER_MAX_CONCURRENT_JOBS` | `1` | user တစ်ယောက် တစ်ပြိုင်နက် job |
+| `RECAP_ACCESS_PASSWORD` | — | legacy shared secret (အကောင့်စနစ် သုံးလျှင် မလို) |
 | `RECAP_MAX_CONCURRENT_JOBS` | 2 | တစ်ချိန်တည်း render အရေအတွက် |
 | `RECAP_TTS_WORKERS` | 8 | parallel အသံသွင်း workers |
 | `RECAP_MAX_CHUNK_SECONDS` | 480 | Gemini သို့ ပေးပို့မည့် အပိုင်းအရှည် |
@@ -145,8 +229,10 @@ running job ကို refresh လုပ်လျှင် ပြန်ချိ�
 
 * **AWS EC2 (Instance Connect, port 80) — command တစ်ကြောင်းတည်း** — [docs/EC2_INSTANCE_CONNECT.md](docs/EC2_INSTANCE_CONNECT.md)
   ```bash
-  cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a1027a-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
+  cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
   ```
+  install ပြီးလျှင် **admin အကောင့် ဖန်တီးရန် မမေ့ပါနှင့်** →
+  [docs/PHASE2_AUTH.md](docs/PHASE2_AUTH.md) အဆင့် ၄
 * **AWS (ECS Fargate + ALB + EFS)** — [docs/AWS_DEPLOY.md](docs/AWS_DEPLOY.md)
 * **AWS ပေါ်ရှိ deployment ကို update လုပ်ရန်** — [docs/AWS_UPDATE.md](docs/AWS_UPDATE.md)
   (`python tests/verify_deployment.py https://your-domain.com` ဖြင့် စစ်နိုင်သည်)
@@ -161,11 +247,22 @@ running job ကို refresh လုပ်လျှင် ပြန်ချိ�
 pip install -r requirements.txt
 python tests/smoke_test.py            # offline: pipeline + HTTP layer (69 checks)
 python tests/test_ai_parts.py        # AI ထံ ပေးပို့သော video part များ (21 checks, network မလိုပါ)
+python tests/test_real_run.py         # demo မပါဘဲ AI analysis အပြည့် (7 checks, offline)
+python tests/test_self_attrs.py       # self.<name> static စစ်ဆေးခြင်း (12 modules)
 python tests/test_cancel.py          # ⏹ ရပ်တန့်ခြင်း = CancelledError (5 checks, ~3s)
 python tests/test_key_ring.py         # API key ၃ ခု + quota failover (27 checks, network မလိုပါ)
+python tests/test_auth.py             # အကောင့်/session/CSRF/quota/isolation (69 checks, offline)
+python tests/test_audio_coverage.py   # narration အစအဆုံး ရောက်/မရောက် (16 checks, ffmpeg လိုသည်)
+python tests/test_narration_fit.py    # narration budget · mode ခွဲခြားမှု · link import (39 checks)
+
+# Front-end (jsdom)
+npm install jsdom
+node tests/test_ui_preview.mjs                                           # 31 checks (server မလိုပါ)
+node tests/test_ui_auth.mjs http://127.0.0.1:8000 myname 'မိမိစကားဝှက်'   # 17 checks (server လိုသည်)
 
 # Deploy လုပ်ပြီးသော server (AWS/Render) ကို စစ်ရန် — dependencies မလိုပါ
 python tests/verify_deployment.py https://your-domain.com
+python tests/verify_deployment.py https://your-domain.com --username admin --password 'XXXX'
 python tests/verify_deployment.py https://your-domain.com --video ./clip.mp4
 ```
 
@@ -184,6 +281,11 @@ recapstudio/
   ai.py                 chunked Gemini analysis + coverage sweep
   tts.py                edge-tts parallel synthesis + time fitting
   subtitles.py          ASS/SRT builder (libass-safe escaping)
+  db.py                 SQLite schema + migrations (users/sessions/jobs/audit)
+  crypto.py             secret key + Fernet/HMAC encryption
+  auth.py               password policy, session, quota, audit
+  webauth.py            FastAPI auth guards (cookie / Bearer / access key)
+  useradmin.py          account CLI (status/create/list/passwd/…)
   render.py             single-pass master render (+ fast copy path)
   pipeline.py           orchestration / splitter / thumbnail
   jobs.py uploads.py fonts.py util.py
@@ -193,6 +295,8 @@ deploy/ec2_install.sh   Ubuntu/EC2 one-shot installer + updater (systemd)
 docs/EC2_INSTANCE_CONNECT.md  EC2 (Instance Connect) အဆင့်ဆင့် လမ်းညွှန်
 docs/AWS_DEPLOY.md      AWS guide
 tests/test_cancel.py    cancel semantics (kill → CancelledError, not a crash)
+tests/test_real_run.py  non-demo analysis run (offline stub client)
+tests/test_self_attrs.py static: undefined self.<name> attributes
 tests/test_ai_parts.py  AI content parts (file uri / mime type regression)
 tests/smoke_test.py     offline end-to-end test
 ```

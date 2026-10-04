@@ -32,9 +32,14 @@
     pollErrors: 0,
     lastJobId: localStorage.getItem('rs_last_job') || null,
     splitJobId: null,
+    splitParts: [],          // last Shorts Splitter result (→ Studio hand-off)
     logoPos: { x: 82, y: 4 },
     subPosPercent: 22,
-    accessOk: true
+    ctaVisible: true,        // is the big One-Click button on screen?
+    accessOk: true,
+    auth: null,              // /api/auth/me payload
+    authReady: false,
+    users: []
   };
 
   // Fallback catalog so the Studio is usable while /api/system is loading
@@ -71,13 +76,29 @@
   // ── api helper ───────────────────────────────────────────────────────
   function accessKey() { return LS.get('rs_access', '') || ''; }
 
+  // CSRF: the server sets a readable `recap_csrf` cookie next to the
+  // HttpOnly session cookie; every unsafe request must echo it back.
+  function csrfToken() {
+    const match = document.cookie.match(/(?:^|;\s*)recap_csrf=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : '';
+  }
+
+  function authHeaders(method = 'GET') {
+    const headers = {};
+    if (accessKey()) headers['X-Access-Key'] = accessKey();
+    const token = csrfToken();
+    if (token && !['GET', 'HEAD', 'OPTIONS'].includes(String(method).toUpperCase())) {
+      headers['X-CSRF-Token'] = token;
+    }
+    return headers;
+  }
+
   class ApiError extends Error {
     constructor(message, status) { super(message); this.status = status; }
   }
 
   async function api(path, { method = 'GET', body, form, signal, timeout = 30000, retries = 0 } = {}) {
-    const headers = {};
-    if (accessKey()) headers['X-Access-Key'] = accessKey();
+    const headers = authHeaders(method);
     let payload = form;
     if (body !== undefined) {
       headers['Content-Type'] = 'application/json';
@@ -93,12 +114,18 @@
       }
       const timer = setTimeout(() => ctrl.abort(), timeout);
       try {
-        const res = await fetch(path, { method, headers, body: payload, signal: ctrl.signal });
+        const res = await fetch(path, {
+          method, headers, body: payload, signal: ctrl.signal, credentials: 'same-origin'
+        });
         const text = await res.text();
         let data = null;
         try { data = text ? JSON.parse(text) : null; } catch { data = null; }
         if (!res.ok) {
           const detail = (data && (data.detail || data.message)) || text || `HTTP ${res.status}`;
+          // session expired / signed out elsewhere → back to the login screen
+          if (res.status === 401 && state.authReady && !path.startsWith('/api/auth/')) {
+            onSessionLost();
+          }
           throw new ApiError(typeof detail === 'string' ? detail : JSON.stringify(detail), res.status);
         }
         return data;
@@ -157,6 +184,12 @@
       b.classList.toggle('active', b.dataset.tab === name));
     if (name === 'jobs') loadJobs();
     if (name === 'settings') refreshSystem();
+    // a hidden panel measures 0×0 — re-measure once it is on screen again
+    if (name === 'studio') {
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(applyPreviewGeometry);
+      else applyPreviewGeometry();
+    }
+    syncRunBar();
   }
 
   /* ══════════════════════════ UPLOADS ═══════════════════════════════ */
@@ -195,7 +228,8 @@
   function renderPreviewMeta() {
     const box = $('preview-meta');
     if (!box) return;
-    const src = state.splitVideo || state.video;
+    // the Studio source is what One-Click renders, so it owns the preview
+    const src = state.video || state.splitVideo;
     if (!src) { box.innerHTML = '<span class="chip muted">ဗီဒီယို မတင်ရသေးပါ</span>'; return; }
     box.innerHTML = [
       `<span class="chip violet">🎞️ ${escapeHtml(String(src.name || 'video')).slice(0, 42)}</span>`,
@@ -231,6 +265,8 @@
     }, localThumb);
     if (localThumb) $('preview-video').src = localThumb;
     $('parts-estimate').style.display = 'none';
+    syncRunBar();
+    applyPreviewGeometry();          // "မူရင်း" aspect depends on the source
     estimateSplitParts();
   }
 
@@ -262,7 +298,8 @@
             activeUpload = xhr;
             xhr.open('POST', '/api/upload/chunk');
             xhr.timeout = 180000;
-            if (accessKey()) xhr.setRequestHeader('X-Access-Key', accessKey());
+            xhr.withCredentials = true;
+            Object.entries(authHeaders('POST')).forEach(([k, v]) => xhr.setRequestHeader(k, v));
             if (signal) signal.addEventListener('abort', () => { try { xhr.abort(); } catch { /* ignore */ } }, { once: true });
             xhr.upload.onprogress = (e) => {
               if (!onProgress) return;
@@ -458,15 +495,85 @@
     }
   };
 
-  /* ══════════════════ PREVIEW OVERLAYS (drag) ═══════════════════════ */
-  function styleSubtitleOverlay() {
+  /* ══════════════════ PREVIEW GEOMETRY + OVERLAYS (drag) ════════════
+     v4.3 — WYSIWYG preview.
+     The box used to be locked to 9:16 by CSS, so a 16:9 or 1:1 export was
+     previewed inside the wrong frame and every overlay percentage was
+     measured against a box that did not exist in the render. Now the box
+     copies the exact output frame (pipeline._target_size) and every overlay
+     is scaled by  (box height in px ÷ output height in px), which is the
+     same transform libass applies to the ASS PlayRes (subtitles.build_ass).
+       · subtitle px   = sub_font_size × scale          (ASS Fontsize)
+       · hook px       = 0.058 × output width × scale   (ASS HookStyle)
+       · subtitle bottom = sub_v_pos_percent %          (ASS MarginV)
+       · hook top        = 6 %                          (ASS MarginV 0.06·h)
+       · side margins    = 5 % / 4 %                    (ASS MarginL/R)
+       · logo width      = 16 %                         (render.py scale) */
+  const FRAME_PRESETS = { '9:16': [720, 1280], '1:1': [1080, 1080], '16:9': [1280, 720] };
+
+  /** The frame ffmpeg will actually produce for the current settings. */
+  function targetFrame() {
+    const sel = $('aspect');
+    const aspect = (sel && sel.value) || '9:16';
+    const preset = FRAME_PRESETS[aspect];
+    if (preset) return { w: preset[0], h: preset[1], label: aspect };
+    const src = state.video || state.splitVideo || {};      // "original"
+    let w = Number(src.width) || 1280;
+    let h = Number(src.height) || 720;
+    const k = Math.min(1, 1920 / Math.max(w, h));           // pipeline caps the long edge
+    w = Math.max(2, Math.round((w * k) / 2) * 2);
+    h = Math.max(2, Math.round((h * k) / 2) * 2);
+    return { w, h, label: 'မူရင်း' };
+  }
+
+  /** px-per-output-pixel for the preview box (0 while the panel is hidden). */
+  function previewScale(frame) {
+    const wrap = $('preview-wrap');
+    if (!wrap) return 0;
+    const f = frame || targetFrame();
+    const rect = wrap.getBoundingClientRect();
+    const h = rect.height || (rect.width ? (rect.width * f.h) / f.w : 0)
+              || (wrap.clientWidth ? (wrap.clientWidth * f.h) / f.w : 0);
+    return h ? h / f.h : 0;
+  }
+
+  /** Re-shape the preview box to the output frame and restyle every overlay. */
+  function applyPreviewGeometry() {
+    const wrap = $('preview-wrap');
+    if (!wrap) return;
+    const frame = targetFrame();
+    wrap.style.aspectRatio = `${frame.w} / ${frame.h}`;
+    wrap.style.setProperty('--frame-ar-num', (frame.w / frame.h).toFixed(5));
+    const video = $('preview-video');
+    const reframe = $('reframe');
+    if (video) {
+      // "Center Crop" fills the frame exactly like ffmpeg's crop filter,
+      // every other mode letterboxes — mirror that instead of always fitting.
+      video.style.objectFit = (reframe && /crop/i.test(reframe.value)) ? 'cover' : 'contain';
+    }
+    const chip = $('preview-frame');
+    if (chip) chip.textContent = `${frame.w}×${frame.h} · ${frame.label}`;
+    styleSubtitleOverlay(frame);
+    styleHookOverlay(frame);
+    const lbl = $('lbl-preview-scale');
+    if (lbl) {
+      const pct = Math.round(previewScale(frame) * 100);
+      lbl.textContent = pct ? pct + '%' : '—';
+    }
+  }
+
+  function styleSubtitleOverlay(frame) {
     const el = $('overlay-sub');
+    if (!el) return;
+    const f = frame || targetFrame();
     const size = Number($('sub-font').value);
     const color = $('sub-color').value;
     const bg = $('sub-bg').value;
     $('lbl-font').textContent = size;
     el.style.color = color;
-    el.style.fontSize = Math.max(10, Math.round(size * 0.5)) + 'px';
+    const scale = previewScale(f);
+    el.style.fontSize = Math.max(9, Math.round(size * (scale || 0.44))) + 'px';
+    el.style.maxWidth = '90%';                     // ASS MarginL/R = 5% each
     if (bg === 'Outline Only') {
       el.style.background = 'transparent';
       el.style.textShadow = '0 0 6px #000, 0 0 6px #000';
@@ -476,10 +583,31 @@
     }
   }
 
+  function styleHookOverlay(frame) {
+    const el = $('overlay-hook');
+    if (!el) return;
+    const f = frame || targetFrame();
+    const scale = previewScale(f);
+    const px = 0.058 * f.w * (scale || 0.44);      // ASS HookStyle Fontsize
+    el.style.fontSize = Math.max(10, Math.round(px)) + 'px';
+    el.style.top = '6%';                           // ASS MarginV = 0.06 · height
+    el.style.width = '92%';                        // ASS MarginL/R = 4% each
+  }
+
+  const FILL_MODE_HELP = {
+    continuous: 'ဇာတ်လမ်းတစ်ခုလုံးကို ကိုယ်ပိုင်စကားဖြင့် အစမှအဆုံး ပြောပြသည် — narrator ဘယ်တော့မှ မရပ် (recap channel ပုံစံ)။',
+    dialogue: 'ဇာတ်ကောင် တကယ် စကားပြောသည့် အချိန်များကိုသာ ဒပ်ဘ်လုပ်သည် — တိတ်ဆိတ်ချိန်တွင် စကား ထပ်မထည့်ပါ၊ အချိန်ကိုက် တိကျသည်။'
+  };
+  function syncFillModeHelp() {
+    const el = $('fill-mode-help');
+    if (el) el.textContent = FILL_MODE_HELP[$('fill-mode').value] || FILL_MODE_HELP.continuous;
+  }
+
   function updateHookOverlay() {
     const h1 = $('hook1').value.trim(), h2 = $('hook2').value.trim();
     $('overlay-hook').innerHTML = h1 || h2
       ? `${escapeHtml(h1)}<small>${escapeHtml(h2)}</small>` : '';
+    styleHookOverlay();
   }
 
   function setSubPos(percent) {
@@ -490,12 +618,17 @@
 
   function setLogoPos(x, y) {
     state.logoPos = {
-      x: Math.max(0, Math.min(88, Math.round(x))),
-      y: Math.max(0, Math.min(88, Math.round(y)))
+      x: Math.max(0, Math.min(100, Math.round(x))),
+      y: Math.max(0, Math.min(100, Math.round(y)))
     };
     const el = $('overlay-logo');
+    // ffmpeg places the badge at (main_w-overlay_w)·p — i.e. the percentage is
+    // an *inset inside the free space*, not a raw left offset. left:p% plus
+    // translate(-p%) reproduces that identity exactly, so 100% sits flush with
+    // the right/bottom edge in the preview and in the render alike.
     el.style.left = state.logoPos.x + '%';
     el.style.top = state.logoPos.y + '%';
+    el.style.transform = `translate(${-state.logoPos.x}%, ${-state.logoPos.y}%)`;
     $('lbl-logo-pos').textContent = `x:${state.logoPos.x}% y:${state.logoPos.y}%`;
   }
 
@@ -509,7 +642,7 @@
       const point = e.touches ? e.touches[0] : e;
       const xPct = ((point.clientX - rect.left) / rect.width) * 100;
       const yPct = ((point.clientY - rect.top) / rect.height) * 100;
-      handler(Math.max(0, Math.min(100, xPct)), Math.max(0, Math.min(100, yPct)));
+      handler(Math.max(0, Math.min(100, xPct)), Math.max(0, Math.min(100, yPct)), rect, el);
       e.preventDefault();
     };
     const end = () => { dragging = false; };
@@ -520,8 +653,22 @@
     window.addEventListener('mouseup', end);
     window.addEventListener('touchend', end);
   }
-  bindDrag($('overlay-sub'), (x, y) => setSubPos(100 - y));
-  bindDrag($('overlay-logo'), (x, y) => setLogoPos(x, y));
+  // grab the subtitle by its middle, not by its baseline
+  bindDrag($('overlay-sub'), (x, y, rect, el) => {
+    const half = rect.height ? ((el.offsetHeight || 0) / 2 / rect.height) * 100 : 0;
+    setSubPos(100 - y - half);
+  });
+  // the logo follows the cursor centre, mapped into ffmpeg's free-space ratio
+  bindDrag($('overlay-logo'), (x, y, rect, el) => {
+    const lw = el.offsetWidth || rect.width * 0.16;
+    const lh = el.offsetHeight || lw;
+    const freeW = Math.max(1, rect.width - lw);
+    const freeH = Math.max(1, rect.height - lh);
+    setLogoPos(
+      (((x / 100) * rect.width - lw / 2) / freeW) * 100,
+      (((y / 100) * rect.height - lh / 2) / freeH) * 100
+    );
+  });
   setSubPos(22);
 
   /* ══════════════════════ VOICES / SETTINGS ════════════════════════ */
@@ -622,6 +769,38 @@
       btn.disabled = false;
     }
   };
+
+  /* ── phones & tablets: a sticky One-Click bar once the big CTA scrolls
+     out of view, so the main action is always one thumb-tap away ─────── */
+  function syncRunBar() {
+    const bar = $('mobile-run-bar');
+    if (!bar) return;
+    const studio = $('tab-studio');
+    const onStudio = !!studio && !studio.classList.contains('hidden');
+    const ready = !!(state.video && state.video.path);
+    bar.classList.toggle('show', onStudio && ready && state.ctaVisible === false);
+    const btn = $('btn-run-mobile');
+    const cta = $('btn-start');
+    if (btn && cta) {
+      btn.disabled = cta.disabled;
+      btn.textContent = cta.disabled ? '⏳ လုပ်ဆောင်နေသည်…' : '⚡ One-Click Recap စမည်';
+    }
+  }
+
+  function bindRunBar() {
+    const bar = $('mobile-run-bar');
+    const cta = $('btn-start');
+    if (!bar || !cta) return;
+    const btn = $('btn-run-mobile');
+    if (btn) btn.onclick = () => { cta.click(); syncRunBar(); };
+    if (typeof IntersectionObserver === 'function') {
+      new IntersectionObserver((entries) => {
+        entries.forEach((entry) => { state.ctaVisible = entry.isIntersecting; });
+        syncRunBar();
+      }, { rootMargin: '-10px 0px -70px 0px' }).observe(cta);
+    }
+    setInterval(syncRunBar, 2000);   // mirrors the CTA's disabled state
+  }
 
   function renderStages(stages = {}) {
     const defs = [
@@ -934,7 +1113,8 @@
     try {
       const res = await fetch('/api/thumbnail', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(accessKey() ? { 'X-Access-Key': accessKey() } : {}) },
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', ...authHeaders('POST') },
         body: JSON.stringify({
           video_path: source.path,
           timestamp: Number($('thumb-sec').value) || 2.5,
@@ -1068,16 +1248,47 @@
     if (parts.length) toast(`အပိုင်း ${parts.length} ခု ခွဲထုတ်ပြီးပါပြီ`, 'ok');
   }
 
+  /** Hand a finished clip straight back to the Studio for a one-click recap. */
+  function sendPartToStudio(part) {
+    if (!part) return;
+    if (!part.path) {
+      return toast('ဤအပိုင်းကို Studio သို့ မပို့နိုင်ပါ — ပြန်ခွဲထုတ်ကြည့်ပါ', 'err', 8000);
+    }
+    applyVideoResult({
+      video_path: part.path,
+      duration: part.duration,
+      width: part.width,
+      height: part.height,
+      size: part.size,
+      preview_url: part.preview_url || part.url,
+      filename: part.filename || `part_${part.part}.mp4`
+    }, null);
+    switchTab('studio');
+    const card = $('preview-card');
+    if (card && card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const cta = $('btn-start');
+    if (cta) {
+      cta.classList.add('pulse');
+      setTimeout(() => cta.classList.remove('pulse'), 4200);
+    }
+    toast(`Part ${part.part} ကို Studio သို့ ပို့ပြီးပါပြီ — ⚡ One-Click နှိပ်ရုံပါပဲ`, 'ok', 8000);
+  }
+
   function renderSplitParts(parts) {
-    $('split-results').innerHTML = (parts || []).map((p) => `
-      <div class="card" style="padding:12px">
+    state.splitParts = parts || [];
+    $('split-results').innerHTML = (parts || []).map((p, i) => `
+      <div class="card part-card" style="padding:12px">
         <b>Part ${p.part}</b>
         <p class="sub">${p.duration}s · ${fmtBytes(p.size)}</p>
         <div class="btn-row">
+          ${p.path ? `<button class="btn small primary" data-to-studio="${i}">🎬 Studio သို့ ပို့မည်</button>` : ''}
           <a class="btn small success" href="${p.url}" download>📥 ဒေါင်းလုဒ်</a>
           <a class="btn small ghost" href="${p.preview_url || p.url}" target="_blank" rel="noopener">▶ ကြည့်</a>
         </div>
       </div>`).join('') || '<p class="empty">အပိုင်း မထွက်ပါ</p>';
+    $('split-results').querySelectorAll('[data-to-studio]').forEach((btn) => {
+      btn.onclick = () => sendPartToStudio(state.splitParts[Number(btn.dataset.toStudio)]);
+    });
     if (parts && parts.length) {
       const bar = document.createElement('div');
       bar.className = 'btn-row';
@@ -1174,6 +1385,7 @@
       const info = await api('/api/system', { timeout: 15000, retries: 1 });
       state.catalog = info;
       state.serverOk = true;
+      if (info.version && $('app-version')) $('app-version').textContent = `v${info.version}`;
       state.accessOk = info.access_ok !== false;
       renderStatusChips(info);
       setConnBanner(false);
@@ -1385,12 +1597,43 @@
   function bindUiSync() {
     $('lang').addEventListener('change', () => { renderVoices(); persistUiState(); });
     $('voice').addEventListener('change', persistUiState);
-    ['mode', 'fill-mode', 'quality', 'aspect', 'reframe'].forEach((id) =>
+    ['mode', 'quality'].forEach((id) =>
       $(id).addEventListener('change', persistUiState));
+    // 🎬 recap vs 🎭 dubbing behave very differently — say so out loud
+    $('fill-mode').addEventListener('change', () => { syncFillModeHelp(); persistUiState(); });
+    // the output frame changed → the preview box must change with it
+    ['aspect', 'reframe'].forEach((id) =>
+      $(id).addEventListener('change', () => { applyPreviewGeometry(); persistUiState(); }));
     $('model').addEventListener('change', () => { LS.set('rs_model', $('model').value); });
     ['sub-font', 'sub-color', 'sub-bg'].forEach((id) => {
       $(id).addEventListener('input', () => { styleSubtitleOverlay(); persistUiState(); });
     });
+    // keep the overlays pixel-accurate on rotate / resize / responsive reflow
+    let geomRaf = 0;
+    const reflow = () => {
+      if (geomRaf) return;
+      const run = () => { geomRaf = 0; applyPreviewGeometry(); };
+      geomRaf = (typeof requestAnimationFrame === 'function')
+        ? requestAnimationFrame(run) : setTimeout(run, 60);
+    };
+    window.addEventListener('resize', reflow);
+    window.addEventListener('orientationchange', reflow);
+    if (typeof ResizeObserver === 'function' && $('preview-wrap')) {
+      new ResizeObserver(reflow).observe($('preview-wrap'));
+    }
+    const pv = $('preview-video');
+    if (pv) {
+      pv.addEventListener('loadedmetadata', () => {
+        // a source without probe data (restored entry, split part) still gets
+        // a correct "မူရင်း" frame once the browser knows the real size
+        if (state.video && (!state.video.width || !state.video.height)
+            && pv.videoWidth && pv.videoHeight) {
+          state.video.width = pv.videoWidth;
+          state.video.height = pv.videoHeight;
+        }
+        applyPreviewGeometry();
+      });
+    }
     ['hook1', 'hook2'].forEach((id) => $(id).addEventListener('input', () => {
       updateHookOverlay(); persistUiState();
     }));
@@ -1449,7 +1692,7 @@
     if (saved && saved.path) {
       try {
         const res = await fetch(`/api/asset?path=${encodeURIComponent(saved.path)}`, {
-          method: 'HEAD', headers: accessKey() ? { 'X-Access-Key': accessKey() } : {}
+          method: 'HEAD', credentials: 'same-origin', headers: authHeaders('HEAD')
         });
         if (res.ok) {
           state.video = saved;
@@ -1458,6 +1701,7 @@
             info: `${fmtTime(saved.duration)} · ${saved.width || '?'}×${saved.height || '?'} · ${fmtBytes(saved.size)}`
           }, saved.previewUrl);
           if (saved.previewUrl) $('preview-video').src = saved.previewUrl;
+          applyPreviewGeometry();
           estimateSplitParts();
         } else {
           LS.del('rs_video');
@@ -1496,20 +1740,328 @@
     } catch { /* offline: the key stays in the browser and is retried later */ }
   }
 
-  let initDone = false;
-  async function init() {
-    if (initDone) return;           // DOMContentLoaded + readyState race guard
-    initDone = true;
-    restoreUiState();
-    bindUiSync();
-    styleSubtitleOverlay();
-    updateHookOverlay();
-    renderPreviewMeta();
-    $('original-audio-row').classList.toggle('hidden', $('mute-original').checked);
+  // ══════════════════════════════════════════════════════════════════
+  // Authentication (Phase 2) — login gate, account chip, admin panel
+  // ══════════════════════════════════════════════════════════════════
+  let authMode = 'open';
+  let signupView = false;
 
-    // 1) paint the UI immediately from the built-in catalog …
-    renderModels();
-    renderVoices();
+  function showAuthError(message) {
+    const box = $('auth-error');
+    if (!box) return;
+    if (!message) { box.classList.add('hidden'); box.textContent = ''; return; }
+    box.textContent = message;
+    box.classList.remove('hidden');
+  }
+
+  function renderAuthForm() {
+    const state_ = state.auth || {};
+    const legacy = state_.mode === 'legacy';
+    const firstRun = (state_.mode === 'users' || state_.mode === 'open')
+      && state_.has_users === false;
+    const setupMode = state_.mode === 'open' && state_.has_users === false;
+    $('auth-skip') && $('auth-skip').classList.toggle('hidden', !setupMode);
+    const canSignup = Boolean(state_.signup_enabled) || firstRun;
+    signupView = firstRun ? true : signupView;
+
+    $('auth-access-row').classList.toggle('hidden', !legacy);
+    $('auth-username').closest('.field').classList.toggle('hidden', legacy);
+    $('auth-password').closest('.field').classList.toggle('hidden', legacy);
+    $('auth-confirm-row').classList.toggle('hidden', legacy || !signupView);
+    $('auth-invite-row').classList.toggle('hidden',
+      legacy || !signupView || firstRun || !state_.signup_code_required);
+    $('auth-toggle').classList.toggle('hidden', legacy || !canSignup || firstRun);
+    $('auth-toggle').textContent = signupView
+      ? '← ရှိပြီးသား အကောင့်ဖြင့် ဝင်မည်' : 'အကောင့် အသစ် ဖွင့်မည်';
+
+    if (legacy) {
+      $('auth-subtitle').textContent = 'ဤ server တွင် Access Key လိုအပ်ပါသည်';
+      $('auth-submit').textContent = '🔓 ချိတ်ဆက်မည်';
+      $('auth-hint').textContent = 'Server ၏ .env ထဲက RECAP_ACCESS_PASSWORD ကို ထည့်ပါ။';
+    } else if (firstRun) {
+      $('auth-subtitle').textContent = 'ပထမဆုံး အကောင့် (admin) ကို ဖန်တီးပါ';
+      $('auth-submit').textContent = '🚀 Admin အကောင့် ဖန်တီးမည်';
+      $('auth-hint').textContent = setupMode
+        ? 'ဤ server ကို လက်ရှိတွင် မည်သူမဆို ဝင်နိုင်နေပါသည်။ admin အကောင့် ဖန်တီးလိုက်သည်နှင့် '
+          + 'login စနစ် အလိုအလျောက် ဖွင့်သွားပါမည် (terminal မလိုပါ)။'
+        : 'ဤ server တွင် အကောင့် မရှိသေးပါ — ယခု ဖန်တီးသူသည် admin ဖြစ်ပါမည်။';
+    } else if (signupView) {
+      $('auth-subtitle').textContent = 'အကောင့် အသစ် ဖွင့်ရန်';
+      $('auth-submit').textContent = '➕ အကောင့် ဖွင့်မည်';
+      $('auth-hint').textContent =
+        `စကားဝှက် အနည်းဆုံး ${state_.password_min_length || 10} လုံး — စာလုံးနှင့် ဂဏန်း ရောပါရမည်။`;
+    } else {
+      $('auth-subtitle').textContent = 'ဆက်လက် အသုံးပြုရန် အကောင့်ဖြင့် ဝင်ပါ';
+      $('auth-submit').textContent = '🔓 ဝင်မည် (Sign in)';
+      $('auth-hint').textContent = 'အကောင့် မရှိသေးပါက server admin ထံ တောင်းဆိုပါ။';
+    }
+  }
+
+  function showAuthOverlay(show) {
+    const overlay = $('auth-overlay');
+    if (!overlay) return;
+    overlay.classList.toggle('hidden', !show);
+    document.body.style.overflow = show ? 'hidden' : '';
+    if (show) {
+      renderAuthForm();
+      setTimeout(() => {
+        const field = (state.auth && state.auth.mode === 'legacy')
+          ? $('auth-access') : $('auth-username');
+        field && field.focus();
+      }, 60);
+    }
+  }
+
+  function renderAccountChip() {
+    const box = $('account-box');
+    const chip = $('chip-account');
+    const user = state.auth && state.auth.user;
+    if (!box || !chip) return;
+    const openBanner = $('open-banner');
+    if (openBanner) {
+      openBanner.classList.toggle('hidden',
+        !(authMode === 'open' && state.auth && state.auth.has_users === false));
+    }
+    if (!user || authMode === 'open') { box.classList.add('hidden'); return; }
+    box.classList.remove('hidden');
+    const role = user.role === 'admin' ? ' · admin' : '';
+    chip.textContent = `👤 ${user.username}${role}`;
+    $('account-card') && $('account-card').classList.toggle('hidden', authMode !== 'users');
+    $('acct-role') && ($('acct-role').textContent = user.role || '—');
+    const isAdmin = Boolean(user.is_admin) && authMode === 'users';
+    $('admin-card') && $('admin-card').classList.toggle('hidden', !isAdmin);
+    if (isAdmin) loadUsers();
+  }
+
+  function onSessionLost() {
+    state.auth = { ...(state.auth || {}), authenticated: false, user: null };
+    stopPolling();
+    renderAccountChip();
+    showAuthOverlay(true);
+    showAuthError('Session ကုန်ဆုံးသွားပါပြီ — ပြန်လည် ဝင်ပေးပါ။');
+  }
+
+  async function refreshAuth() {
+    try {
+      const me = await api('/api/auth/me', { timeout: 15000, retries: 1 });
+      state.auth = me;
+      authMode = me.mode || 'open';
+      state.authReady = true;
+      renderAccountChip();
+      return me;
+    } catch (err) {
+      state.auth = { mode: 'open', required: false, authenticated: true };
+      authMode = 'open';
+      state.authReady = true;
+      return state.auth;
+    }
+  }
+
+  async function submitAuth(event) {
+    event && event.preventDefault();
+    showAuthError('');
+    const btn = $('auth-submit');
+    btn.disabled = true;
+    try {
+      if (authMode === 'legacy') {
+        const key = $('auth-access').value.trim();
+        LS.set('rs_access', key);
+        await api('/api/auth/login', { body: { access_key: key }, method: 'POST' });
+      } else {
+        const username = $('auth-username').value.trim();
+        const password = $('auth-password').value;
+        if (signupView) {
+          if (password !== $('auth-password2').value) {
+            throw new ApiError('စကားဝှက် နှစ်ခု မတူညီပါ', 400);
+          }
+          await api('/api/auth/register', {
+            method: 'POST',
+            body: { username, password, invite_code: $('auth-invite').value.trim() }
+          });
+        } else {
+          await api('/api/auth/login', { method: 'POST', body: { username, password } });
+        }
+      }
+      $('auth-password').value = '';
+      $('auth-password2').value = '';
+      await refreshAuth();
+      showAuthOverlay(false);
+      toast(`မင်္ဂလာပါ ${state.auth.user ? state.auth.user.username : ''} 👋`, 'ok', 4000);
+      await bootApp();
+    } catch (err) {
+      showAuthError(err.message || 'ဝင်၍ မရပါ');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function doLogout() {
+    try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* ignore */ }
+    LS.del('rs_access');
+    stopPolling();
+    state.auth = { ...(state.auth || {}), authenticated: false, user: null };
+    renderAccountChip();
+    showAuthOverlay(true);
+    toast('ထွက်ပြီးပါပြီ', 'ok', 3000);
+  }
+
+  async function changePassword() {
+    const current = $('pw-current').value;
+    const next = $('pw-new').value;
+    if (next !== $('pw-new2').value) { toast('စကားဝှက် အသစ် နှစ်ခု မတူညီပါ', 'err'); return; }
+    try {
+      const res = await api('/api/auth/password', {
+        method: 'POST', body: { current_password: current, new_password: next }
+      });
+      toast(res.message || 'စကားဝှက် ပြောင်းပြီးပါပြီ', 'ok');
+      ['pw-current', 'pw-new', 'pw-new2'].forEach((id) => { $(id).value = ''; });
+      setTimeout(() => { onSessionLost(); }, 800);
+    } catch (err) { toast(err.message, 'err'); }
+  }
+
+  async function revokeSessions() {
+    try {
+      await api('/api/auth/sessions/revoke', { method: 'POST' });
+      toast('Device အားလုံးမှ ထွက်ပြီးပါပြီ', 'ok');
+      setTimeout(() => onSessionLost(), 600);
+    } catch (err) { toast(err.message, 'err'); }
+  }
+
+  // ── admin panel ────────────────────────────────────────────────────
+  function userRow(user) {
+    const row = document.createElement('div');
+    row.className = `user-row${user.status === 'disabled' ? ' is-disabled' : ''}`;
+    const last = user.last_login_at
+      ? new Date(user.last_login_at * 1000).toLocaleString() : 'မဝင်ဖူးသေးပါ';
+    row.innerHTML = `
+      <span class="uname">${escapeHtml(user.username)}</span>
+      <span class="badge ${user.role === 'admin' ? 'admin' : ''}">${escapeHtml(user.role)}</span>
+      <span class="umeta">နောက်ဆုံးဝင်: ${escapeHtml(last)} · job/24h: ${user.jobs_today || 0}
+        · disk: ${fmtBytes(user.disk_used || 0)}</span>
+      <span class="spacer"></span>`;
+    const mk = (label, title, handler) => {
+      const btn = document.createElement('button');
+      btn.className = 'btn small ghost';
+      btn.textContent = label;
+      btn.title = title;
+      btn.onclick = handler;
+      row.appendChild(btn);
+      return btn;
+    };
+    mk('🔑', 'စကားဝှက် reset', async () => {
+      const pw = prompt(`'${user.username}' အတွက် စကားဝှက် အသစ် (အနည်းဆုံး 10 လုံး):`);
+      if (!pw) return;
+      try {
+        await api(`/api/admin/users/${user.id}`, { method: 'PATCH', body: { password: pw } });
+        toast('စကားဝှက် ပြောင်းပြီးပါပြီ', 'ok');
+        loadUsers();
+      } catch (err) { toast(err.message, 'err'); }
+    });
+    mk(user.status === 'active' ? '🚫' : '✅',
+       user.status === 'active' ? 'အကောင့် ပိတ်မည်' : 'ပြန်ဖွင့်မည်', async () => {
+      try {
+        await api(`/api/admin/users/${user.id}`, {
+          method: 'PATCH',
+          body: { status: user.status === 'active' ? 'disabled' : 'active' }
+        });
+        loadUsers();
+      } catch (err) { toast(err.message, 'err'); }
+    });
+    mk(user.role === 'admin' ? '⬇️' : '⬆️',
+       user.role === 'admin' ? 'admin ဖြုတ်မည်' : 'admin ပေးမည်', async () => {
+      try {
+        await api(`/api/admin/users/${user.id}`, {
+          method: 'PATCH', body: { role: user.role === 'admin' ? 'user' : 'admin' }
+        });
+        loadUsers();
+      } catch (err) { toast(err.message, 'err'); }
+    });
+    mk('🗑️', 'အကောင့် ဖျက်မည်', async () => {
+      if (!confirm(`'${user.username}' ကို ဖျက်မည် — သေချာပါသလား?`)) return;
+      try {
+        await api(`/api/admin/users/${user.id}`, { method: 'DELETE' });
+        toast('ဖျက်ပြီးပါပြီ', 'ok');
+        loadUsers();
+      } catch (err) { toast(err.message, 'err'); }
+    });
+    return row;
+  }
+
+  async function loadUsers() {
+    const host = $('user-table');
+    if (!host) return;
+    try {
+      const data = await api('/api/admin/users', { timeout: 20000 });
+      state.users = data.users || [];
+      host.innerHTML = '';
+      if (!state.users.length) {
+        host.innerHTML = '<p class="help">အကောင့် မရှိသေးပါ။</p>';
+      } else {
+        state.users.forEach((user) => host.appendChild(userRow(user)));
+      }
+      const audit = await api('/api/admin/audit?limit=40', { timeout: 20000 });
+      $('audit-log').textContent = (audit.entries || []).map((e) => {
+        const when = new Date(e.created_at * 1000).toLocaleString();
+        return `${when}  ${e.action}  ${e.username || '-'}  ${e.target || ''} ${e.detail || ''}`
+          .trim();
+      }).join('\n') || 'မှတ်တမ်း မရှိသေးပါ';
+    } catch (err) {
+      host.innerHTML = `<p class="help">အသုံးပြုသူစာရင်း မရယူနိုင်ပါ — ${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  async function createUser() {
+    const username = $('new-username').value.trim();
+    const password = $('new-password').value;
+    try {
+      await api('/api/admin/users', {
+        method: 'POST',
+        body: { username, password, admin: $('new-admin').checked, must_change_password: false }
+      });
+      toast(`'${username}' အကောင့် ဖန်တီးပြီးပါပြီ`, 'ok');
+      $('new-username').value = '';
+      $('new-password').value = '';
+      $('new-admin').checked = false;
+      loadUsers();
+    } catch (err) { toast(err.message, 'err'); }
+  }
+
+  function randomPassword() {
+    const chars = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%&*-_';
+    const bytes = new Uint32Array(18);
+    (window.crypto || window.msCrypto).getRandomValues(bytes);
+    const pw = Array.from(bytes, (b) => chars[b % chars.length]).join('');
+    $('new-password').value = pw;
+    $('new-password').type = 'text';
+    toast('စကားဝှက် ကျပန်း ထုတ်ပြီးပါပြီ — မှတ်သားထားပါ', 'warn', 9000);
+  }
+
+  function bindAuthUi() {
+    $('auth-form') && ($('auth-form').onsubmit = submitAuth);
+    $('auth-toggle') && ($('auth-toggle').onclick = () => {
+      signupView = !signupView;
+      showAuthError('');
+      renderAuthForm();
+    });
+    $('auth-skip') && ($('auth-skip').onclick = () => {
+      LS.set('rs_setup_skipped', '1');
+      showAuthOverlay(false);
+      bootApp();
+    });
+    $('btn-logout') && ($('btn-logout').onclick = doLogout);
+    $('btn-change-pw') && ($('btn-change-pw').onclick = changePassword);
+    $('btn-revoke-sessions') && ($('btn-revoke-sessions').onclick = revokeSessions);
+    $('btn-refresh-users') && ($('btn-refresh-users').onclick = loadUsers);
+    $('btn-create-user') && ($('btn-create-user').onclick = createUser);
+    $('btn-random-pw') && ($('btn-random-pw').onclick = randomPassword);
+  }
+
+  let initDone = false;
+  let appBooted = false;
+
+  async function bootApp() {
+    if (appBooted) return;
+    appBooted = true;
     // 2) … then upgrade from the server (never blocks the page)
     refreshSystem();
     restoreKeys();
@@ -1527,6 +2079,40 @@
       } catch { /* stale id */ }
     }
     setInterval(refreshSystem, 120000);   // keep the top bar (key/disk) fresh
+  }
+
+  async function init() {
+    if (initDone) return;           // DOMContentLoaded + readyState race guard
+    initDone = true;
+    restoreUiState();
+    bindUiSync();
+    bindAuthUi();
+    bindRunBar();
+    updateHookOverlay();
+    syncFillModeHelp();
+    applyPreviewGeometry();
+    renderPreviewMeta();
+    $('original-audio-row').classList.toggle('hidden', $('mute-original').checked);
+
+    // 1) paint the UI immediately from the built-in catalog …
+    renderModels();
+    renderVoices();
+
+    // 2) is a sign-in required on this deployment?
+    const me = await refreshAuth();
+    if (me.required && !me.authenticated) {
+      showAuthOverlay(true);
+      return;                       // the rest boots after a successful login
+    }
+    // Unprotected deployment (no accounts yet): offer the one-screen admin
+    // setup instead of silently letting everyone in. Skippable for localhost.
+    if (me.has_users === false && me.mode === 'open' && !LS.get('rs_setup_skipped')) {
+      await bootApp();              // the studio stays usable behind the card
+      showAuthOverlay(true);
+      return;
+    }
+    showAuthOverlay(false);
+    await bootApp();
   }
 
   window.addEventListener('beforeunload', stopPolling);

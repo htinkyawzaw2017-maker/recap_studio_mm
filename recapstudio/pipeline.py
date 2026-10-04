@@ -22,7 +22,7 @@ from .media import process_registry
 from .media import get_media_duration, get_video_info, run_ffmpeg
 from .render import export_srt, render_master
 from .subtitles import build_ass
-from .tts import VOICE_CATALOG, master_audio, tts_engine
+from .tts import (VOICE_CATALOG, fit_lines_to_windows, master_audio, tts_engine)
 from .util import (CancelledError, ensure_disk_space, get_logger, human_bytes,
                    human_time, safe_rmtree)
 
@@ -157,6 +157,21 @@ class RecapPipeline:
                               f"coverage={coverage.get('coverage_percent')}%")
             self.store.raise_if_cancelled(job_id)
 
+            # ── 1b. narration length budget ───────────────────────────
+            # A line that needs 9 seconds to read but only owns a 4 second
+            # window used to be rescued by speeding the voice up, which is
+            # what made the narration sound rushed (#2). Trim it to what can
+            # be spoken calmly — the subtitle then shows exactly what is said.
+            dialogues, condensed = fit_lines_to_windows(
+                dialogues, duration, payload.get("lang", "my"))
+            if condensed:
+                store.log(job_id, f"✂️ စာကြောင်း {condensed} ကြောင်းကို အချိန်ကိုက် တိုအောင် ချုံ့လိုက်သည် "
+                                  f"(အသံ မြန်လွန်းခြင်း မဖြစ်စေရန်)")
+                store.update(job_id, dialogues=dialogues,
+                             stats={**store.get(job_id).stats,
+                                    "script": {"condensed_lines": condensed,
+                                               "total_lines": len(dialogues)}})
+
             # ── 2. voice ──────────────────────────────────────────────
             voice_cfg = _voice_config(payload.get("lang", "my"), payload.get("voice", "thiha"))
             alt_voice_cfg = _fallback_voice(payload.get("lang", "my"), payload.get("voice", "thiha"))
@@ -231,7 +246,8 @@ class RecapPipeline:
             store.update(job_id, stage="render", message="🎬 Final Video Render စတင်နေပါသည်...")
             render_prog = self._stage(job_id, "render")
             output_name = f"recap_{job_id}.mp4"
-            output_path = str(config.OUTPUT_DIR / output_name)
+            # multi-user: artefacts live in the owner's output sandbox
+            output_path = str(config.user_output_dir(store.owner_of(job_id)) / output_name)
             logo_path = payload.get("logo_path")
             logo_pos = None
             if logo_path and payload.get("logo_pos_x") is not None and payload.get("logo_pos_y") is not None:
@@ -438,7 +454,8 @@ class RecapPipeline:
 
             parts = self.split_video(video_path=video_path, slice_sec=slice_sec,
                                      aspect=aspect, progress=_progress,
-                                     cancel=self._cancel(job_id), owner=job_id)
+                                     cancel=self._cancel(job_id), owner=job_id,
+                                     out_dir=config.user_output_dir(store.owner_of(job_id)))
             if not parts:
                 raise RuntimeError("အပိုင်း မထွက်ပါ — ဗီဒီယိုဖိုင် ပျက်နိုင်ပါသည်။")
             store.update(job_id, status="completed", progress=100, stage="finalize",
@@ -517,7 +534,7 @@ class RecapPipeline:
 
             store.update(job_id, stage="render", message="🎬 ဗီဒီယို ပြန်လည် ထုတ်လုပ်နေပါသည်...")
             output_name = f"recap_{job_id}_v{int(time.time())}.mp4"
-            output_path = str(config.OUTPUT_DIR / output_name)
+            output_path = str(config.user_output_dir(store.owner_of(job_id)) / output_name)
             logo_path = payload.get("logo_path", job.request.get("logo_path"))
             logo_pos = None
             if logo_path and payload.get("logo_pos_x") is not None and payload.get("logo_pos_y") is not None:
@@ -563,20 +580,22 @@ class RecapPipeline:
                         srt_path: Optional[str], narration_mp3: str) -> dict[str, Any]:
         extras: dict[str, Any] = {}
         base = Path(output_path).stem
+        out_dir = Path(output_path).parent
+        out_dir.mkdir(parents=True, exist_ok=True)
         try:
             if srt_path and Path(srt_path).exists():
-                target = config.OUTPUT_DIR / f"{base}.srt"
+                target = out_dir / f"{base}.srt"
                 shutil.copyfile(srt_path, target)
                 extras["srt_url"] = f"/api/download/{target.name}"
             if ass_path and Path(ass_path).exists():
-                target = config.OUTPUT_DIR / f"{base}.ass"
+                target = out_dir / f"{base}.ass"
                 shutil.copyfile(ass_path, target)
                 extras["ass_url"] = f"/api/download/{target.name}"
         except Exception as exc:
             log.warning("publishing subtitle files failed: %s", exc)
         try:
             if narration_mp3 and Path(narration_mp3).exists():
-                target = config.OUTPUT_DIR / f"{base}_narration.mp3"
+                target = out_dir / f"{base}_narration.mp3"
                 shutil.copyfile(narration_mp3, target)
                 extras["audio_url"] = f"/api/download/{target.name}"
         except Exception as exc:
@@ -664,7 +683,7 @@ class RecapPipeline:
     def split_video(self, video_path: str, slice_sec: int, aspect: str,
                     progress: Optional[callable] = None,
                     cancel: Optional[callable] = None,
-                    owner: str = "") -> list[dict]:
+                    owner: str = "", out_dir: Optional[Path] = None) -> list[dict]:
         info = get_video_info(video_path)
         duration = info["duration"]
         if duration <= 0:
@@ -687,7 +706,7 @@ class RecapPipeline:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
                 pool.submit(self._split_one, video_path, index, start, length,
-                            aspect, info, tag, cancel, owner): index
+                            aspect, info, tag, cancel, owner, out_dir): index
                 for index, start, length in jobs
             }
             done = 0
@@ -712,11 +731,13 @@ class RecapPipeline:
     def _split_one(self, video_path: str, index: int, start: float, length: float,
                    aspect: str, info: dict, tag: str,
                    cancel: Optional[callable] = None,
-                   owner: str = "") -> Optional[dict]:
+                   owner: str = "", out_dir: Optional[Path] = None) -> Optional[dict]:
         if cancel and cancel():
             raise CancelledError("ခွဲထုတ်ခြင်းကို ရပ်လိုက်ပါပြီ")
         name = f"part_{index + 1:02d}_{tag}.mp4"
-        out_path = config.OUTPUT_DIR / name
+        target_dir = Path(out_dir) if out_dir else config.OUTPUT_DIR
+        target_dir.mkdir(parents=True, exist_ok=True)
+        out_path = target_dir / name
         same_aspect = False
         if aspect == "original":
             same_aspect = True
@@ -749,11 +770,21 @@ class RecapPipeline:
             ], check=True, cancel=cancel, owner=owner)
         if not out_path.exists() or out_path.stat().st_size < 2048:
             return None
+        # width/height + the workspace-relative path let the SPA hand a part
+        # straight back to the Studio ("✂ Splitter → 🎬 Studio → recap").
+        try:
+            part_info = get_video_info(str(out_path))
+        except Exception:  # noqa: BLE001 - probing a part must never fail the split
+            part_info = {}
         return {
             "part": index + 1,
             "filename": name,
             "url": f"/api/download/{name}",
             "preview_url": f"/api/asset?path={config.rel(out_path)}",
-            "duration": round(get_media_duration(out_path), 2),
+            "path": config.rel(out_path),
+            "width": part_info.get("width"),
+            "height": part_info.get("height"),
+            "duration": round(float(part_info.get("duration")
+                                    or get_media_duration(out_path)), 2),
             "size": out_path.stat().st_size,
         }

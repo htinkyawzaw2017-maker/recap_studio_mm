@@ -114,9 +114,9 @@ ssh -i ~/Downloads/recap-key.pem ubuntu@13.212.45.67
 ### 🚀 အမြန်ဆုံးနည်းလမ်း — command တစ်ကြောင်းတည်း
 
 ```bash
-curl -fsSL https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a1027a-recap-studio-mm \
+curl -fsSL https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm \
   | tar xz -C /tmp \
-  && sudo bash /tmp/recap_studio_mm-arena-01a1027a-recap-studio-mm/deploy/ec2_install.sh
+  && sudo bash /tmp/recap_studio_mm-arena-01a105ed-recap-studio-mm/deploy/ec2_install.sh
 ```
 
 > `main` branch ပေါ် merge လုပ်ပြီးသားလျှင် အထက်ပါ link ရှိ branch နာမည်ကို `main` ဖြင့် အစားထိုးပါ (သို့)
@@ -128,11 +128,11 @@ curl -fsSL https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar
 # 1) code ရယူပါ
 cd /tmp
 curl -fsSL -o recap.tar.gz \
-  https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a1027a-recap-studio-mm
+  https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm
 tar xzf recap.tar.gz
 
 # 2) installer run (idempotent — ဘယ်နှစ်ခါ run လည်း ရသည်၊ data/key မပျောက်)
-sudo bash /tmp/recap_studio_mm-arena-01a1027a-recap-studio-mm/deploy/ec2_install.sh
+sudo bash /tmp/recap_studio_mm-arena-01a105ed-recap-studio-mm/deploy/ec2_install.sh
 ```
 
 Installer က အလိုအလျောက် လုပ်ပေးသည်များ —
@@ -145,7 +145,7 @@ venv ဖန်တီး + `pip install -r requirements.txt`၊ `.env` ဖန်�
 
 ```bash
 curl -fsSL -o /tmp/ec2_install.sh \
-  https://raw.githubusercontent.com/htinkyawzaw2017-maker/recap_studio_mm/arena/01a1027a-recap-studio-mm/deploy/ec2_install.sh
+  https://raw.githubusercontent.com/htinkyawzaw2017-maker/recap_studio_mm/arena/01a105ed-recap-studio-mm/deploy/ec2_install.sh
 sudo bash /tmp/ec2_install.sh
 ```
 
@@ -181,9 +181,38 @@ curl -s http://localhost/healthz                # {"status":"ok", ...} ပြန
 
 ---
 
+## 5️⃣b admin အကောင့် ဖန်တီးခြင်း (v4.2 — မဖြစ်မနေ)
+
+v4.2 မှစ၍ site ကို **username + password** ဖြင့် ကာကွယ်နိုင်ပါပြီ။
+အကောင့် တစ်ခုမှ မဖန်တီးမချင်း စာမျက်နှာသည် ယခင်အတိုင်း ဖွင့်လျက်သာ ရှိနေမည်။
+
+```bash
+# .env ကို လုံခြုံစွာ ဖတ်သော command အတို
+ua() { sudo -u ubuntu bash -c "set -a; . /opt/recap-studio/.env; set +a; cd /opt/recap-studio && .venv/bin/python -m recapstudio.useradmin $*"; }
+
+ua create myname --admin --random
+sudo systemctl restart recap-studio
+```
+
+* `myname` နေရာတွင် သင့် username ထည့်ပါ။
+* ထွက်လာသော **password ကို တစ်ကြိမ်သာ ပြမည်** — ချက်ချင်း မှတ်ထားပါ။
+* အခြား user ထည့်ရန်: UI ⚙️ Settings → **အကောင့် စီမံခန့်ခွဲမှု** (admin သာ မြင်ရသည်)။
+* အသေးစိတ် → **[PHASE2_AUTH.md](PHASE2_AUTH.md)**
+
+```bash
+# စစ်ဆေးရန်
+ua status                              # auth mode: users / accounts: 1 ဖြစ်ရမည်
+curl -s http://localhost/api/auth/me   # "mode":"users" ဖြစ်ရမည်
+```
+
+> login မပေါ်သေးလျှင် → `docs/PHASE2_AUTH.md` §8.1 (စစ်ဆေးရန် command ၄ ကြောင်း) ကို ကြည့်ပါ။
+
+---
+
 ## 6️⃣ Browser မှ ဖွင့်စမ်းခြင်း
 
 1. Browser တွင် ဖွင့်ပါ: `http://<EC2-Public-IPv4>` (ဥပမာ `http://13.212.45.67`)
+   → login စာမျက်နှာ ပေါ်လာလျှင် အဆင့် 5️⃣b က username/password ဖြင့် ဝင်ပါ
 2. အပေါ်ညာဘက် chip တွင် **⚙️ FFmpeg Ready / 🔤 Myanmar Font OK / 💾 x GB free / 🔑 Key n/3** ပေါ်ရမည်။
 3. **Ctrl + Shift + R** (hard refresh) နှိပ်ပါ — version အဟောင်း cache မနေစေရန်။
 4. Settings (⚙️) → Key များ ထည့် → **🧪 Key အားလုံး စစ်မည်** → ✅ ဖြစ်ရမည်။
@@ -192,10 +221,12 @@ curl -s http://localhost/healthz                # {"status":"ok", ...} ပြန
 ### Deploy တကယ် ရောက်/မရောက် အပြင်မှ စစ်ရန် (laptop မှ)
 
 ```bash
-curl -s http://13.212.45.67/healthz            # version ကို စစ်ပါ (4.1.1 ဖြစ်ရမည်)
+curl -s http://13.212.45.67/healthz            # version ကို စစ်ပါ (4.3.0 ဖြစ်ရမည်)
 python tests/verify_deployment.py http://13.212.45.67
-# access password ထည့်ထားလျှင်:
-python tests/verify_deployment.py http://13.212.45.67 --password သင့်လျှို့ဝှက်စာ
+# v4.2 အကောင့်ဖြင့် (အပြည့်အစုံ စစ်ရန်):
+python tests/verify_deployment.py http://13.212.45.67 --username myname --password 'XXXX'
+# legacy access password သုံးနေလျှင်:
+python tests/verify_deployment.py http://13.212.45.67 --access-key သင့်လျှို့ဝှက်စာ
 ```
 
 ---
@@ -206,9 +237,9 @@ python tests/verify_deployment.py http://13.212.45.67 --password သင့်လ
 # server terminal ထဲ
 cd /tmp
 curl -fsSL -o recap.tar.gz \
-  https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a1027a-recap-studio-mm
+  https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm
 rm -rf recap_studio_mm-arena-* && tar xzf recap.tar.gz
-sudo bash /tmp/recap_studio_mm-arena-01a1027a-recap-studio-mm/deploy/ec2_install.sh
+sudo bash /tmp/recap_studio_mm-arena-01a105ed-recap-studio-mm/deploy/ec2_install.sh
 ```
 
 Installer ကိုပဲ ပြန် run လုပ်ခြင်းဖြင့် — code အသစ်၊ package အသစ်၊ service restart အားလုံး ဖြစ်သွားမည်။
@@ -230,7 +261,7 @@ Installer ကိုပဲ ပြန် run လုပ်ခြင်းဖြင�
 | Disk ပြည့် | `df -h` | `sudo journalctl --vacuum-time=3d`; data TTL လျှော့ (`RECAP_WORKSPACE_TTL_HOURS=6`) |
 | ffmpeg မတွေ့ | `ffmpeg -version` | `sudo apt install -y ffmpeg` |
 | Font မလှ | `ls /usr/share/fonts/truetype/noto \| grep Myanmar` | `sudo apt install -y fonts-noto-core fonts-sil-padauk` |
-| Update ရောက်/မရောက် မသိ | `curl -s http://localhost/healthz` | version နှိုင်းယှဉ်ပါ (4.1.1) |
+| Update ရောက်/မရောက် မသိ | `curl -s http://localhost/healthz` | version နှိုင်းယှဉ်ပါ (4.3.0) |
 
 Log ကြည့်ရန် အတိုဆုံး command များ —
 

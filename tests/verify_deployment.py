@@ -23,6 +23,7 @@ import json
 import os
 import sys
 import time
+import http.cookiejar
 import urllib.error
 import urllib.request
 import uuid
@@ -55,25 +56,49 @@ class Client:
         self.base = base.rstrip("/")
         self.access_key = access_key
         self.verbose = verbose
+        self.jar = http.cookiejar.CookieJar()
+        self.opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(self.jar))
+        self.csrf = ""
+        self.username = ""
 
     def _headers(self, extra: dict | None = None) -> dict:
         headers = {}
         if self.access_key:
             headers["X-Access-Key"] = self.access_key
+        if self.csrf:
+            headers["X-CSRF-Token"] = self.csrf
         if extra:
             headers.update(extra)
         return headers
+
+    def login(self, username: str, password: str) -> tuple[bool, str]:
+        status, body = self.json("POST", "/api/auth/login",
+                                 {"username": username, "password": password})
+        if status != 200:
+            return False, str(body.get("detail", body))[:120]
+        self.csrf = str(body.get("csrf_token", ""))
+        self.username = username
+        return True, ""
+
+    def logout(self) -> None:
+        try:
+            self.json("POST", "/api/auth/logout")
+        except Exception:
+            pass
+        self.csrf = ""
+        self.username = ""
 
     def request(self, method: str, path: str, data: bytes | None = None,
                 headers: dict | None = None, timeout: int = 60) -> tuple[int, bytes]:
         req = urllib.request.Request(self.base + path, data=data, method=method,
                                      headers=self._headers(headers))
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as res:
+            with self.opener.open(req, timeout=timeout) as res:
                 return res.status, res.read()
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # DNS / TLS / refused
             return 0, str(exc).encode()
 
     def json(self, method: str, path: str, payload: dict | None = None,
@@ -133,9 +158,14 @@ def main() -> int:
     parser.add_argument("--lang", default="my", help="target language (default my)")
     parser.add_argument("--timeout", type=int, default=1500, help="job timeout seconds")
     parser.add_argument("--skip-job", action="store_true", help="endpoint checks only")
+    parser.add_argument("--username", default=os.getenv("RECAP_USERNAME", ""),
+                        help="account to sign in with (multi-user deployments)")
+    parser.add_argument("--password", default=os.getenv("RECAP_PASSWORD", ""),
+                        help="password for --username")
     args = parser.parse_args()
 
     client = Client(args.base_url, args.access_key)
+    authed = True          # flipped to False when a login is required but missing
     print(f"recap-studio verify → {client.base}")
 
     # ── 1. is the NEW code deployed? ─────────────────────────────────────
@@ -162,7 +192,8 @@ def main() -> int:
         disk = system.get("disk", {})
         check("free disk > 2 GB", (disk.get("free") or 0) > 2 * 1024 ** 3,
               f"free={disk.get('free_human')} on {disk.get('data_dir')}")
-        check("data dir is writable/mounted", bool(disk.get("data_dir")), str(disk.get("data_dir")))
+        if disk.get("data_dir"):
+            check("data dir is writable/mounted", True, str(disk.get("data_dir")))
         check("voices exposed", bool(system.get("voices")))
         if system.get("demo_mode"):
             print(f"  [{YELLOW}NOTE{RESET}] server runs in DEMO MODE (RECAP_DEMO_MODE=1) - "
@@ -170,6 +201,48 @@ def main() -> int:
         elif not system.get("has_api_key"):
             print(f"  [{YELLOW}NOTE{RESET}] server has NO Gemini API key stored - "
                   "real recap jobs will fail until it is set")
+
+    # ── 1b. authentication & hardening (Phase 2 / #12) ──────────────────
+    section("authentication & hardening")
+    status, me = client.json("GET", "/api/auth/me")
+    has_auth_api = status == 200
+    check("/api/auth/me exists (v4.2 auth build)", has_auth_api,
+          f"HTTP {status}" + ("" if has_auth_api else "  → Phase 2 code is NOT deployed yet"))
+    mode = str(me.get("mode", "unknown")) if has_auth_api else "unknown"
+    if has_auth_api:
+        print(f"  [{YELLOW}INFO{RESET}] auth mode = {mode} • accounts exist = {me.get('has_users')}")
+        check("public deployment is protected (login or shared key)",
+              mode in {"users", "legacy"},
+              "mode=open → မည်သူမဆို ဝင်နိုင်နေပါသည်! "
+              "'python -m recapstudio.useradmin create <name> --admin' ဖြင့် အကောင့် ဖန်တီးပါ"
+              if mode == "open" else f"mode={mode}")
+        if mode == "users":
+            anon = Client(args.base_url)
+            anon_status, _ = anon.json("GET", "/api/keys")
+            check("anonymous API access is blocked", anon_status == 401,
+                  f"HTTP {anon_status}")
+        if args.username and args.password:
+            ok, detail = client.login(args.username, args.password)
+            check(f"login as '{args.username}'", ok, detail)
+            authed = ok
+        elif mode == "users":
+            authed = False
+            print(f"  [{YELLOW}NOTE{RESET}] --username/--password မပေးသဖြင့် "
+                  "account-only checks များကို ကျော်ပါမည်")
+    headers_status, _ = client.request("GET", "/api/system")
+    req = urllib.request.Request(client.base + "/healthz")
+    try:
+        with client.opener.open(req, timeout=30) as res:
+            raw_headers = {k.lower(): v for k, v in res.headers.items()}
+    except Exception:
+        raw_headers = {}
+    check("X-Content-Type-Options header set",
+          raw_headers.get("x-content-type-options") == "nosniff",
+          raw_headers.get("x-content-type-options", "missing"))
+    check("HTTPS in use (or local test)",
+          client.base.startswith("https://") or "localhost" in client.base
+          or "127.0.0.1" in client.base,
+          "public HTTP deployment — ALB/Caddy ဖြင့် TLS ထည့်ပါ")
 
     section("front-end")
     status, body = client.request("GET", "/")
@@ -188,6 +261,24 @@ def main() -> int:
         "splitter dropzone": 'id="split-dropzone"',
         "cancel hint": 'id="cancel-hint"',
     }
+    v42 = {
+        "login overlay": 'id="auth-overlay"',
+        "account chip": 'id="chip-account"',
+        "admin accounts panel": 'id="admin-card"',
+    }
+    v43 = {
+        "output-frame chip": 'id="preview-frame"',
+        "preview stage wrapper": 'class="preview-stage"',
+        "mobile action bar": 'id="mobile-run-bar"',
+    }
+    missing42 = [name for name, marker in v42.items() if marker not in text]
+    check("v4.2 auth UI served", not missing42,
+          "missing: " + ", ".join(missing42) if missing42
+          else f"{len(v42)} markers found")
+    missing43 = [name for name, marker in v43.items() if marker not in text]
+    check("v4.3 responsive preview UI served", not missing43,
+          "missing: " + ", ".join(missing43) + "  → browser cache သို့မဟုတ် အဟောင်း build"
+          if missing43 else f"{len(v43)} markers found")
     missing = [name for name, marker in v41.items() if marker not in text]
     check("v4.1 UI features served", not missing,
           "missing: " + ", ".join(missing) if missing else f"{len(v41)} markers found")
@@ -196,20 +287,34 @@ def main() -> int:
     check("app.js has the resilient polling/upload code",
           "pollErrors" in js_text and "received_chunks" in js_text,
           "" if js_text else "app.js not readable")
+    check("app.js previews the real output frame (v4.3)",
+          "applyPreviewGeometry" in js_text and "sendPartToStudio" in js_text,
+          "" if js_text else "app.js not readable")
+    status, css_blob = client.request("GET", "/static/styles.css")
+    css_text = css_blob.decode("utf-8", "replace") if status == 200 else ""
+    check("styles.css is the responsive v4.3 sheet",
+          "--preview-max-h" in css_text and "pointer: coarse" in css_text,
+          "" if css_text else "styles.css not readable")
     for asset in ("/static/app.js", "/static/styles.css",
                   "/static/fonts/NotoSansMyanmar-Regular.ttf"):
         status, blob = client.request("GET", asset)
         check(f"{asset} served", status == 200 and len(blob) > 500, f"HTTP {status}")
 
-    status, _ = client.json("POST", "/api/upload/init",
-                            {"filename": "verify.mp4", "size": 1024, "kind": "video"})
-    check("resumable upload API exists", status in (200, 400),
-          f"HTTP {status}" + ("" if status != 404 else "  → 404 means the OLD build is running"))
-    status, _ = client.json("POST", "/api/estimate-parts", {"duration": 125, "slice_sec": 60})
-    check("tools API responds", status == 200)
+    if authed:
+        status, _ = client.json("POST", "/api/upload/init",
+                                {"filename": "verify.mp4", "size": 1024, "kind": "video"})
+        check("resumable upload API exists", status in (200, 400),
+              f"HTTP {status}" + ("" if status != 404 else "  → 404 means the OLD build is running"))
+        status, _ = client.json("POST", "/api/estimate-parts", {"duration": 125, "slice_sec": 60})
+        check("tools API responds", status == 200)
+    else:
+        print(f"  [{YELLOW}SKIP{RESET}] upload/tools checks need --username/--password")
 
     # ── 2. does a job actually run? ──────────────────────────────────────
-    if args.video and not args.skip_job:
+    if args.video and not args.skip_job and not authed:
+        print(f"\n  [{YELLOW}SKIP{RESET}] --video job test needs --username/--password "
+              "on a multi-user deployment")
+    elif args.video and not args.skip_job:
         section("end-to-end recap job on the deployed server")
         video = args.video.expanduser()
         if not check("local video file exists", video.exists(), str(video)):

@@ -23,7 +23,7 @@
 set -euo pipefail
 
 REPO="${RECAP_REPO:-htinkyawzaw2017-maker/recap_studio_mm}"
-BRANCH="${RECAP_BRANCH:-arena/01a1027a-recap-studio-mm}"
+BRANCH="${RECAP_BRANCH:-arena/01a105ed-recap-studio-mm}"
 APP_DIR="${RECAP_DIR:-/opt/recap-studio}"
 PORT="${RECAP_PORT:-80}"
 SERVICE="${RECAP_SERVICE:-recap-studio}"
@@ -164,6 +164,16 @@ ok "packages install ပြီ ($("$APP_DIR/.venv/bin/python" -c 'import fastapi
 step "6/8 ဖိုင် ပြင်ဆင်ခြင်း (.env)"
 
 ENV_FILE="$APP_DIR/.env"
+
+# session/secret key — အကောင့် login cookie နှင့် သိမ်းထားသော API key များ encrypt ရန်
+gen_secret() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+  else
+    "$APP_DIR/.venv/bin/python" -c "import secrets;print(secrets.token_hex(32))"
+  fi
+}
+
 if [ ! -f "$ENV_FILE" ]; then
   cat > "$ENV_FILE" <<EOF
 # Recap Studio MM — server configuration (systemd EnvironmentFile format)
@@ -189,10 +199,47 @@ GEMINI_API_KEY_3=
 RECAP_API_KEY_FAILOVER=1
 # ffmpeg ပြတ်တောက်နေလျှင် အလိုအလျောက် ရပ်ပြီး error ပြရန် (စက္ကန့်)
 RECAP_FFMPEG_STALL_SECONDS=900
+
+# ── v4.2 — အကောင့်စနစ် (Phase 2 / security) ─────────────────────────────
+# ⚠️ RECAP_SECRET_KEY ကို ဘယ်တော့မှ မပြောင်းပါနှင့် / မဖျက်ပါနှင့်
+#    ပြောင်းလိုက်လျှင် login session အားလုံး ပြုတ်ပြီး သိမ်းထားသော API key များ ဖတ်မရတော့ပါ
+RECAP_SECRET_KEY=$(gen_secret)
+# auto = အကောင့်ရှိလျှင် အကောင့်စနစ်၊ မရှိလျှင် access key / ဖွင့်ထား
+RECAP_AUTH_MODE=auto
+# user များ ကိုယ်တိုင် အကောင့်ဖွင့်ခွင့် (1=ဖွင့်) — ဖွင့်ပါက invite code ထည့်ထားသင့်သည်
+RECAP_ALLOW_SIGNUP=0
+RECAP_SIGNUP_CODE=
+# တစ်ယောက်ချင်းစီ ကန့်သတ်ချက် (0 = အကန့်အသတ်မရှိ)
+RECAP_USER_MAX_CONCURRENT_JOBS=1
+RECAP_USER_DAILY_JOBS=0
+RECAP_USER_QUOTA_BYTES=0
+# domain ကန့်သတ် (ဥပမာ: studio.example.com,13.212.45.67) — အလွတ် = အားလုံး
+RECAP_TRUSTED_HOSTS=
+RECAP_ALLOWED_ORIGINS=
 EOF
   ok ".env အသစ် ဖန်တီးပြီ: $ENV_FILE"
 else
   say ".env ရှိပြီးသား — မထိခိုက်ပါ"
+fi
+
+# upgrade path: v4.1 .env များတွင် RECAP_SECRET_KEY မပါသေး — တစ်ကြိမ်တည်း ဖြည့်ပေးသည်
+if ! grep -q '^RECAP_SECRET_KEY=..*' "$ENV_FILE" 2>/dev/null; then
+  sed -i '/^RECAP_SECRET_KEY=$/d' "$ENV_FILE" 2>/dev/null || true
+  {
+    echo ""
+    echo "# ── v4.2 အကောင့်စနစ် (auto-added by installer) ─────────────────────"
+    echo "# ⚠️ ဤ key ကို မပြောင်းပါနှင့် — ပြောင်းလျှင် session + သိမ်းထားသော API key များ ပျက်မည်"
+    echo "RECAP_SECRET_KEY=$(gen_secret)"
+    echo "RECAP_AUTH_MODE=auto"
+    echo "RECAP_ALLOW_SIGNUP=0"
+    echo "RECAP_SIGNUP_CODE="
+    echo "RECAP_USER_MAX_CONCURRENT_JOBS=1"
+    echo "RECAP_USER_DAILY_JOBS=0"
+    echo "RECAP_USER_QUOTA_BYTES=0"
+  } >> "$ENV_FILE"
+  ok "RECAP_SECRET_KEY အသစ် ထုတ်ပြီး .env ထဲ ထည့်လိုက်ပါပြီ (အကောင့်စနစ် အတွက်)"
+else
+  say "RECAP_SECRET_KEY ရှိပြီးသား — မထိခိုက်ပါ"
 fi
 
 # migrate a Gemini key saved by the old single-file app
@@ -221,6 +268,67 @@ fi
 if [ "$(id -u)" -eq 0 ]; then
   chown -R "$SERVICE_USER":"$SERVICE_USER" "$APP_DIR" 2>/dev/null || true
   chmod 600 "$ENV_FILE" 2>/dev/null || true
+fi
+
+# ── 6b. account database (v4.2 auth) ───────────────────────────────────────
+step "6b/8 အကောင့် database ပြင်ဆင်ခြင်း (v4.2)"
+
+useradmin_cmd() {
+  if [ "$(id -u)" -eq 0 ] && id "$SERVICE_USER" >/dev/null 2>&1; then
+    su -s /bin/sh "$SERVICE_USER" -c \
+      "cd '$APP_DIR' && set -a && . '$ENV_FILE' && set +a && '$APP_DIR/.venv/bin/python' -m recapstudio.useradmin $*"
+  else
+    ( cd "$APP_DIR" && set -a && . "$ENV_FILE" && set +a \
+      && "$APP_DIR/.venv/bin/python" -m recapstudio.useradmin "$@" )
+  fi
+}
+
+ACCOUNTS="?"
+if useradmin_cmd migrate >/tmp/recap-useradmin.log 2>&1; then
+  ok "database schema + API key များ migrate ပြီး (data/recap.db)"
+  ACCOUNTS="$(useradmin_cmd status 2>/dev/null | sed -n 's/.*accounts *: *\([0-9]*\).*/\1/p' | head -1)"
+  [ -z "$ACCOUNTS" ] && ACCOUNTS="?"
+else
+  warn "useradmin migrate မအောင်မြင်ပါ — log: /tmp/recap-useradmin.log"
+  tail -5 /tmp/recap-useradmin.log 2>/dev/null || true
+fi
+
+# အကောင့် တစ်ခုမှ မရှိလျှင် admin အကောင့်ကို အလိုအလျောက် ဖန်တီးပေးသည်
+# (ကျော်လိုလျှင် RECAP_SKIP_ADMIN=1 ၊ အမည်ပြောင်းလိုလျှင် RECAP_ADMIN_USER=myname)
+ADMIN_CREATED=""
+ADMIN_PASSWORD_SHOWN=""
+ADMIN_USER="${RECAP_ADMIN_USER:-admin}"
+AUTH_MODE_ENV="$(sed -n 's/^RECAP_AUTH_MODE=//p' "$ENV_FILE" 2>/dev/null | tail -1 | tr -d '"'"'"'"' )"
+if [ "$ACCOUNTS" = "0" ] && [ "${RECAP_SKIP_ADMIN:-0}" != "1" ] \
+   && [ "$AUTH_MODE_ENV" != "legacy" ] && [ "$AUTH_MODE_ENV" != "open" ]; then
+  if [ -n "${RECAP_ADMIN_PASSWORD:-}" ]; then
+    if useradmin_cmd create "$ADMIN_USER" --admin --password "$RECAP_ADMIN_PASSWORD" \
+         >/tmp/recap-admin.log 2>&1; then
+      ADMIN_CREATED="$ADMIN_USER"
+      ok "admin အကောင့် '$ADMIN_USER' ဖန်တီးပြီး (သင်ပေးထားသော password)"
+    else
+      warn "admin အကောင့် ဖန်တီး၍ မရပါ:"; tail -5 /tmp/recap-admin.log 2>/dev/null || true
+    fi
+  elif useradmin_cmd create "$ADMIN_USER" --admin --random >/tmp/recap-admin.log 2>&1; then
+    ADMIN_CREATED="$ADMIN_USER"
+    ADMIN_PASSWORD_SHOWN="$(sed 's/\x1b\[[0-9;]*m//g' /tmp/recap-admin.log \
+      | sed -n 's/.*စကားဝှက်[^:]*: *//p' | head -1)"
+    ok "admin အကောင့် '$ADMIN_USER' ကို အလိုအလျောက် ဖန်တီးပြီးပါပြီ"
+  else
+    warn "admin အကောင့် ဖန်တီး၍ မရပါ:"; tail -5 /tmp/recap-admin.log 2>/dev/null || true
+  fi
+  ACCOUNTS="$(useradmin_cmd status 2>/dev/null | sed -n 's/.*accounts *: *\([0-9]*\).*/\1/p' | head -1)"
+  [ -z "$ACCOUNTS" ] && ACCOUNTS="?"
+fi
+
+if [ "$ACCOUNTS" = "0" ]; then
+  warn "အကောင့် တစ်ခုမှ မရှိသေးပါ — site က လက်ရှိတွင် ကာကွယ်မှု မရှိပါ (သို့) access key သာ သုံးနေသည်"
+else
+  say "အကောင့် အရေအတွက် : ${ACCOUNTS}"
+fi
+
+if [ "$(id -u)" -eq 0 ]; then
+  chown -R "$SERVICE_USER":"$SERVICE_USER" "$APP_DIR/data" 2>/dev/null || true
 fi
 
 # ── 7. service ─────────────────────────────────────────────────────────────
@@ -346,10 +454,28 @@ if [ "$MANUAL_MODE" = "1" ]; then
 else
   say "                        sudo systemctl restart $SERVICE"
 fi
-say "  2) public URL အတွက် :  RECAP_ACCESS_PASSWORD=သင့်လျှို့ဝှက်စာ  ထည့်ပါ"
-say "                        (SPA ၏ ⚙️ Settings → Access Key တွင် ထည့်ရမည်)"
+if [ -n "$ADMIN_CREATED" ]; then
+  say "  2) admin အကောင့် '$ADMIN_CREATED' ဖြင့် browser မှ login ဝင်ပါ"
+  if [ -n "$ADMIN_PASSWORD_SHOWN" ]; then
+    say ""
+    say "     ┌────────────────────────────────────────────────┐"
+    say "     │  username : $ADMIN_CREATED"
+    say "     │  password : $ADMIN_PASSWORD_SHOWN"
+    say "     └────────────────────────────────────────────────┘"
+    say "     ⚠️ ဤ password ကို ယခုပဲ မှတ်ထားပါ — နောက်တစ်ခါ ပြမည် မဟုတ်ပါ"
+    say ""
+  fi
+  say "                        password ပြောင်းရန်: ⚙️ Settings → အကောင့် → စကားဝှက် ပြောင်းရန်"
+else
+  say "  2) admin အကောင့် ဖန်တီးပါ (v4.2 — ဤအဆင့် မလုပ်လျှင် login စာမျက်နှာ ပေါ်မည် မဟုတ်ပါ):"
+  say "        ua() { sudo -u $SERVICE_USER bash -c \"set -a; . $ENV_FILE; set +a; cd $APP_DIR && .venv/bin/python -m recapstudio.useradmin \$*\"; }"
+  say "        ua create myname --admin --random"
+  say "        ${SUDO_PREFIX}systemctl restart $SERVICE"
+fi
 say ""
+say " စစ်ဆေးရန် (server မှ):  curl -s http://localhost/api/auth/me   → \"mode\":\"users\" ဖြစ်ရမည်"
 say " စစ်ဆေးရန် (laptop မှ):  python tests/verify_deployment.py http://${PUBLIC_IP:-YOUR-IP}"
+say " ⚠️  Browser တွင် အဟောင်း မြင်နေလျှင် Ctrl+Shift+R (Mac: ⌘+Shift+R) နှိပ်ပါ"
 say " နောက်တစ်ခါ update လုပ်ရန်:  sudo bash $0   (ဤ script ကိုပဲ ပြန် run ပါ)"
 say " ⚠️  Security Group တွင် HTTP (port ${PORT}) inbound ဖွင့်ထားရန် မမေ့ပါနှင့်"
 say "════════════════════════════════════════════════════════════════"

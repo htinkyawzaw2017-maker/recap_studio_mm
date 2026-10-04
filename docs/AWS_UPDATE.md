@@ -1,16 +1,22 @@
-# AWS ပေါ်မှာ Update တင်နည်း (Runbook) — v4.1
+# AWS ပေါ်မှာ Update တင်နည်း (Runbook) — v4.3
 
 ## 0. အခု အခြေအနေ
 
-v4.1 ပြင်ဆင်ချက် အားလုံး (တိုင်ကြားချက် ၇ ခု + UI ကြီးခြင်း) သည် အောက်ပါ branch တွင် ရှိပြီးဖြစ်သည်:
+**v4.2 = Phase 2 (အကောင့်စနစ် + database လုံခြုံရေး + user အများသုံး)** ပြီးစီးပါပြီ။
+အသေးစိတ် + သင် ကိုယ်တိုင်လုပ်ရမည့် အဆင့်များ → **[PHASE2_AUTH.md](PHASE2_AUTH.md)**
 
 ```
-origin/arena/01a1027a-recap-studio-mm   1e68b88   ← v4.1 (အသစ်ဆုံး)
-origin/main                             27eb2ca   ← ဟောင်း (v4.0)
+origin/arena/01a105ed-recap-studio-mm   ← v4.3 (အသစ်ဆုံး — အကောင့်စနစ် + WYSIWYG preview)
+origin/arena/01a1027a-recap-studio-mm   ← v4.1
+origin/main                             ← ဟောင်း (v4.0)
 ```
+
+> 🔐 **v4.2 သို့ တက်လျှင် အပို ၂ ဆင့် လိုသည်** — (၁) `.env` ထဲ `RECAP_SECRET_KEY`
+> (installer က အလိုအလျောက် ထည့်ပေးသည်)၊ (၂) **admin အကောင့် ဖန်တီးခြင်း**။
+> အကောင့် မဖန်တီးမချင်း site သည် ယခင်အတိုင်းပင် (access key / ဖွင့်ထား) ဖြစ်နေမည်။
 
 > ⚠️ `origin/main` ကို merge လုပ်ပြီးသားမဟုတ်သေးပါ — ဒါကြောင့် **install script က branch ကို
-> တိုက်ရိုက် ဆွဲချသည်** (`RECAP_BRANCH` default = `arena/01a1027a-recap-studio-mm`)။
+> တိုက်ရိုက် ဆွဲချသည်** (`RECAP_BRANCH` default = `arena/01a105ed-recap-studio-mm`)။
 > အောက်ပါ command များကို အပြောင်းအလဲ မလိုဘဲ တိုက်ရိုက် run နိုင်သည်။
 
 ### ဘယ်လမ်းကို ရွေးမလဲ
@@ -30,18 +36,22 @@ origin/main                             27eb2ca   ← ဟောင်း (v4.0)
 ## TL;DR — EC2 အတွက် အဆင့် ၃ ခု (၅ မိနစ်)
 
 ```bash
-# 1) server terminal (Instance Connect / SSH) ထဲ ဝင်ပြီး —
+# 1) server terminal (Instance Connect / SSH) ထဲ ဝင်ပြီး — code အသစ် တင်ပါ
 cd /tmp
-curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a1027a-recap-studio-mm
+curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm
 rm -rf recap_studio_mm-arena-* && tar xzf recap.tgz
-sudo bash /tmp/recap_studio_mm-arena-01a1027a-recap-studio-mm/deploy/ec2_install.sh
+sudo bash /tmp/recap_studio_mm-arena-01a105ed-recap-studio-mm/deploy/ec2_install.sh
 
-# 2) Key #2/#3 ထည့်လိုလျှင် (quota failover) —
-sudo nano /opt/recap-studio/.env      # GEMINI_API_KEY_2 / _3 ဖြည့်
+# 2) ⭐ admin အကောင့် — installer က အလိုအလျောက် ဖန်တီးပြီး password ကို ပြပါမည်
+#    (အကောင့် မရှိသေးမှသာ)။ ကိုယ်တိုင် ထပ်ဖန်တီးလိုလျှင် —
+ua() { sudo -u ubuntu bash -c "set -a; . /opt/recap-studio/.env; set +a; cd /opt/recap-studio && .venv/bin/python -m recapstudio.useradmin $*"; }
+ua create myname --admin --random
+
+# 3) restart + စစ်ဆေး
 sudo systemctl restart recap-studio
-
-# 3) စစ်ဆေး —
-curl -s http://localhost/healthz      # "version":"4.1.1" ဖြစ်ရမည်
+curl -s http://localhost/healthz      # "version":"4.3.0" ဖြစ်ရမည်
+curl -s http://localhost/api/auth/me  # "mode":"users" ဖြစ်ရမည် ← login ပေါ်/မပေါ် ဒီမှာ သိသည်
+ua status                             # accounts : 1
 ```
 
 Browser တွင် `http://<EC2-IP>` ဖွင့်ပြီး **Ctrl + Shift + R** (hard refresh) နှိပ်ပါ။
@@ -52,7 +62,7 @@ Browser တွင် `http://<EC2-IP>` ဖွင့်ပြီး **Ctrl + Shif
 
 ### နည်းလမ်း A — PR ကို merge (အကြံပြု၊ အလွယ်ဆုံး)
 
-1. Arena session မှ ဖွင့်ထားသော PR (`arena/01a1027a-recap-studio-mm` → `main`) ကို ဖွင့်ပါ
+1. Arena session မှ ဖွင့်ထားသော PR (`arena/01a105ed-recap-studio-mm` → `main`) ကို ဖွင့်ပါ
 2. **Merge pull request** → **Confirm merge**
 3. ပြီးလျှင် `main` သည် v4.1 ဖြစ်သွားမည် — Auto-deploy pipeline ရှိပါက အလိုအလျောက် deploy စပါမည်
    (EC2 ဖြစ်ပါက §1b ကို `RECAP_BRANCH=main` ဖြင့် run နိုင်သည်)
@@ -62,19 +72,19 @@ Browser တွင် `http://<EC2-IP>` ဖွင့်ပြီး **Ctrl + Shif
 ```bash
 # EC2 ကဲ့သို့ server ပေါ်မှာ
 git fetch origin
-git checkout arena/01a1027a-recap-studio-mm     # ← fix ရှိသည့် branch
-git pull origin arena/01a1027a-recap-studio-mm
+git checkout arena/01a105ed-recap-studio-mm     # ← fix ရှိသည့် branch
+git pull origin arena/01a105ed-recap-studio-mm
 ```
 
 ECS/CodePipeline သုံးပါက source stage ၏ **branch name** ကို
-`arena/01a1027a-recap-studio-mm` သို့ ပြောင်းလိုက်ပါ။
+`arena/01a105ed-recap-studio-mm` သို့ ပြောင်းလိုက်ပါ။
 
 ### နည်းလမ်း C — git မသုံးဘဲ tarball ဖြင့်
 
 ```bash
 # laptop ပေါ်တွင်
 curl -L -o recap.tar.gz \
-  https://github.com/htinkyawzaw2017-maker/recap_studio_mm/archive/refs/heads/arena/01a1027a-recap-studio-mm.tar.gz
+  https://github.com/htinkyawzaw2017-maker/recap_studio_mm/archive/refs/heads/arena/01a105ed-recap-studio-mm.tar.gz
 
 # server ပေါ်တွင်
 scp recap.tar.gz ec2-user@YOUR_EC2:/tmp/
@@ -87,7 +97,7 @@ sudo mkdir -p /opt/recap && sudo tar xzf /tmp/recap.tar.gz -C /opt/recap --strip
 ## 1b. EC2 (Instance Connect / Docker မသုံး) ဖြစ်ပါက — command တစ်ကြောင်းတည်း
 
 ```bash
-cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a1027a-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
+cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
 ```
 
 Script က code အသစ်ကို ရယူပြီး `/opt/recap-studio` ထဲ တပ်ဆင်၊ systemd service အဖြစ်
@@ -132,7 +142,7 @@ aws ecs wait services-stable --cluster YOUR_CLUSTER --services YOUR_SERVICE --re
 ```bash
 ssh ec2-user@YOUR_EC2
 cd /opt/recap                                  # repo ရှိသည့်နေရာ
-git fetch origin && git checkout arena/01a1027a-recap-studio-mm && git pull
+git fetch origin && git checkout arena/01a105ed-recap-studio-mm && git pull
 
 docker compose down
 docker compose up -d --build
@@ -143,7 +153,7 @@ docker compose logs -f --tail=50               # 'Recap Studio 4.0.0 starting' �
 
 ```bash
 ssh ec2-user@YOUR_EC2
-cd /opt/recap && git fetch origin && git checkout arena/01a1027a-recap-studio-mm && git pull
+cd /opt/recap && git fetch origin && git checkout arena/01a105ed-recap-studio-mm && git pull
 
 source .venv/bin/activate
 pip install -r requirements.txt                # ← ယခုမှ အလုပ်လုပ်ပါသည် (အရင် apt package များ ကြောင့် fail ဖြစ်ခဲ့သည်)
@@ -212,7 +222,12 @@ echo '/dev/nvme1n1 /data ext4 defaults,nofail 0 2' | sudo tee -a /etc/fstab
 | `GEMINI_API_KEY` | `AIza...` | Secrets Manager မှ ယူပါ |
 | `RECAP_DEMO_MODE` | `0` | **1 ဖြစ်နေပါက AI မဟုတ်ဘဲ demo စာသား ထွက်မည်** |
 | `RECAP_FAKE_TTS` | `0` | 1 ဖြစ်နေပါက အသံအစား beep ထွက်မည် |
-| `RECAP_ACCESS_PASSWORD` | လျှို့ဝှက်စာ | public URL အတွက် လိုအပ်သည် (SPA Settings တွင် ထည့်ရမည်) |
+| `RECAP_ACCESS_PASSWORD` | လျှို့ဝှက်စာ | legacy shared key (အကောင့်စနစ် သုံးလျှင် မလိုတော့) |
+| `RECAP_SECRET_KEY` | hex ၆၄ လုံး | **v4.2 — အရေးအကြီးဆုံး**။ session + encrypt သော့။ ECS/Fargate တွင် Secrets Manager မှ ထည့်ပါ (task အသစ်တိုင်း တူရမည်) |
+| `RECAP_AUTH_MODE` | `users` | public deployment အတွက် အကြံပြုချက် |
+| `RECAP_ALLOW_SIGNUP` | `0` | user ကိုယ်တိုင် အကောင့်ဖွင့်ခွင့် (ဖွင့်လျှင် `RECAP_SIGNUP_CODE` ပါ ထည့်ပါ) |
+| `RECAP_USER_MAX_CONCURRENT_JOBS` | `1` | user တစ်ယောက် တစ်ပြိုင်နက် job |
+| `RECAP_TRUSTED_HOSTS` | `studio.example.com` | Host header ကန့်သတ် |
 | `RECAP_MAX_CONCURRENT_JOBS` | `1` (2 vCPU) / `2` (4 vCPU) | memory/CPU ကို ကာကွယ်ရန် |
 | `RECAP_TTS_WORKERS` | `8` | အသံသွင်း အမြန်နှုန်း |
 | `PORT` | `8000` | ALB target group နှင့် တူရမည် |
@@ -241,11 +256,17 @@ interval 30s, timeout 5s, success 200။ ALB idle timeout ကို **300s** ထ
 ```bash
 # repo ထဲက script ကို သင့် domain နှင့် run ပါ (dependencies မလိုပါ)
 python tests/verify_deployment.py https://your-alb-domain.com
-# access password သတ်မှတ်ထားပါက:
+# v4.2 အကောင့်စနစ် ဖွင့်ထားပါက (upload/job စစ်ဆေးချက်များ အတွက် login လိုသည်):
+python tests/verify_deployment.py https://your-alb-domain.com --username myname --password 'XXXX'
+# legacy access password သုံးနေပါက:
 python tests/verify_deployment.py https://your-alb-domain.com --access-key 'YOUR-SECRET'
 # တကယ့် job တစ်ခုအထိ စမ်းရန်:
-python tests/verify_deployment.py https://your-alb-domain.com --video ./sample.mp4
+python tests/verify_deployment.py https://your-alb-domain.com --username myname --password 'XXXX' --video ./sample.mp4
 ```
+
+v4.2 စစ်ဆေးချက်များတွင် `/api/auth/me exists (v4.2 auth build)`,
+`public deployment is protected`, `anonymous API access is blocked`,
+`v4.2 auth UI served` တို့ ပါဝင်သည် — ဤအချက်များ PASS ဖြစ်မှ Phase 2 အမှန်တကယ် ရောက်ပြီ ဖြစ်သည်။
 
 မျှော်မှန်းရလဒ်:
 
@@ -291,6 +312,26 @@ script က FAIL ဖြစ်ပါက ဘယ်အဆင့်မှာ ရပ�
 | 401 Unauthorized | `RECAP_ACCESS_PASSWORD` သတ်မှတ်ထားသည် → SPA ၏ Settings တွင် Access Key ထည့်ပါ |
 | အသံသွင်း အားလုံး fail | Task ၏ outbound HTTPS ကို `speech.platform.bing.com` သို့ ခွင့်ပြုပါ (private subnet ဖြစ်ပါက NAT/VPC endpoint) |
 | YouTube import fail (bot check) | cookies ဖိုင် ထည့်ပြီး `RECAP_YTDLP_COOKIES=/data/cookies.txt` သတ်မှတ်ပါ |
+
+---
+
+## 6b. v4.2 — အကောင့်စနစ် အတွက် သတိပြုရန် (ECS / Docker)
+
+```bash
+# ECS task definition (သို့) docker-compose ထဲတွင် ဤ ၂ ခု မဖြစ်မနေ ထည့်ပါ
+RECAP_SECRET_KEY=<openssl rand -hex 32 ဖြင့် ထုတ်ထားသော တန်ဖိုး>   # task အားလုံး တူရမည်
+RECAP_AUTH_MODE=users
+
+# container ထဲ အကောင့် ဖန်တီးရန် (ECS Exec)
+aws ecs execute-command --cluster recap --task <TASK-ID> --container recap \
+  --interactive --command "python -m recapstudio.useradmin create myname --admin --random"
+```
+
+- `RECAP_SECRET_KEY` ကို **Secrets Manager / SSM Parameter Store** တွင် ထားပြီး ညွှန်းပါ။
+  task တစ်ခုချင်း မတူလျှင် login ဝင်ပြီး ချက်ချင်း ပြန်ထွက်သွားမည်။
+- `data/recap.db` သည် **persistent volume (EFS/EBS)** ပေါ် ရှိရမည် — မဟုတ်လျှင် deploy တိုင်း
+  အကောင့်များ ပျောက်မည်။ ALB တွင် **stickiness** ဖွင့်ရန် မလိုပါ (session က DB ထဲ ရှိသည်)။
+- Multi-task (task ၂ ခုအထက်) ဖြစ်ပါက EFS mount ကို task အားလုံး မျှသုံးရန် သေချာပါစေ။
 
 ---
 

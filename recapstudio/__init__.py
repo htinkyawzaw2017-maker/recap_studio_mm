@@ -16,4 +16,4 @@ render      : final ffmpeg master render (subtitles, logo, reframe, mix)
 pipeline    : end to end orchestration (recap / re-render / split / thumb)
 """
 
-__version__ = "4.1.1"
+__version__ = "4.3.1"

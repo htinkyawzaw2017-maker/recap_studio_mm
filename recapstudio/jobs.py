@@ -38,6 +38,9 @@ STAGE_DEFS: list[tuple[str, str]] = [
 class Job:
     id: str
     kind: str = "recap"
+    #: owning account (multi-user mode). "shared" / "" = pre-Phase-2 install.
+    user_id: str = ""
+    username: str = ""
     status: str = "queued"          # queued|running|completed|failed|cancelled
     progress: float = 0.0
     message: str = "အလုပ် စတင်နေပါသည်..."
@@ -65,8 +68,15 @@ class Job:
     cancel_requested: bool = False
     request: dict[str, Any] = field(default_factory=dict)
 
+    #: request fields that must never be written to disk or sent to a browser
+    SECRET_REQUEST_FIELDS = ("api_key", "api_keys", "password", "access_key")
+
     def to_dict(self, include_logs: bool = True) -> dict[str, Any]:
         data = asdict(self)
+        request = data.get("request")
+        if isinstance(request, dict):
+            data["request"] = {k: v for k, v in request.items()
+                               if k not in Job.SECRET_REQUEST_FIELDS}
         data["eta_seconds"] = self.eta_seconds()
         data["elapsed_seconds"] = self.elapsed_seconds()
         # keep cancel_requested: the UI needs it to show "ရပ်နေသည်…" instead of
@@ -136,9 +146,10 @@ class JobStore:
 
     # ── CRUD ───────────────────────────────────────────────────────────
     def create(self, kind: str = "recap", request: Optional[dict] = None,
-               duration: float = 0.0) -> Job:
+               duration: float = 0.0, user_id: str = "", username: str = "") -> Job:
         job_id = f"task_{int(time.time())}_{uuid.uuid4().hex[:6]}"
-        job = Job(id=job_id, kind=kind, duration=duration, request=request or {})
+        job = Job(id=job_id, kind=kind, duration=duration, request=request or {},
+                  user_id=user_id or "", username=username or "")
         with self._lock:
             self._jobs[job_id] = job
             self._persist(job)
@@ -159,7 +170,7 @@ class JobStore:
                     return None
         return None
 
-    def list(self, limit: int = 40) -> list[Job]:
+    def list(self, limit: int = 40, user_id: Optional[str] = None) -> list[Job]:
         """All known jobs, newest first.
 
         Also picks up task files written by *another* container (an AWS ECS
@@ -176,7 +187,28 @@ class JobStore:
             log.debug("scanning task dir failed: %s", exc)
         with self._lock:
             jobs = sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
+        if user_id is not None:
+            # Multi-user mode: a caller may only ever see their own jobs.
+            # Legacy jobs (no owner recorded) belong to the "shared" scope.
+            wanted = user_id or "shared"
+            jobs = [j for j in jobs if (j.user_id or "shared") == wanted]
         return jobs[:limit]
+
+    def owner_of(self, job_id: str) -> str:
+        job = self.get(job_id)
+        return (job.user_id or "shared") if job else ""
+
+    def is_owned_by(self, job_id: str, user_id: str) -> bool:
+        owner = self.owner_of(job_id)
+        return bool(owner) and owner == (user_id or "shared")
+
+    def count_active(self, user_id: Optional[str] = None) -> int:
+        with self._lock:
+            jobs = list(self._jobs.values())
+        if user_id is not None:
+            wanted = user_id or "shared"
+            jobs = [j for j in jobs if (j.user_id or "shared") == wanted]
+        return sum(1 for j in jobs if j.status in {"queued", "running"})
 
     def delete(self, job_id: str) -> bool:
         with self._lock:
