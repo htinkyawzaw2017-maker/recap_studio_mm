@@ -243,6 +243,27 @@ ua() { sudo -u ubuntu bash -c "set -a; . /opt/recap-studio/.env; set +a; cd /opt
 
 ## 8. ပြဿနာ ဖြေရှင်းချက်
 
+### 8.0 အမြန်ဆုံးနည်း — browser (သို့) curl တစ်ကြောင်းဖြင့် admin ဖန်တီးခြင်း ⭐⭐
+
+**နည်း A — browser မှ (terminal မလို)**
+v4.2.1 မှစ၍ အကောင့် တစ်ခုမှ မရှိသေးသော server ကို ဖွင့်လိုက်လျှင်
+**“ပထမဆုံး အကောင့် (admin) ကို ဖန်တီးပါ”** ကတ် အလိုအလျောက် ပေါ်လာပါမည် —
+username + password ထည့်၍ ဖန်တီးလိုက်ရုံဖြင့် login စနစ် ချက်ချင်း ဖွင့်သွားပါမည် (restart မလို)။
+
+**နည်း B — server terminal မှ တစ်ကြောင်းတည်း (DB path မှားစရာ မရှိ)**
+
+```bash
+curl -s -X POST http://localhost/api/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"myname","password":"Choose-Strong-Pass-2026"}'
+curl -s http://localhost/api/auth/me      # "mode":"users" ဖြစ်သွားရမည်
+```
+
+> ဤနည်းသည် **run နေသော service ကိုယ်တိုင်** ကို ခေါ်သဖြင့် `.env` / `RECAP_DATA_DIR` မှားစရာ
+> လုံးဝ မရှိပါ — `useradmin` CLI ဖြင့် အကောင့်ဖန်တီးပြီးမှ server က မမြင်တာမျိုး မဖြစ်တော့ပါ။
+
+---
+
 ### 8.1 `/healthz` က 4.2.0 ပြနေပြီး web မှာ login မပေါ်ဘူး ⭐
 
 အောက်ပါ command ၄ ကြောင်းကို server terminal တွင် run ပြီး ဘယ်ဟာလဲ ခွဲခြားပါ —

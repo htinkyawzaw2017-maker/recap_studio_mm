@@ -1541,7 +1541,10 @@
   function renderAuthForm() {
     const state_ = state.auth || {};
     const legacy = state_.mode === 'legacy';
-    const firstRun = state_.mode === 'users' && !state_.has_users;
+    const firstRun = (state_.mode === 'users' || state_.mode === 'open')
+      && state_.has_users === false;
+    const setupMode = state_.mode === 'open' && state_.has_users === false;
+    $('auth-skip') && $('auth-skip').classList.toggle('hidden', !setupMode);
     const canSignup = Boolean(state_.signup_enabled) || firstRun;
     signupView = firstRun ? true : signupView;
 
@@ -1562,8 +1565,10 @@
     } else if (firstRun) {
       $('auth-subtitle').textContent = 'ပထမဆုံး အကောင့် (admin) ကို ဖန်တီးပါ';
       $('auth-submit').textContent = '🚀 Admin အကောင့် ဖန်တီးမည်';
-      $('auth-hint').textContent =
-        'ဤ server တွင် အကောင့် မရှိသေးပါ — ယခု ဖန်တီးသူသည် admin ဖြစ်ပါမည်။';
+      $('auth-hint').textContent = setupMode
+        ? 'ဤ server ကို လက်ရှိတွင် မည်သူမဆို ဝင်နိုင်နေပါသည်။ admin အကောင့် ဖန်တီးလိုက်သည်နှင့် '
+          + 'login စနစ် အလိုအလျောက် ဖွင့်သွားပါမည် (terminal မလိုပါ)။'
+        : 'ဤ server တွင် အကောင့် မရှိသေးပါ — ယခု ဖန်တီးသူသည် admin ဖြစ်ပါမည်။';
     } else if (signupView) {
       $('auth-subtitle').textContent = 'အကောင့် အသစ် ဖွင့်ရန်';
       $('auth-submit').textContent = '➕ အကောင့် ဖွင့်မည်';
@@ -1822,6 +1827,11 @@
       showAuthError('');
       renderAuthForm();
     });
+    $('auth-skip') && ($('auth-skip').onclick = () => {
+      LS.set('rs_setup_skipped', '1');
+      showAuthOverlay(false);
+      bootApp();
+    });
     $('btn-logout') && ($('btn-logout').onclick = doLogout);
     $('btn-change-pw') && ($('btn-change-pw').onclick = changePassword);
     $('btn-revoke-sessions') && ($('btn-revoke-sessions').onclick = revokeSessions);
@@ -1875,6 +1885,13 @@
     if (me.required && !me.authenticated) {
       showAuthOverlay(true);
       return;                       // the rest boots after a successful login
+    }
+    // Unprotected deployment (no accounts yet): offer the one-screen admin
+    // setup instead of silently letting everyone in. Skippable for localhost.
+    if (me.has_users === false && me.mode === 'open' && !LS.get('rs_setup_skipped')) {
+      await bootApp();              // the studio stays usable behind the card
+      showAuthOverlay(true);
+      return;
     }
     showAuthOverlay(false);
     await bootApp();
