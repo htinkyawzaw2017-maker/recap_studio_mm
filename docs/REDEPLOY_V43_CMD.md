@@ -17,6 +17,7 @@
 | 3 | **Server** | admin အကောင့် + API key | ၂ မိနစ် |
 | 4 | **Server / CMD** | version + markup စစ် | ၁ မိနစ် |
 | 5 | **Browser** | hard refresh (Ctrl+Shift+R) | ၁၀ စက္ကန့် |
+| 6 | **AWS Console / CMD** | *(လိုလျှင်)* အဟောင်း instance ဖျက် + ကျန် resource ရှင်း | ၃ မိနစ် |
 
 ---
 
@@ -239,6 +240,97 @@ python tests\verify_deployment.py http://<EC2-IP>
 **မြင်ရမည့် အသစ်များ** — preview box က ရွေးထားသော ဖော်မတ်အတိုင်း ပုံစံပြောင်း၊
 ခေါင်းစီးတွင် `720×1280 · 9:16` chip၊ စာတန်းနေရာ render နှင့် တူ၊ ဖုန်းတွင် အောက်ခြေ
 `⚡ One-Click Recap စမည်` bar၊ Splitter အပိုင်းတိုင်းတွင် `🎬 Studio သို့ ပို့မည်`။
+
+---
+
+## 6️⃣ အဟောင်း EC2 instance ကို ဖျက်နည်း (ပိုက်ဆံ မကုန်စေရန်)
+
+> ⚠️ **Terminate = အပြီးဖျက်** — root EBS volume ပါ ပါသွားသဖြင့် အဲဒီ server ထဲက
+> အကောင့် DB၊ API key၊ ထွက်ပြီးသား ဗီဒီယိုများ **ပြန်ရလို့ မရတော့ပါ**။
+> လိုအပ်သော ဖိုင်များကို **§6.1 အရင် backup ယူပါ**။
+
+### 6.1 အဟောင်း server မှ data ကို အသစ်သို့ ရွှေ့ခြင်း *(မလိုလျှင် ကျော်)*
+
+```bash
+# ── အဟောင်း server ထဲ ဝင်ပြီး (ssh) — backup တစ်ဖိုင် ထုတ်
+sudo tar czf /home/ubuntu/recap-backup.tgz -C /opt/recap-studio data .env
+sudo chown ubuntu:ubuntu /home/ubuntu/recap-backup.tgz
+ls -lh /home/ubuntu/recap-backup.tgz
+exit
+```
+
+```cmd
+:: ── Windows CMD — အဟောင်းမှ PC သို့ ဆွဲချ → အသစ်သို့ တင်
+scp -i "%USERPROFILE%\.ssh\recap-key.pem" ubuntu@<OLD-IP>:/home/ubuntu/recap-backup.tgz "%USERPROFILE%\Downloads\"
+scp -i "%USERPROFILE%\.ssh\recap-key.pem" "%USERPROFILE%\Downloads\recap-backup.tgz" ubuntu@<NEW-IP>:/home/ubuntu/
+```
+
+```bash
+# ── အသစ် server ထဲ ဝင်ပြီး — ပြန်ထည့်
+sudo systemctl stop recap-studio
+sudo tar xzf /home/ubuntu/recap-backup.tgz -C /opt/recap-studio
+sudo chown -R ubuntu:ubuntu /opt/recap-studio/data /opt/recap-studio/.env
+sudo systemctl start recap-studio
+curl -s http://localhost/api/auth/me          # အကောင့်များ ပြန်ပါလာသလား
+```
+
+> 💡 `data` နှင့် `.env` ကို **အတူတူ** ပြန်ထည့်ရပါမည် — `.env` ထဲက `RECAP_SECRET_KEY`
+> မတူလျှင် encrypt လုပ်ထားသော API key များ ပြန်ဖတ်၍ မရပါ။
+
+### 6.2 AWS Console မှ ဖျက်နည်း (အလွယ်ဆုံး)
+
+1. https://console.aws.amazon.com/ec2/ → **Instances**
+2. ဘယ်ဟာက အဟောင်းလဲ သေချာစစ်ပါ — **Public IPv4** နှင့် **Launch time** ကြည့်ပါ
+   (အသစ်ကို မဖျက်မိစေရန် — အသစ်၏ IP ကို အရင် မှတ်ထားပါ)
+3. အဟောင်း instance ကို ☑ အမှန်ခြစ် → **Instance state ▾** → **Terminate (delete) instance**
+4. `Terminate` ကို ပြန်နှိပ်၍ အတည်ပြု → state က `shutting-down` → `terminated` ဖြစ်သွားမည်
+   (စာရင်းထဲ ၁ နာရီခန့် ကျန်နေမည် — ပိုက်ဆံ မကုန်တော့ပါ)
+
+> **Stop vs Terminate** — `Stop` = ပိတ်ထားရုံ (data ကျန်၊ **EBS ခ ဆက်ကုန်**)၊
+> `Terminate` = အပြီးဖျက် (data ပါ ပျောက်၊ ခ မကုန်တော့)။
+
+### 6.3 ကျန်နေတတ်သော ပိုက်ဆံကုန်စရာများ ရှင်းခြင်း ⭐
+
+Instance ဖျက်ပြီးရင်တောင် အောက်ပါတို့က **ဆက်ပြီး ပိုက်ဆံ ကုန်နေတတ်သည်** —
+
+| ဘယ်မှာ | ဘာလုပ်ရမလဲ |
+|---|---|
+| EC2 → **Elastic IPs** | instance မရှိတော့သော IP = **နာရီခြင်း ကုန်သည်** → ရွေး → *Actions → Release Elastic IP address* |
+| EC2 → **Volumes** | `Available` (မချိတ်ထားသော) volume → ရွေး → *Actions → Delete volume* |
+| EC2 → **Snapshots** | မလိုတော့သော snapshot → Delete |
+| ECS/ALB သုံးဖူးလျှင် | ECS service → tasks 0 → delete · **Load Balancer** → Delete (ALB က အကုန်ဆုံး) |
+| ECR | မသုံးတော့သော image များ → Delete |
+
+### 6.4 Windows CMD မှ ဖျက်ချင်လျှင် (AWS CLI)
+
+```cmd
+:: တစ်ကြိမ်သာ — CLI install ပြီး credentials ထည့်
+winget install --id Amazon.AWSCLI -e
+aws configure
+::   AWS Access Key ID / Secret / region = ap-southeast-1 / output = json
+
+:: instance စာရင်း (ID · Name · State · IP · Launch time)
+aws ec2 describe-instances --query "Reservations[].Instances[].{ID:InstanceId,Name:Tags[?Key=='Name']|[0].Value,State:State.Name,IP:PublicIpAddress,Launched:LaunchTime}" --output table
+
+:: ⚠️ ID သေချာစစ်ပြီးမှ — အဟောင်းကို terminate
+aws ec2 terminate-instances --instance-ids i-0123456789abcdef0
+
+:: ကျန် resource များ
+aws ec2 describe-addresses --query "Addresses[].{IP:PublicIp,Alloc:AllocationId,Assoc:AssociationId}" --output table
+aws ec2 release-address --allocation-id eipalloc-0123456789abcdef0
+aws ec2 describe-volumes --filters Name=status,Values=available --query "Volumes[].{ID:VolumeId,GiB:Size,AZ:AvailabilityZone}" --output table
+aws ec2 delete-volume --volume-id vol-0123456789abcdef0
+```
+
+### 6.5 ဖျက်ပြီးကြောင်း စစ်ဆေးခြင်း
+
+```cmd
+aws ec2 describe-instances --filters Name=instance-state-name,Values=running --query "Reservations[].Instances[].{ID:InstanceId,IP:PublicIpAddress}" --output table
+curl -s -m 5 http://<OLD-IP>/healthz
+```
+
+→ ဒုတိယ command က **မတုံ့ပြန်တော့ရင်** (timeout) အဟောင်း ပိတ်သွားပြီ။
+Billing → **Cost Explorer / Billing Dashboard** တွင် ၂၄ နာရီအတွင်း ကျသွားတာ မြင်ရမည်။
 
 ---
 
