@@ -45,6 +45,29 @@ Timeline အလိုက် အသံ ပေါင်းစပ် (drift-free) +
 ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → MP4 + SRT + MP3
 ```
 
+### 🍌 v4.3.2 — AI Viral Thumbnail Studio (nano-banana) (Phase 3 · Batch C-1 · #10)
+
+Thumbnail tab သည် ယခင်က **ဗီဒီယို ထပ်တင်ခိုင်း**ပြီး ဖရိမ်တစ်ခုပေါ် စာနှစ်ကြောင်း
+တင်ရုံသာ ဖြစ်သည်။ ယခု —
+
+* **ထပ်တင်စရာ မလိုတော့ပါ** — Studio မှာ **ပြီးသွားသော ဗီဒီယိုများ**၏ စာရင်းကို
+  `/api/thumb-sources` မှ ဆွဲယူပြီး drop-down ထဲ အလိုအလျောက် ပြသည်။ recap တစ်ခု
+  ပြီးတိုင်း ထိုစာရင်းထဲ ချက်ချင်း ရောက်သည် (hook စာသားများပါ ကူးယူပေးသည်)။
+* **ဖရိမ် အကောင်းဆုံးကို AI ရွေးသည်** — ဗီဒီယိုတစ်ခုလုံးမှ နမူနာ ၁၀ ခု ဖမ်း၍
+  အလင်းအမှောင် + အသေးစိတ် (edge energy) ဖြင့် အမှတ်ပေးကာ မှောင်သော/ဝါးသော
+  ဖရိမ်များကို ကျော်သည်။
+* **🍌 nano-banana (Gemini 2.5 Flash Image)** — အခမဲ့ image model ဖြင့် ဖရိမ်ကို
+  cinematic poster အဖြစ် ပြန်ပုံဖော်သည် (key ring ကို သုံးသဖြင့် key လှည့်ခြင်း
+  အလုပ်လုပ်သည်)။ **key မရှိ / quota ကုန် / server busy ဖြစ်လျှင် ဖရိမ်အတိုင်း
+  ဆက်ထုတ်ပေးသည် — thumbnail ဘယ်တော့မှ မပျက်ပါ။**
+* **မြန်မာစာ hook ကို Pillow ဖြင့် ကိုယ်တိုင် ရေးသည်** — image model များသည်
+  မြန်မာ အက္ခရာများကို မှန်မှန် မရေးနိုင်သေးသဖြင့် စာကို Noto Sans Myanmar ဖြင့်
+  ထပ်ရေးသည် (gradient shade + stroke ဖြင့် ဖတ်ရလွယ်အောင်)။
+* **တစ်ချက်နှိပ် → ရွေးစရာ ၂–၄ မျိုး** — style ၄ မျိုး (Bold Yellow / Red Alert /
+  Clean White / Neon Violet) × အချိုးအစား ၃ မျိုး
+  (**16:9** YouTube · **9:16** Shorts/Reels · **1:1** Facebook/IG)။
+* **Tests** — `tests/test_thumbs.py` (52 checks, offline — API key မလို)
+
 ### 🗣️ v4.3.1 — Link import, narration အရှည်အတို, Recap ⇄ Dubbing ခွဲခြားမှု (Phase 3 · Batch B-1)
 
 * **#1 Link import** — `youtu.be` / `shorts` / `live` / `&list=` ပါသော link များကို သန့်စင်ပြီး
@@ -254,6 +277,7 @@ python tests/test_key_ring.py         # API key ၃ ခု + quota failover (27 
 python tests/test_auth.py             # အကောင့်/session/CSRF/quota/isolation (69 checks, offline)
 python tests/test_audio_coverage.py   # narration အစအဆုံး ရောက်/မရောက် (16 checks, ffmpeg လိုသည်)
 python tests/test_narration_fit.py    # narration budget · mode ခွဲခြားမှု · link import (39 checks)
+python tests/test_thumbs.py           # nano-banana thumbnail studio · frame ရွေးချယ်မှု (52 checks)
 
 # Front-end (jsdom)
 npm install jsdom

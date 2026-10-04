@@ -460,41 +460,51 @@
       <div class="card">
         <div class="card-head">
           <div class="head-text">
-            <h3>🖼️ Viral Thumbnail Generator</h3>
-            <p class="sub">ဗီဒီယိုမှ ဖရိမ်တစ်ခုကို ဖမ်းယူပြီး Hook စာသား ထည့်ပေးသည်</p>
+            <h3>🍌 AI Viral Thumbnail Studio</h3>
+            <p class="sub">Studio မှာ <b>ပြီးသွားသော ဗီဒီယို</b>ကို nano-banana AI ဖြင့် thumbnail အမျိုးမျိုး ထုတ်ပေးသည်</p>
           </div>
+          <span class="ai-pill" id="thumb-ai-pill" title="nano-banana (Gemini 2.5 Flash Image)">AI စစ်ဆေးနေသည်…</span>
         </div>
-        <div class="dropzone compact" id="thumb-dropzone">
-          <div class="dz-icon">🖼️</div>
-          <div class="dz-title">ဗီဒီယိုဖိုင် ဆွဲထည့်ပါ / နှိပ်၍ ရွေးပါ</div>
-          <div class="dz-hint">မတင်ပါက Studio တွင် တင်ထားသော ဗီဒီယိုကို အသုံးပြုပါမည်</div>
-          <input type="file" id="thumb-file" accept="video/*" class="hidden-input">
-        </div>
+        <label class="field"><span>ပြီးသွားသော ဗီဒီယို ရွေးပါ</span>
+          <select id="thumb-source"><option value="">— ဖွင့်နေသည် —</option></select></label>
+        <p class="help" id="thumb-source-help">Studio tab တွင် recap ပြီးတိုင်း ဒီစာရင်းထဲ အလိုအလျောက် ရောက်လာပါမည်။</p>
         <div class="row c2">
-          <label class="field"><span>ဖမ်းယူမည့် စက္ကန့်</span>
-            <input type="number" id="thumb-sec" value="2.5" step="0.5" min="0"></label>
-          <label class="field"><span>စတိုင်</span>
-            <select id="thumb-style"><option value="bold">Bold (Yellow/Cyan)</option></select></label>
+          <label class="field"><span>အရေအတွက်</span>
+            <select id="thumb-count">
+              <option value="2">၂ မျိုး (မြန်)</option>
+              <option value="3" selected>၃ မျိုး (အကြံပြု)</option>
+              <option value="4">၄ မျိုး</option>
+            </select></label>
+          <label class="field"><span>အချိုးအစား</span>
+            <select id="thumb-aspect">
+              <option value="16:9" selected>16:9 — YouTube (1280×720)</option>
+              <option value="9:16">9:16 — Shorts / Reels (1080×1920)</option>
+              <option value="1:1">1:1 — Facebook / IG (1080×1080)</option>
+            </select></label>
         </div>
         <label class="field"><span>အပေါ် Hook စာသား</span>
-          <input type="text" id="thumb-h1" value="စိတ်ဝင်စားဖွယ်ရာ"></label>
+          <input type="text" id="thumb-h1" value="မကြည့်ရင် နောင်တရမယ်"></label>
         <label class="field"><span>အောက် Hook စာသား</span>
-          <input type="text" id="thumb-h2" value="ဇာတ်ကွက်များ"></label>
+          <input type="text" id="thumb-h2" value="အပြီးထိ ကြည့်ပါ"></label>
+        <label class="check"><input type="checkbox" id="thumb-ai" checked>
+          <span>🍌 nano-banana AI ဖြင့် ပုံကို cinematic ပြန်ပြင် (အခမဲ့ Gemini image model)</span></label>
+        <p class="help">AI key မရှိ/quota ကုန်ပါက ဗီဒီယိုဖရိမ် အတိုင်း ဆက်ထုတ်ပေးပါမည် — thumbnail ဘယ်တော့မှ မပျက်ပါ။</p>
         <button class="btn primary block" id="btn-thumb">✨ Thumbnail ဖန်တီးမည်</button>
       </div>
       <div class="card">
         <div class="card-head">
           <div class="head-text">
-            <h3>Preview</h3>
-            <p class="sub">JPG အဖြစ် ဒေါင်းလုဒ် လုပ်နိုင်သည်</p>
+            <h3>ရလဒ်များ</h3>
+            <p class="sub">အကြိုက်ဆုံးကို ရွေး၍ JPG ဒေါင်းလုဒ် လုပ်ပါ</p>
           </div>
         </div>
         <div id="thumb-empty" class="empty">Thumbnail ဖန်တီးပြီးပါက ဒီနေရာတွင် ပေါ်လာပါမည်။</div>
-        <div id="thumb-result" class="hidden" style="text-align:center">
-          <img id="thumb-img" style="width:min(420px,92%);border-radius:14px;border:1px solid var(--line)" alt="thumbnail">
-          <div class="btn-row" style="justify-content:center;margin-top:12px">
-            <a class="btn success small" id="thumb-dl" download="thumbnail.jpg">📥 ဒေါင်းလုဒ်</a>
-          </div>
+        <div id="thumb-progress" class="hidden" style="margin:8px 0">
+          <div class="meter"><i id="thumb-bar" style="width:40%"></i></div>
+          <p class="help" id="thumb-stat">ဖန်တီးနေသည်…</p>
+        </div>
+        <div id="thumb-result" class="hidden">
+          <div class="thumb-grid" id="thumb-grid"></div>
         </div>
       </div>
     </div>

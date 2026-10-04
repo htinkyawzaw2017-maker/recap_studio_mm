@@ -51,7 +51,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from recapstudio import auth, config, db, fonts, webauth
+from recapstudio import auth, config, db, fonts, thumbs, webauth
 from recapstudio.auth import Principal
 from recapstudio.config import ensure_dirs
 from recapstudio.jobs import JobStore
@@ -1322,6 +1322,78 @@ def thumbnail(payload: dict[str, Any],
         raise _json_error(exc) from exc
     return FileResponse(str(out_path), media_type="image/jpeg",
                         headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/thumb-sources")
+def thumb_sources(principal: Principal = Depends(guard)) -> dict:
+    """Finished Studio videos the thumbnail tab can work from (#10).
+
+    The tab no longer asks for an upload: everything it needs is already on
+    disk, so it lists the *completed* recaps of the caller (newest first) and
+    reuses their hook lines as the default caption.
+    """
+    items: list[dict[str, Any]] = []
+    for job in store.list(40, user_id=_owner_filter(principal)):
+        if job.status != "completed" or not job.output_video:
+            continue
+        path = Path(job.output_video)
+        if not path.is_absolute():
+            path = config.DATA_DIR / job.output_video
+        if not path.exists():
+            continue
+        items.append({
+            "task_id": job.id,
+            "path": config.rel(path),
+            "name": path.name,
+            "kind": job.kind,
+            "duration": job.duration,
+            "created_at": job.created_at,
+            "hook_line1": job.hook_line1,
+            "hook_line2": job.hook_line2,
+            "preview_url": job.preview_url or f"/api/asset?path={config.rel(path)}",
+        })
+    return {"status": "ok", "sources": items,
+            "ai_ready": thumbs.ai_available(key_ring=key_ring),
+            "aspects": list(thumbs.ASPECT_SIZES.keys()),
+            "styles": [{"id": k, "label": v["label"]} for k, v in thumbs.STYLES.items()]}
+
+
+@app.post("/api/thumbnails")
+def thumbnails(payload: dict[str, Any],
+               principal: Principal = Depends(guard)) -> dict:
+    """nano-banana viral thumbnails from a finished Studio video (#10)."""
+    raw_path = str(payload.get("video_path", "") or "")
+    task_id = str(payload.get("task_id", "") or "")
+    if not raw_path and task_id:
+        job = _owned_job(task_id, principal)
+        raw_path = job.output_video or ""
+        if not payload.get("hook_line1"):
+            payload["hook_line1"] = job.hook_line1
+        if not payload.get("hook_line2"):
+            payload["hook_line2"] = job.hook_line2
+    if not raw_path:
+        raise HTTPException(status_code=400, detail="ပြီးသွားသော ဗီဒီယို တစ်ခု ရွေးပါ")
+    video_path = _resolve_owned(raw_path, principal)
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="ဗီဒီယိုဖိုင် ရှာမတွေ့ပါ")
+    try:
+        variants = thumbs.generate_variants(
+            video_path=str(video_path),
+            out_dir=config.user_output_dir(_scope(principal)),
+            hook1=str(payload.get("hook_line1", "")).strip() or "မကြည့်ရင် နောင်တရမယ်",
+            hook2=str(payload.get("hook_line2", "")).strip() or "အပြီးထိ ကြည့်ပါ",
+            count=int(payload.get("count", 3) or 3),
+            aspect=str(payload.get("aspect", "16:9") or "16:9"),
+            use_ai=bool(payload.get("use_ai", True)),
+            api_key=_effective_api_key(principal, payload),
+            key_ring=key_ring,
+            badge=str(payload.get("badge", "") or ""),
+        )
+    except Exception as exc:
+        raise _json_error(exc) from exc
+    return {"status": "ok", "variants": variants,
+            "ai_used": any(v["ai"] for v in variants),
+            "model": thumbs.NANO_BANANA_MODELS[0]}
 
 
 @app.post("/api/estimate-parts")

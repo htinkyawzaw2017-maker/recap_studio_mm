@@ -25,7 +25,6 @@
     serverOk: null,           // null = unknown, true/false after a probe
     video: null,              // studio upload  {path, duration, …, previewUrl, name}
     splitVideo: null,         // shorts splitter upload
-    thumbVideo: null,         // thumbnail tab upload
     logo: null,
     job: null,                // current job object from the API
     poll: null,
@@ -184,6 +183,7 @@
       b.classList.toggle('active', b.dataset.tab === name));
     if (name === 'jobs') loadJobs();
     if (name === 'settings') refreshSystem();
+    if (name === 'thumb') loadThumbSources();
     // a hidden panel measures 0×0 — re-measure once it is on screen again
     if (name === 'studio') {
       if (typeof requestAnimationFrame === 'function') requestAnimationFrame(applyPreviewGeometry);
@@ -368,9 +368,6 @@
           info: `${fmtTime(state.splitVideo.duration)} · ${fmtBytes(state.splitVideo.size)}`
         }, URL.createObjectURL(file));
         estimateSplitParts();
-      } else if (target === 'thumb') {
-        state.thumbVideo = makeVideoEntry(data, file);
-        toast('Thumbnail အတွက် ဗီဒီယို အဆင်သင့်', 'ok');
       } else {
         applyVideoResult(data, file);
         toast(`ဗီဒီယို အဆင်သင့် — ${fmtTime(state.video.duration)}`, 'ok');
@@ -1103,24 +1100,103 @@
   };
 
   /* ═════════════════ THUMBNAIL / SPLITTER / JOBS ═══════════════════ */
-  wireDropzone('thumb-dropzone', 'thumb-file', (file) => handleVideoFile(file, { target: 'thumb' }));
+  /* ── #10 Thumbnail studio: finished Studio videos + nano-banana AI ── */
+  state.thumbSources = [];
+
+  async function loadThumbSources(preferPath) {
+    const sel = $('thumb-source');
+    if (!sel) return;
+    try {
+      const res = await fetch('/api/thumb-sources', { credentials: 'same-origin', headers: authHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      state.thumbSources = data.sources || [];
+      const pill = $('thumb-ai-pill');
+      if (pill) {
+        pill.textContent = data.ai_ready ? '🍌 nano-banana အဆင်သင့်' : '🔑 AI key မရှိ — ဖရိမ်အတိုင်း';
+        pill.className = 'ai-pill ' + (data.ai_ready ? 'ok' : 'warn');
+      }
+      const want = preferPath || sel.value;
+      sel.innerHTML = '';
+      if (!state.thumbSources.length) {
+        sel.innerHTML = '<option value="">— ပြီးသွားသော ဗီဒီယို မရှိသေးပါ —</option>';
+        $('thumb-source-help').textContent = 'Studio tab မှာ recap တစ်ခု အရင်လုပ်ပါ — ပြီးတာနဲ့ ဒီမှာ ပေါ်လာပါမည်။';
+        return;
+      }
+      state.thumbSources.forEach((src) => {
+        const opt = document.createElement('option');
+        opt.value = src.path;
+        const mins = src.duration ? ` · ${Math.round(src.duration / 60)} မိနစ်` : '';
+        opt.textContent = `${src.kind === 'dub' ? '🎭' : '🎬'} ${src.name}${mins}`;
+        sel.appendChild(opt);
+      });
+      if (want && state.thumbSources.some((s2) => s2.path === want)) sel.value = want;
+      syncThumbHooks();
+    } catch (err) {
+      sel.innerHTML = '<option value="">— စာရင်း မရပါ —</option>';
+      $('thumb-source-help').textContent = 'စာရင်း မရယူနိုင်ပါ: ' + err.message;
+    }
+  }
+
+  function syncThumbHooks() {
+    const src = state.thumbSources.find((s2) => s2.path === $('thumb-source').value);
+    if (!src) return;
+    if (src.hook_line1) $('thumb-h1').value = src.hook_line1;
+    if (src.hook_line2) $('thumb-h2').value = src.hook_line2;
+    $('thumb-source-help').textContent = src.duration
+      ? `ရွေးထားသည်: ${src.name} — AI က ဗီဒီယိုတစ်ခုလုံးမှ အကောင်းဆုံး ဖရိမ်များကို ရွေးပါမည်။`
+      : `ရွေးထားသည်: ${src.name}`;
+  }
+  if ($('thumb-source')) $('thumb-source').onchange = syncThumbHooks;
+
+  function renderThumbVariants(variants, aiUsed) {
+    const grid = $('thumb-grid');
+    grid.innerHTML = '';
+    variants.forEach((v) => {
+      const card = document.createElement('figure');
+      card.className = 'thumb-card';
+      const img = document.createElement('img');
+      img.src = v.preview_url;
+      img.alt = `thumbnail ${v.index}`;
+      img.loading = 'lazy';
+      const cap = document.createElement('figcaption');
+      cap.innerHTML = `<span>${v.ai ? '🍌 AI' : '🎞️ ဖရိမ်'} · ${v.style_label} · ${v.second}s</span>`;
+      const a = document.createElement('a');
+      a.className = 'btn success small';
+      a.href = v.url;
+      a.download = v.filename;
+      a.textContent = '📥 ဒေါင်းလုဒ်';
+      cap.appendChild(a);
+      card.append(img, cap);
+      grid.appendChild(card);
+    });
+    $('thumb-empty').classList.add('hidden');
+    $('thumb-result').classList.remove('hidden');
+    toast(aiUsed ? `🍌 nano-banana thumbnail ${variants.length} မျိုး ပြီးပါပြီ`
+                 : `Thumbnail ${variants.length} မျိုး ပြီးပါပြီ`, 'ok');
+  }
 
   $('btn-thumb').onclick = async () => {
-    const source = state.thumbVideo || state.video;
-    if (!source) return toast('ဗီဒီယိုဖိုင် အရင်တင်ပါ', 'err');
+    const path = $('thumb-source').value || (state.video && state.video.path) || '';
+    if (!path) return toast('ပြီးသွားသော ဗီဒီယို တစ်ခု ရွေးပါ', 'err');
     const btn = $('btn-thumb');
     btn.disabled = true;
+    $('thumb-progress').classList.remove('hidden');
+    $('thumb-stat').textContent = $('thumb-ai').checked
+      ? '🍌 nano-banana ဖြင့် ဖန်တီးနေသည် — ၂၀–၆၀ စက္ကန့်ခန့်…'
+      : 'ဖရိမ်များ ရွေး၍ ဖန်တီးနေသည်…';
     try {
-      const res = await fetch('/api/thumbnail', {
+      const res = await fetch('/api/thumbnails', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json', ...authHeaders('POST') },
         body: JSON.stringify({
-          video_path: source.path,
-          timestamp: Number($('thumb-sec').value) || 2.5,
+          video_path: path,
           hook_line1: $('thumb-h1').value,
           hook_line2: $('thumb-h2').value,
-          style: $('thumb-style').value
+          count: Number($('thumb-count').value) || 3,
+          aspect: $('thumb-aspect').value,
+          use_ai: $('thumb-ai').checked
         })
       });
       if (!res.ok) {
@@ -1128,15 +1204,13 @@
         try { msg = (await res.json()).detail || msg; } catch { /* ignore */ }
         throw new Error(msg);
       }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      $('thumb-img').src = url;
-      $('thumb-dl').href = url;
-      $('thumb-empty').classList.add('hidden');
-      $('thumb-result').classList.remove('hidden');
-      toast('Thumbnail အဆင်သင့်', 'ok');
+      const data = await res.json();
+      renderThumbVariants(data.variants || [], data.ai_used);
     } catch (err) { toast('Thumbnail မရပါ: ' + err.message, 'err'); }
-    finally { btn.disabled = false; }
+    finally {
+      btn.disabled = false;
+      $('thumb-progress').classList.add('hidden');
+    }
   };
 
   // ── shorts splitter (own upload slot + background job) ───────────────

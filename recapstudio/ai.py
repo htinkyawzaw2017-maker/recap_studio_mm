@@ -270,6 +270,18 @@ class GeminiClient:
             return part, ref
         return ref, ref
 
+    def build_image_part(self, path: str | Path, mime: str = ""):
+        """Inline image part (thumbnails) — always small enough to inline."""
+        path = Path(path)
+        suffix = path.suffix.lower()
+        mime = mime or {".png": "image/png", ".webp": "image/webp",
+                        ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}.get(suffix, "image/jpeg")
+        data = path.read_bytes()
+        if self.is_new:
+            types_mod = getattr(self.sdk, "types", None)
+            return types_mod.Part(inline_data=types_mod.Blob(data=data, mime_type=mime))
+        return {"mime_type": mime, "data": data}
+
     def upload(self, path: str | Path, progress: ProgressFn = None, label: str = ""):
         """Upload through the Files API and wait until it is ACTIVE.
 
@@ -384,6 +396,51 @@ class GeminiClient:
                 time.sleep(wait)
             attempt += 1
         raise RuntimeError(f"AI request failed: {last_error}")
+
+
+    # ── images (nano-banana / Gemini 2.5 Flash Image) ──────────────────
+    def generate_image(self, model: str, parts: list,
+                       cancel: Callable[[], bool] | None = None) -> bytes:
+        """Return the raw bytes of the first image the model produces.
+
+        Used by the thumbnail studio: ``parts`` is normally
+        ``[image_part, prompt]`` so the model *edits* a real frame of the
+        video (nano-banana's strength) instead of hallucinating a new scene.
+        Key rotation and retries work exactly like :meth:`generate_json`.
+        """
+        model = MODEL_ALIASES.get(model, model)
+        attempt, key_switches = 0, 0
+        last_error: Exception | None = None
+        while attempt < config.settings.ai_retries + key_switches:
+            if cancel and cancel():
+                raise CancelledError("အလုပ်ကို ရပ်တန့်လိုက်ပါပြီ")
+            try:
+                if self.is_new:
+                    res = self._client.models.generate_content(  # type: ignore[union-attr]
+                        model=model, contents=parts,
+                        config={"response_modalities": ["IMAGE", "TEXT"]},
+                    )
+                else:  # pragma: no cover - legacy SDK has no image output
+                    raise RuntimeError("google-genai (new SDK) လိုအပ်ပါသည်")
+                for cand in (getattr(res, "candidates", None) or []):
+                    for part in (getattr(getattr(cand, "content", None), "parts", None) or []):
+                        blob = getattr(part, "inline_data", None)
+                        data = getattr(blob, "data", None) if blob else None
+                        if data:
+                            return data if isinstance(data, bytes) else bytes(data)
+                last_error = RuntimeError("AI မှ ပုံ ပြန်မလာပါ")
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                msg = str(exc).lower()
+                if any(k in msg for k in _KEY_ERROR_MARKERS) and key_switches < 3 and self.rotate_key(exc):
+                    key_switches += 1
+                    continue
+                if not any(k in msg for k in ("503", "unavailable", "429", "overloaded",
+                                              "deadline", "timeout", "500", "internal")):
+                    break
+                time.sleep(min(20, 3 * (attempt + 1)))
+            attempt += 1
+        raise RuntimeError(f"AI image request failed: {last_error}")
 
 
 # ── JSON parsing ─────────────────────────────────────────────────────────
