@@ -83,8 +83,11 @@ def main() -> int:
 
     print("── cancel flag not set (unrelated ffmpeg death) ───────────")
     kind2, message2, _ = run_case("crash", 10, cancelled=False)
-    check("a real ffmpeg failure is still an error", kind2 == "RuntimeError",
+    # v4.3.4: ffmpeg failures are raised as FFmpegFailure — still a RuntimeError,
+    # but with a short Burmese message instead of 2,500 chars of raw stderr
+    check("a real ffmpeg failure is still an error", kind2 in {"RuntimeError", "FFmpegFailure"},
           f"{kind2}: {message2[:40]}")
+    check("its message is short (toast safe)", len(message2) < 260, f"{len(message2)} chars")
 
     print("── registry bookkeeping ──────────────────────────────────")
     check("no ffmpeg left behind", media.process_registry.count() == 0,

@@ -23,3 +23,8 @@ fonts.conf
 # media scratch
 *.part
 tmp/
+
+# front-end test tooling (jsdom for tests/test_ui_*.mjs — never commit)
+node_modules/
+package-lock.json
+package.json

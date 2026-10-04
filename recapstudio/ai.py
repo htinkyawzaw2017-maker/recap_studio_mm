@@ -32,7 +32,7 @@ from typing import Any, Callable, Iterable, Optional
 
 from . import config
 from .keys import KeyRing, key_ring as default_key_ring
-from .media import run_ffmpeg
+from .media import FFmpegFailure, run_ffmpeg
 from .util import CancelledError, estimate_speech_seconds, get_logger
 
 log = get_logger("recap.ai")
@@ -548,6 +548,57 @@ def plan_chunks(duration: float, max_seconds: int | None = None,
     return [(s, e) for s, e in chunks if e - s > 1.0]
 
 
+def _short_reason(exc: BaseException, limit: int = 220) -> str:
+    """One short, toast-safe line describing a failure (never raw ffmpeg stderr)."""
+    text = getattr(exc, "summary", "") or str(exc)
+    text = " ".join(str(text).split())
+    if len(text) > limit:
+        text = text[: limit - 1] + "…"
+    return text
+
+
+def aggregate_chunk_failure(failures: list[tuple[int, float, float, BaseException]],
+                            total: int) -> RuntimeError:
+    """Error shown when *every* chunk failed.
+
+    The distinction matters: when ffmpeg could not even cut a proxy, the AI
+    never ran at all — hunting for an API key / quota problem wastes hours.
+    """
+    first = failures[0][3]
+    detail = getattr(first, "detail", "") or str(first)
+    proxy_failures = [f for f in failures if isinstance(f[3], ProxyBuildError)]
+    if proxy_failures:
+        reasons = sorted({_short_reason(f[3]) for f in proxy_failures})
+        return ProxyBuildError(
+            f"🎬 ffmpeg က ဗီဒီယိုကို ဖြတ်ထုတ်၍ မရပါ — AI ဆီ မပို့ရသေးပါ "
+            f"(chunk {len(failures)}/{total} လုံး မှာ ကျရှုံး)။\n"
+            f"{reasons[0]}\n"
+            "👉 ဖိုင်ကို H.264 (avc1) အဖြစ် ပြန်ဒေါင်းလုဒ် လုပ်ပြီး ပြန်တင်၍ ထပ်စမ်းပါ။",
+            detail=detail)
+    return RuntimeError(
+        f"🧠 AI မှ အပိုင်း {len(failures)}/{total} လုံး ပြန်မလာပါ — {_short_reason(first)}\n"
+        "👉 ⚙️ Settings တွင် API Key / model ကို စစ်ပြီး ထပ်စမ်းပါ။"
+    )
+
+
+class ProxyBuildError(RuntimeError):
+    """ffmpeg could not cut an analysis proxy — the AI never saw the video.
+
+    This is deliberately its own type: the old code let the raw ffmpeg error
+    escape and be reported as *"AI analysis failed for every chunk"*, which
+    sent the user hunting for an API-key/quota problem that did not exist.
+    """
+
+    def __init__(self, summary: str, *, detail: str = "", stage: str = "proxy") -> None:
+        super().__init__(summary)
+        self.summary = summary
+        self.detail = detail
+        self.stage = stage
+
+    def __str__(self) -> str:
+        return self.summary
+
+
 def build_proxy(video_path: str | Path, start: float, end: float, out_path: str | Path,
                 progress: ProgressFn = None) -> Path:
     """1 fps / 480p / mono 16 kHz proxy - the exact sampling Gemini uses.
@@ -555,17 +606,26 @@ def build_proxy(video_path: str | Path, start: float, end: float, out_path: str 
     Cuts encode time by ~20x, makes uploads tiny and keeps the chunk start
     frame-accurate (``-ss`` after ``-i``), which is what makes absolute
     timestamps trustworthy.
+
+    Failures are re-raised as :class:`ProxyBuildError` with a **short** Burmese
+    sentence, so a broken input file never shows up as an AI problem and never
+    floods the UI with raw ffmpeg stderr.
     """
     length = max(0.5, end - start)
-    run_ffmpeg([
-        "-y",
-        "-ss", f"{start:.3f}", "-i", str(video_path), "-t", f"{length:.3f}",
-        "-vf", "scale=480:-2:force_original_aspect_ratio=decrease,fps=1",
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "48k", "-ac", "1", "-ar", "16000",
-        "-movflags", "+faststart",
-        str(out_path),
-    ], total_duration=length, label="proxy", progress=None, check=True)
+    try:
+        run_ffmpeg([
+            "-y",
+            "-ss", f"{start:.3f}", "-i", str(video_path), "-t", f"{length:.3f}",
+            "-vf", "scale=480:-2:force_original_aspect_ratio=decrease,fps=1",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "48k", "-ac", "1", "-ar", "16000",
+            "-movflags", "+faststart",
+            str(out_path),
+        ], total_duration=length, label="proxy", progress=None, check=True)
+    except FFmpegFailure as exc:
+        raise ProxyBuildError(
+            "🎬 ffmpeg က ဗီဒီယိုကို ဖြတ်ထုတ်၍ မရပါ (AI ဆီ မပို့ရသေးပါ)။ " + exc.summary,
+            detail=exc.detail) from exc
     return Path(out_path)
 
 
@@ -876,6 +936,7 @@ class TimelineExtractor:
         results: list[dict] = []
         per_chunk: list[dict] = []
         errors: list[str] = []
+        failures: list[tuple[int, float, float, BaseException]] = []
         workers = max(1, min(config.settings.analyze_workers, len(chunks)))
         done = 0
         from concurrent.futures import as_completed
@@ -895,15 +956,23 @@ class TimelineExtractor:
                     if payload.get("hook_line1") or payload.get("hook_line2"):
                         results.append({"__hook__": payload})
                 except Exception as exc:
-                    errors.append(f"chunk {idx + 1} ({start:.0f}-{end:.0f}s): {exc}")
-                    self.log(f"⚠️ chunk {idx + 1} failed: {exc}")
+                    failures.append((idx + 1, start, end, exc))
+                    # short line for the UI, full text into the server log —
+                    # three chunks × 2,500 chars of raw ffmpeg used to be sent
+                    # straight to the browser and blew the layout up.
+                    short = _short_reason(exc)
+                    errors.append(f"chunk {idx + 1} ({start:.0f}-{end:.0f}s): {short}")
+                    self.log(f"⚠️ chunk {idx + 1} ({start:.0f}-{end:.0f}s) failed: {short}")
+                    detail = getattr(exc, "detail", "") or ""
+                    if detail:
+                        self.log(f"   ↳ အပြည့်အစုံ: {detail[-600:]}")
                 done += 1
                 self._emit(8 + (done / len(chunks)) * 62,
                            f"🧠 AI စစ်ဆေးပြီး {done}/{len(chunks)} အပိုင်း "
                            f"({start:.0f}-{end:.0f}s) ✅")
 
-        if not results and errors:
-            raise RuntimeError("AI analysis failed for every chunk:\n" + "\n".join(errors[:3]))
+        if not results and failures:
+            raise aggregate_chunk_failure(failures, len(chunks))
 
         hooks = [r for r in results if isinstance(r, dict) and "__hook__" in r]
         dialogues = normalise([r for r in results if "__hook__" not in r], duration)

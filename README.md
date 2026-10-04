@@ -45,6 +45,30 @@ Timeline အလိုက် အသံ ပေါင်းစပ် (drift-free) +
 ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → MP4 + SRT + MP3
 ```
 
+### 🩺 v4.3.4 — "AI analysis failed" အမှား အမှန်ဖော်ပြခြင်း + input pre-flight
+
+EC2 ပေါ်တွင် ဒေါင်းလုဒ်လုပ်ထားသော ဖိုင်တစ်ခုနှင့် recap လုပ်ကြည့်ရာ
+`AI analysis failed for every chunk` ထွက်ပြီး website layout လည်း ကျယ်ထွက်သွားသည်။
+အမှန်တကယ် ဖြစ်နေသည်က **AI မရောက်ဘဲ ffmpeg (proxy ဖြတ်ထုတ်သည့်အဆင့်) မှာ သေနေသည်**။
+ပြင်ဆင်ချက် ၄ ချက် —
+
+* **1. ffmpeg ကျရှုံးမှုကို သီးသန့် ခွဲပြ** — `FFmpegFailure` / `ProxyBuildError` ဟူသော
+  type အသစ်များဖြင့် "🎬 ffmpeg က ဗီဒီယိုကို ဖြတ်ထုတ်၍ မရပါ — AI ဆီ မပို့ရသေးပါ" ဟု
+  မြန်မာလို ရှင်းရှင်းလင်းလင်း ပြသည် ("AI analysis failed" ဟု မပြတော့ပါ)။
+* **2. Upload ပြီးချင်း pre-flight** — `ffprobe` + **တကယ့် ၅-frame decode စမ်းသပ်မှု**
+  (`recapstudio/media.py: preflight_video`). video track မပါခြင်း၊ ဖိုင်ပျက်ခြင်း၊
+  AV1/VP9 decoder မရှိခြင်း၊ ကြာချိန်ဖတ်၍မရခြင်းကို **upload ချက်ချင်း** မြန်မာ error ဖြင့်
+  ပြောပြီး job မစတင်စေတော့ပါ။ yt-dlp link import တွင်လည်း H.264 (avc1) ကို ဦးစားပေး
+  ဒေါင်းစေပြီး import ပြီးချင်း စစ်သည်။
+* **3. Layout မကျယ်ထွက်တော့ပါ** — `.log-box`/`.toast` တွင် `overflow-wrap:anywhere` +
+  `html,body { overflow-x:hidden }` guard ထည့်ပြီး၊ error ကို **အတိုချုပ်** (toast
+  အများဆုံး ၂၆၀ လုံး) သာ ပို့တော့သည် (၇,၅၀၀ လုံး မဟုတ်တော့ပါ)။
+* **4. ffmpeg log အကြမ်း** — တိုတိုမြန်မာလို ပြီး အပြည့်အစုံကို **collapsible `<details>`**
+  ထဲ (လိုအပ်မှ ဖွင့်ကြည့်) ထည့်ထားသည်။ Job panel တွင် "👉 ဘာလုပ်ရမလဲ" hint ပါ ပြသည်။
+
+* Tests — `tests/test_input_diagnostics.py` (33 checks, offline) ·
+  `tests/test_ffmpeg_diagnostics.py` (ffmpeg ရှိလျှင် run) · `tests/test_ui_preview.mjs` (40 checks)
+
 ### 🍌 v4.3.2 — AI Viral Thumbnail Studio (nano-banana) (Phase 3 · Batch C-1 · #10)
 
 Thumbnail tab သည် ယခင်က **ဗီဒီယို ထပ်တင်ခိုင်း**ပြီး ဖရိမ်တစ်ခုပေါ် စာနှစ်ကြောင်း

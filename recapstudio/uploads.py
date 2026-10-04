@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import BinaryIO, Optional
 
 from . import config
-from .media import get_video_info
+from .media import InputValidationError, get_video_info, preflight_video
 from .util import get_logger, human_bytes, safe_rmtree, slugify_filename
 
 log = get_logger("recap.uploads")
@@ -308,8 +308,32 @@ class UploadManager:
                 "video_codec": info["video_codec"],
                 "audio_codec": info["audio_codec"],
             })
-            if not info["has_video"]:
-                raise ValueError("ဒီဖိုင်ထဲမှာ video stream မတွေ့ပါ။ အသံဖိုင် သို့မဟုတ် ပျက်နေသော ဖိုင် ဖြစ်နိုင်ပါသည်။")
+            # ── v4.3.4 pre-flight ─────────────────────────────────────
+            # ffprobe *and* a real 5-frame decode test, right after the upload.
+            # Before this, a file whose video track ffmpeg could not decode
+            # (AV1/VP9 without a decoder, truncated MP4, audio-only) was
+            # accepted here and only exploded minutes later inside the AI
+            # stage as the misleading "AI analysis failed for every chunk".
+            report = preflight_video(path)
+            payload["decodable"] = bool(report["ok"])
+            payload["validation"] = {
+                "ok": bool(report["ok"]),
+                "code": report["code"],
+                "message": report["message"],
+                "warnings": report.get("warnings", []),
+                "frames": report.get("frames"),
+            }
+            if info["duration"]:
+                payload["duration"] = round(float(info["duration"]), 3)
+            if not report["ok"]:
+                log.warning("upload %s rejected (%s): %s | %s", session.upload_id,
+                            report["code"], report["message"],
+                            (report.get("detail") or "")[-600:])
+                raise InputValidationError(report["message"],
+                                           detail=report.get("detail", ""),
+                                           code=report["code"])
+            for warning in report.get("warnings", []):
+                log.info("upload %s: %s", session.upload_id, warning)
         if session.kind == "logo" and path.exists():
             payload.update(self.logo_assets(path, owner=session.owner))
         return payload

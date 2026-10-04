@@ -147,11 +147,26 @@
   }
 
   // ── toasts ───────────────────────────────────────────────────────────
+  /**
+   * v4.3.4 — a toast may never carry a raw log dump. Three failed analysis
+   * chunks used to push ~7,500 characters (with 130-character space-less EC2
+   * paths) into a single toast: the page grew wider than the screen and the
+   * layout looked broken. Long messages are clamped here and the full text
+   * stays in the job log / collapsible error panel.
+   */
+  const TOAST_MAX = 260;
+  function clampToast(text) {
+    const s = String(text == null ? '' : text);
+    if (s.length <= TOAST_MAX) return s;
+    const cut = s.slice(0, TOAST_MAX);
+    const lastBreak = Math.max(cut.lastIndexOf('\n'), cut.lastIndexOf(' '));
+    return (lastBreak > 80 ? cut.slice(0, lastBreak) : cut) + '… (အပြည့်အစုံ — အောက်က log ကို ကြည့်ပါ)';
+  }
   function toast(message, kind = 'info', ms = 6000) {
     const el = document.createElement('div');
     el.className = `toast ${kind}`;
     el.innerHTML = `<span>${kind === 'ok' ? '✅' : kind === 'err' ? '⛔' : kind === 'warn' ? '⚠️' : 'ℹ️'}</span>
-                    <span>${escapeHtml(message)}</span><span class="close">✕</span>`;
+                    <span>${escapeHtml(clampToast(message))}</span><span class="close">✕</span>`;
     el.querySelector('.close').onclick = () => el.remove();
     $('toasts').appendChild(el);
     if (ms) setTimeout(() => el.remove(), ms);
@@ -369,8 +384,19 @@
         }, URL.createObjectURL(file));
         estimateSplitParts();
       } else {
-        applyVideoResult(data, file);
-        toast(`ဗီဒီယို အဆင်သင့် — ${fmtTime(state.video.duration)}`, 'ok');
+        // v4.3.4 — the server ran ffprobe + a real decode test during
+        // /upload/complete; surface its verdict immediately instead of
+        // letting the file die 3 minutes later inside the AI stage.
+        // A rejected file is NOT loaded into the Studio (no One-Click bait).
+        const verdict = data && data.validation;
+        if (verdict && verdict.ok === false) {
+          toast('ဒီဖိုင် အဆင်သင့် မဖြစ်ပါ — ' + verdict.message, 'err', 20000);
+        } else {
+          applyVideoResult(data, file);
+          toast(`ဗီဒီယို အဆင်သင့် — ${fmtTime(state.video.duration)}`, 'ok');
+          const warns = (verdict && verdict.warnings) || [];
+          warns.slice(0, 2).forEach((w) => toast(w, 'warn', 9000));
+        }
       }
     } catch (err) {
       if (String(err.message).includes('UPLOAD_CANCELLED')) toast('တင်ခြင်းကို ရပ်လိုက်ပါပြီ', 'warn');
@@ -837,6 +863,34 @@
     card.classList.toggle('is-live', !!live);
   }
 
+  /**
+   * v4.3.4 — failed jobs get a structured panel: a short Burmese reason, a
+   * "what to do" hint, and the raw ffmpeg/traceback text inside a collapsible
+   * <details> (never expanded by default, never inside a toast).
+   */
+  function renderJobError(job) {
+    const panel = $('job-error-panel');
+    if (!panel) return;
+    const failed = job && job.status === 'failed';
+    panel.classList.toggle('hidden', !failed);
+    if (!failed) return;
+    const reason = (job.error || job.message || 'အမှား ဖြစ်ပွားပါသည်').replace(/^❌\s*/, '');
+    $('job-error-text').textContent = reason;
+    const hint = $('job-error-hint');
+    const hintText = job.error_hint || '';
+    hint.textContent = hintText;
+    hint.classList.toggle('hidden', !hintText);
+    const wrap = $('job-error-detail-wrap');
+    const detail = (job.error_detail || '').trim();
+    if (detail && detail !== reason) {
+      $('job-error-detail').textContent = detail;
+      wrap.classList.remove('hidden');
+    } else {
+      $('job-error-detail').textContent = '';
+      wrap.classList.add('hidden');
+    }
+  }
+
   function renderJob(job) {
     state.job = job;
     $('job-idle-msg').classList.add('hidden');
@@ -852,6 +906,7 @@
     if (job.eta_seconds) $('job-eta').textContent = `ခန့်မှန်း ကျန်ချိန် ≈ ${fmtTime(job.eta_seconds)} · လုပ်ဆောင်ချိန် ${fmtTime(job.elapsed_seconds)}`;
     else $('job-eta').textContent = job.elapsed_seconds ? `လုပ်ဆောင်ချိန် ${fmtTime(job.elapsed_seconds)}` : '—';
     renderStages(job.stages || {});
+    renderJobError(job);
     if (job.logs) {
       const box = $('job-logs');
       box.textContent = job.logs.join('\n');
@@ -894,7 +949,9 @@
     } else if (job.status === 'failed') {
       stopPolling();
       setJobCardLive(false);
+      renderJobError(job);
       toast('အလုပ် မအောင်မြင်ပါ: ' + (job.error || job.message), 'err', 20000);
+      $('job-error-panel').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     } else if (job.status === 'cancelled') {
       stopPolling();
       setJobCardLive(false);

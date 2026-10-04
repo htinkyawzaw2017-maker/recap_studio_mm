@@ -35,6 +35,175 @@ _SPEED_RE = re.compile(r"speed=\s*([\d.]+)x")
 _OUT_TIME_RE = re.compile(r"out_time_ms=(\d+)")
 _OUT_TIME_US_RE = re.compile(r"out_time_us=(\d+)")
 
+# ── failure reporting: short Burmese sentence + full raw log ──────────────
+#
+# v4.3.4. Before this, ``str(exc)`` was the last 2,500 characters of raw
+# ffmpeg stderr. Three failed analysis chunks therefore produced a ~7,500
+# character blob full of EC2 paths that contain no spaces at all, and that
+# blob was pushed straight into `.toast` / `.log-box` → the page became wider
+# than the screen ("website zoom ကျယ်သွားတယ်").
+#
+# Rule now: the exception message is ONE short Burmese sentence that is safe
+# inside a toast; the raw log travels in ``.detail`` and the UI renders it
+# inside a collapsible <details> panel.
+DETAIL_LIMIT = 8000
+
+#: progress key=value blocks that ``-progress pipe:1`` mixes into the output
+_PROGRESS_LINE_RE = re.compile(
+    r"^\s*(frame|fps|stream_\d+:\d+|stream_\d+_\d+|out_time_ms|out_time_us|out_time|"
+    r"bitrate|total_size|dup_frames|drop_frames|speed|progress)\s*=",
+    re.IGNORECASE,
+)
+
+
+class FFmpegFailure(RuntimeError):
+    """An ffmpeg / ffprobe command failed.
+
+    ``str(exc)`` is a short Burmese sentence (toast safe); ``.detail`` carries
+    the raw log for the collapsible panel. Still a ``RuntimeError`` so every
+    existing ``except RuntimeError`` keeps working.
+    """
+
+    def __init__(self, summary: str, *, detail: str = "", returncode: Optional[int] = None,
+                 label: str = "", stage: str = "") -> None:
+        super().__init__(summary)
+        self.summary = summary
+        self.detail = (detail or "")[-DETAIL_LIMIT:]
+        self.returncode = returncode
+        self.label = label
+        self.stage = stage
+
+    def __str__(self) -> str:  # never leak the raw tail into the UI
+        return self.summary
+
+
+class InputValidationError(ValueError):
+    """The uploaded file cannot be used (checked with ffprobe + a decode test).
+
+    Subclasses ``ValueError`` because that is what ``uploads`` / ``pipeline``
+    already raise for "this file is not usable", so old handlers still catch it.
+    """
+
+    def __init__(self, summary: str, *, detail: str = "", code: str = "") -> None:
+        super().__init__(summary)
+        self.summary = summary
+        self.detail = (detail or "")[-DETAIL_LIMIT:]
+        self.code = code
+
+    def __str__(self) -> str:
+        return self.summary
+
+
+#: (marker in the ffmpeg log, short Burmese explanation)
+_ERROR_PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("moov atom not found", "moov atom", "invalid atom"),
+     "🎬 MP4 ဖိုင် မပြည့်စုံပါ (download/upload ပြတ်နေသည်) — ဖိုင်ကို ပြန်ဒေါင်းလုဒ်/ပြန်တင် လုပ်ပေးပါ။"),
+    (("decoder (codec", "decoder not found", "unknown decoder", "no decoder",
+      "unsupported codec", "decoder for", "find decoder"),
+     "🎬 ဒီဖိုင်၏ video codec ({codec}) ကို server က ffmpeg ဖြင့် ဖွင့်၍ မရပါ (decoder မရှိ)။ "
+     "H.264 (avc1) ဖိုင်အဖြစ် ပြန်ဒေါင်းလုဒ် လုပ်ပါ — သို့မဟုတ် server တွင် ffmpeg အသစ် တင်ပါ။"),
+    (("received no packets", "no packets", "does not contain any stream",
+      "matches no streams", "no stream", "output file is empty"),
+     "🎬 video track မှာ packet/frame တစ်ခုမှ မထွက်ပါ (frame=0) — video stream ပျက်နေပါသည်။ "
+     "H.264 (avc1) ဖြင့် ပြန်ဒေါင်းလုဒ် လုပ်ပြီး ပြန်တင်ပေးပါ။"),
+    (("invalid data found", "invalid nal unit", "error while decoding", "corrupt",
+      "damaged", "error decoding"),
+     "🎬 ဗီဒီယို frame များ ဖတ်နေစဉ် error တက်ပါသည် — ဖိုင် ပျက်နေနိုင်ပါသည်။ "
+     "ပြန်ဒေါင်းလုဒ် (သို့) format ပြောင်း၍ ပြန်တင်ပါ။"),
+    (("no such file or directory", "cannot find the file", "file not found"),
+     "📂 ဖိုင်/လမ်းကြောင်း ရှာမတွေ့ပါ — ဗီဒီယိုကို ပြန်တင်ပေးပါ။"),
+    (("no space left on device", "disk full", "enospc"),
+     "💾 Server disk space မလုံလောက်ပါ — EC2 volume (EBS) size တိုးပေးပါ။"),
+    (("permission denied", "operation not permitted"),
+     "🔒 ဖိုင် ဖတ်/ရေး ခွင့်ပြုချက် မရှိပါ (file permission)။"),
+    (("no such filter", "filter not found", "unknown filter", "unrecognized option",
+      "option not found", "error initializing filter", "error reinitializing filters",
+      "invalid argument"),
+     "⚙️ ဒီ server ၏ ffmpeg ဗားရှင်းတွင် လိုအပ်သော filter/option မပါပါ — "
+     "ffmpeg အသစ် တင်ရန် လိုအပ်ပါသည် (sudo apt install -y ffmpeg)။"),
+    (("cannot allocate memory", "out of memory", "killed", "oom"),
+     "🧠 Memory မလုံလောက်ပါ — instance size တိုးပါ (သို့) အခြား job များကို ရပ်ပါ။"),
+    (("fontconfig", "cannot find font", "font not found", "could not find font"),
+     "🔤 စာလုံး (font) ရှာမတွေ့ပါ — Myanmar font ထည့်ရန် လိုအပ်ပါသည် (fonts-sil-padauk / fonts-noto-core)။"),
+    (("name or service not known", "connection refused", "connection timed out",
+      "http error", "temporary failure in name resolution", "network is unreachable"),
+     "🌐 Network ချိတ်ဆက်မှု မအောင်မြင်ပါ — အင်တာနက်/ဆာဗာ ချိတ်ဆက်မှုကို စစ်ပါ။"),
+    (("timed out", "timeout"),
+     "⏱️ ffmpeg အချိန် ကျော်လွန်သွားပါသည် — ဖိုင်ကြီးလွန်း/instance သေးနိုင်ပါသည်။"),
+    (("error opening output", "could not open", "output file #0"),
+     "💾 ထွက်ဖိုင် ဖွင့်၍ မရပါ — disk space (သို့) file permission ကို စစ်ပါ။"),
+)
+
+_CODEC_RE = re.compile(r"codec\s+([A-Za-z0-9_\-]+)", re.IGNORECASE)
+
+
+def ffmpeg_error_lines(text: str) -> list[str]:
+    """Raw ffmpeg output without the ``-progress`` key=value noise."""
+    out = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or _PROGRESS_LINE_RE.match(line):
+            continue
+        out.append(line)
+    return out
+
+
+def summarize_ffmpeg_error(text: str, *, label: str = "") -> str:
+    """Turn a raw ffmpeg log into ONE short Burmese sentence.
+
+    The raw text is not thrown away — callers keep it in
+    :attr:`FFmpegFailure.detail` so the UI can show it collapsibly.
+    """
+    blob = (text or "")
+    low = blob.lower()
+    for markers, message in _ERROR_PATTERNS:
+        for marker in markers:
+            if marker in low:
+                codec = ""
+                if "{codec}" in message:
+                    found = _CODEC_RE.search(blob)
+                    codec = (found.group(1) if found else _guess_codec(low)) or "unknown"
+                prefix = f"[{label}] " if label else ""
+                return prefix + message.format(codec=codec)
+    lines = ffmpeg_error_lines(blob)
+    tail = lines[-1] if lines else ""
+    tail = re.sub(r"^\[[^\]]{0,40}\]\s*", "", tail)[:160]
+    prefix = f"[{label}] " if label else ""
+    if not tail:
+        return prefix + "⚙️ ffmpeg လုပ်ဆောင်ချက် မအောင်မြင်ပါ — log ကို ဖွင့်ကြည့်ပါ။"
+    return prefix + f"⚙️ ffmpeg အမှား: {tail}"
+
+
+def _guess_codec(low: str) -> str:
+    for name in ("av1", "vp9", "vp8", "hevc", "h265", "h264", "mpeg4", "prores", "vc1", "theora"):
+        if name in low:
+            return name
+    return ""
+
+
+def ffmpeg_failure(text: str, *, returncode: Optional[int] = None, label: str = "",
+                   stage: str = "") -> FFmpegFailure:
+    """Build the short-summary exception for a failed ffmpeg run."""
+    return FFmpegFailure(summarize_ffmpeg_error(text, label=label),
+                         detail=text, returncode=returncode, label=label, stage=stage)
+
+
+def explain_exception(exc: BaseException) -> tuple[str, str]:
+    """``(short Burmese message, full raw detail)`` for the job store / UI.
+
+    The short part is what lands in a toast / the log box — it must never be a
+    multi-line, space-less ffmpeg dump (that is what broke the layout).
+    """
+    summary = getattr(exc, "summary", "") or ""
+    detail = getattr(exc, "detail", "") or ""
+    if summary:
+        return str(summary)[:900], detail or str(exc)
+    raw = str(exc)
+    # a *raw* log dump is recognisable: many lines, or far too long for a toast
+    if "\n" in raw.strip() or len(raw) > 400:
+        return summarize_ffmpeg_error(raw), raw
+    return raw[:600], detail
+
 
 def ffmpeg_available() -> bool:
     return shutil.which(FFMPEG) is not None
@@ -79,10 +248,14 @@ def _run(cmd: Sequence[str], timeout: int | None = 300, check: bool = False) -> 
             text=True, errors="ignore", timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"Command timed out after {timeout}s: {cmd[0]}") from exc
+        raise FFmpegFailure(f"⏱️ {cmd[0]} သည် {timeout}s အတွင်း မပြီးပါ (timeout) — "
+                            "ဖိုင်ကြီး/instance သေးနိုင်ပါသည်။",
+                            detail=str(exc), stage=str(cmd[0])) from exc
     if check and proc.returncode != 0:
-        tail = (proc.stderr or "")[-1500:]
-        raise RuntimeError(f"{cmd[0]} failed ({proc.returncode}): {tail}")
+        tail = (proc.stderr or "")[-DETAIL_LIMIT:]
+        log.error("%s failed (%s): %s", cmd[0], proc.returncode, tail[-1500:])
+        raise ffmpeg_failure(tail, returncode=proc.returncode, label=Path(str(cmd[0])).name,
+                             stage=str(cmd[0]))
     return proc
 
 
@@ -263,7 +436,7 @@ def run_ffmpeg(
         if proc.poll() is None:
             proc.kill()
 
-    stderr_tail = "".join(tail)[-2500:]
+    stderr_tail = "".join(tail)[-DETAIL_LIMIT:]
     if proc.returncode != 0 and cancel and cancel():
         # ffmpeg died *because* the job was cancelled (the job-level watchdog
         # kills by owner) — report a cancel, never a crash: otherwise the
@@ -271,8 +444,11 @@ def run_ffmpeg(
         # for a job the user just stopped.
         raise CancelledError("အလုပ်ကို ရပ်တန့်လိုက်ပါပြီ")
     if check and proc.returncode != 0:
-        log.error("ffmpeg failed (%s): %s", proc.returncode, stderr_tail)
-        raise RuntimeError(f"FFmpeg error: {stderr_tail}")
+        # One short Burmese sentence for the toast; the raw log (progress
+        # lines stripped out) stays in .detail for the collapsible panel.
+        log.error("ffmpeg failed (%s): %s", proc.returncode, stderr_tail[-2000:])
+        raise ffmpeg_failure(stderr_tail, returncode=proc.returncode,
+                             label=label or "ffmpeg", stage=label)
     log.debug("ffmpeg finished in %.1fs (%s)", time.time() - started, label)
     return subprocess.CompletedProcess(cmd, proc.returncode, "", stderr_tail)
 
@@ -367,6 +543,138 @@ def get_video_info(path: str | os.PathLike) -> dict:
 
 def has_audio_stream(path: str | os.PathLike) -> bool:
     return get_video_info(path)["has_audio"]
+
+
+# ── input pre-flight: "will this file survive the pipeline?" ─────────────
+# v4.3.4. The EC2 report was
+#     AI analysis failed for every chunk:
+#     chunk 1 (...) FFmpeg error: ... frame= 0 ... received no packets ...
+# i.e. the file died in ffmpeg *before* the AI ever saw it, and the user was
+# told the AI failed. Worse, nothing checked the upload: the uploader accepted
+# any file with a .mp4 extension, and the first real probe happened minutes
+# later inside the analysis stage.
+#
+# ``preflight_video`` runs ffprobe + a real 5-frame decode test right after the
+# upload (and again when a job starts) and answers with a short Burmese reason.
+
+#: decode a handful of frames with ``-f null`` — cheap, but authoritative:
+#: an AV1/VP9 file without a decoder fails here instead of 3 minutes later.
+DECODE_PROBE_FRAMES = 5
+DECODE_PROBE_TIMEOUT = 90
+
+
+def _decode_probe(path: str | os.PathLike) -> dict:
+    """Decode a few video frames. Never raises; reports what ffmpeg said."""
+    cmd = [FFMPEG, "-hide_banner", "-nostdin", "-v", "warning", "-progress", "pipe:1",
+           "-i", str(path), "-map", "0:v:0", "-frames:v", str(DECODE_PROBE_FRAMES),
+           "-f", "null", "-"]
+    try:
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, errors="ignore", timeout=DECODE_PROBE_TIMEOUT)
+    except FileNotFoundError:
+        return {"ok": False, "code": "no_ffmpeg", "frames": None, "returncode": None,
+                "text": "ffmpeg binary not found"}
+    except subprocess.TimeoutExpired:
+        # A slow machine / huge file is NOT proof of a broken file — let the
+        # real pipeline decide instead of blocking a working upload.
+        return {"ok": True, "code": "timeout", "frames": None, "returncode": None,
+                "text": f"decode probe exceeded {DECODE_PROBE_TIMEOUT}s"}
+    blob = proc.stdout or ""
+    frames = None
+    for match in re.finditer(r"frame=(\d+)", blob):
+        frames = int(match.group(1))
+    low = blob.lower()
+    hard_markers = ("decoder (codec", "decoder not found", "unknown decoder",
+                    "no decoder", "invalid data found", "moov atom not found",
+                    "does not contain any stream", "output file is empty")
+    no_packets = "received no packets" in low or "no packets" in low
+    if any(marker in low for marker in hard_markers):
+        return {"ok": False, "code": "decode_failed", "frames": frames,
+                "returncode": proc.returncode, "text": blob}
+    if proc.returncode != 0:
+        return {"ok": False, "code": "decode_failed", "frames": frames,
+                "returncode": proc.returncode, "text": blob}
+    if frames == 0 and no_packets:
+        return {"ok": False, "code": "no_video_packets", "frames": frames,
+                "returncode": proc.returncode, "text": blob}
+    if frames is None and no_packets:
+        # older ffmpeg builds print no frame= key in -progress; the demuxer
+        # message itself is then the only evidence we have
+        return {"ok": False, "code": "no_video_packets", "frames": frames,
+                "returncode": proc.returncode, "text": blob}
+    return {"ok": True, "code": "ok", "frames": frames,
+            "returncode": proc.returncode, "text": blob}
+
+
+def preflight_video(path: str | os.PathLike, *, decode: bool = True) -> dict:
+    """Check an upload before a job burns 30 minutes on it.
+
+    Returns (never raises)::
+
+        {"ok": bool, "code": str, "message": str,   # short Burmese, toast safe
+         "detail": str,                             # raw ffprobe/ffmpeg log
+         "warnings": [str], "info": {...}, "frames": int | None}
+    """
+    report: dict = {"ok": True, "code": "ok", "message": "", "detail": "",
+                    "warnings": [], "info": {}, "frames": None}
+    target = Path(str(path))
+    if not str(path) or not target.exists():
+        return {**report, "ok": False, "code": "missing",
+                "message": "📂 ဗီဒီယိုဖိုင် ရှာမတွေ့ပါ — ဗီဒီယိုကို ပြန်တင်ပေးပါ။"}
+    try:
+        size = target.stat().st_size
+    except OSError as exc:
+        return {**report, "ok": False, "code": "unreadable",
+                "message": "📂 ဖိုင်ကို ဖတ်၍ မရပါ (permission/disk)။", "detail": str(exc)}
+    if size < 4096:
+        return {**report, "ok": False, "code": "empty",
+                "message": f"📂 ဖိုင်က အလွန်သေးငယ်ပါ ({size} bytes) — upload ပြတ်နေသည်။ "
+                           "ဗီဒီယိုကို ပြန်တင်ပေးပါ။"}
+    if not ffprobe_available() or not ffmpeg_available():
+        return {**report, "ok": False, "code": "no_ffmpeg",
+                "message": "⚙️ Server ပေါ်တွင် ffmpeg/ffprobe မတွေ့ပါ — "
+                           "`sudo apt install -y ffmpeg` ဖြင့် တင်ပြီး service ကို restart ပါ။"}
+    probe = _run([FFPROBE, "-v", "error", "-show_format", "-show_streams", "-of", "json", str(target)],
+                 timeout=90)
+    raw_detail = (probe.stderr or "")[-DETAIL_LIMIT:]
+    if probe.returncode != 0:
+        return {**report, "ok": False, "code": "unreadable",
+                "message": summarize_ffmpeg_error(probe.stderr or "", label="ffprobe"),
+                "detail": raw_detail}
+    info = get_video_info(target)
+    report["info"] = info
+    if not info["has_video"]:
+        return {**report, "ok": False, "code": "no_video",
+                "message": "🎬 ဒီဖိုင်ထဲမှာ video track မပါပါ (အသံဖိုင် သို့မဟုတ် ပျက်နေသော ဖိုင် "
+                           "ဖြစ်နိုင်သည်) — ဗီဒီယိုဖိုင်အဖြစ် ပြန်တင်ပေးပါ။",
+                "detail": raw_detail}
+    if info["duration"] <= 0.5:
+        return {**report, "ok": False, "code": "no_duration",
+                "message": "🎬 ဗီဒီယို ကြာချိန် ဖတ်၍ မရပါ (0s) — ဖိုင် ပျက်နေနိုင်ပါသည်။ "
+                           "ပြန်ဒေါင်းလုဒ်/ပြန်တင် လုပ်ပေးပါ။",
+                "detail": raw_detail}
+    if not info["has_audio"]:
+        report["warnings"].append(
+            "🔇 ဒီဖိုင်မှာ အသံ (audio) track မပါပါ — recap/dub အသံထည့်ရာတွင် ခက်ခဲနိုင်ပါသည်။")
+    if decode:
+        probe_result = _decode_probe(target)
+        report["frames"] = probe_result.get("frames")
+        report["decode"] = {"code": probe_result["code"], "returncode": probe_result["returncode"]}
+        if not probe_result["ok"]:
+            report.update(
+                ok=False, code=probe_result["code"],
+                message=summarize_ffmpeg_error(probe_result["text"] or "",
+                                               label="decode"),
+                detail=(probe_result["text"] or raw_detail)[-DETAIL_LIMIT:],
+            )
+        elif probe_result["code"] == "timeout":
+            report["warnings"].append("⏱️ ဖိုင် စစ်ဆေးချိန် ကျော်လွန်သွားသည် — စစ်ဆေးမှု ကျန် "
+                                      "အဆင့်များကို ဆက်လုပ်ပါမည်။")
+    if report["ok"] and not report["message"]:
+        report["message"] = (f"✅ ဗီဒီယို အဆင်သင့် ({human_time(info['duration'])} • "
+                             f"{info['width']}x{info['height']} • {info['video_codec'] or '?'})")
+    return report
+
 
 
 def generate_test_media(path: str | os.PathLike, seconds: float = 12.0,

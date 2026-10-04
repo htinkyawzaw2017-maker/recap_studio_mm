@@ -394,6 +394,19 @@
             <p class="help" id="job-eta">—</p>
             <div class="stages" id="job-stages"></div>
             <div class="log-box" id="job-logs"></div>
+
+            <!-- v4.3.4 — failed jobs: short Burmese reason first, the raw
+                 ffmpeg log only inside this collapsible panel. -->
+            <div class="err-panel hidden" id="job-error-panel">
+              <div class="err-title"><span id="job-error-icon">⛔</span><span id="job-error-title">အလုပ် မအောင်မြင်ပါ</span></div>
+              <div class="err-text" id="job-error-text"></div>
+              <div class="err-hint hidden" id="job-error-hint"></div>
+              <details class="err-detail" id="job-error-detail-wrap">
+                <summary>🔎 အပြည့်အစုံ (ffmpeg / log)</summary>
+                <pre id="job-error-detail"></pre>
+              </details>
+            </div>
+
             <div class="btn-row" style="margin-top:12px">
               <button class="btn small danger" id="btn-cancel-job">⏹ ရပ်မည်</button>
               <button class="btn small ghost" id="btn-goto-timeline">⏱️ Timeline ပြင်</button>

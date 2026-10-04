@@ -63,7 +63,18 @@
 
 * { box-sizing: border-box; }
 
-html, body { height: 100%; }
+/* ── v4.3.4 overflow guard ────────────────────────────────────────────────
+   What broke the layout: a failing ffmpeg run produced ~2,500 characters of
+   raw log — EC2 paths 130+ characters long with no space in them — and it was
+   put straight into `.toast` and `.log-box`, three chunks at a time (~7,500
+   chars). Unbreakable strings force a horizontal scrollbar and the page looks
+   "zoomed out" / wider than the phone. Nothing on this page is allowed to be
+   wider than the viewport ever again. */
+html, body { height: 100%; max-width: 100%; overflow-x: hidden; }
+img, video, svg, canvas { max-width: 100%; }
+.log-box, .toast, .toast > *:not(.close), .audit-log, .err-text, .err-hint {
+  overflow-wrap: anywhere; word-break: break-word; min-width: 0;
+}
 
 body {
   margin: 0;
@@ -388,11 +399,40 @@ input[type=file].hidden-input { display: none; }
 .progress-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 13.5px; gap: 10px; }
 .progress-head b { color: var(--cyan); font-size: 15px; }
 .log-box {
-  max-height: 220px; overflow-y: auto; margin-top: 12px; padding: 11px 13px;
+  max-height: 220px; overflow-y: auto; overflow-x: hidden; margin-top: 12px; padding: 11px 13px;
   border-radius: 12px; border: 1px solid var(--line); background: rgba(3, 7, 16, 0.75);
   font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); white-space: pre-wrap;
+  overflow-wrap: anywhere; word-break: break-word; max-width: 100%;
 }
 .log-box:empty { display: none; }
+
+/* ── failed-job panel (v4.3.4) ────────────────────────────────────────────
+   Short Burmese reason + hint on top, the raw ffmpeg / traceback text hidden
+   inside a collapsible <details> instead of being dumped into a toast. */
+.err-panel {
+  margin-top: 12px; padding: 12px 14px; border-radius: 14px; max-width: 100%;
+  border: 1px solid rgba(251, 113, 133, 0.45); background: rgba(251, 113, 133, 0.08);
+}
+.err-panel.hidden { display: none; }
+.err-panel .err-title { font-weight: 700; color: var(--red); display: flex; gap: 8px; align-items: center; }
+.err-panel .err-text {
+  margin-top: 6px; font-size: 13.5px; white-space: pre-wrap; color: var(--text); line-height: 1.55;
+}
+.err-panel .err-hint { margin-top: 8px; font-size: 12.5px; color: var(--amber); }
+.err-detail { margin-top: 10px; }
+.err-detail summary {
+  cursor: pointer; font-size: 12.5px; color: var(--text-dim); user-select: none;
+  padding: 4px 0; list-style: none;
+}
+.err-detail summary::-webkit-details-marker { display: none; }
+.err-detail summary::before { content: '▸ '; }
+.err-detail[open] summary::before { content: '▾ '; }
+.err-detail pre {
+  margin: 8px 0 0; padding: 10px; max-height: 260px; overflow: auto; max-width: 100%;
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+  font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
+  background: rgba(3, 7, 16, 0.75); border: 1px solid var(--line); border-radius: 10px;
+}
 
 /* ── tables / timeline ────────────────────────────────────────────────── */
 .tl-row {
@@ -471,7 +511,12 @@ input[type=file].hidden-input { display: none; }
   border: 1px solid var(--line-strong); background: rgba(8, 14, 28, 0.96);
   box-shadow: var(--shadow); animation: slidein .2s ease;
   display: flex; gap: 10px; align-items: flex-start;
+  /* long unbreakable paths used to widen the whole page from inside a toast */
+  max-width: 100%; overflow-wrap: anywhere; word-break: break-word;
+  max-height: 45vh; overflow-y: auto;
 }
+.toast > *:not(.close) { min-width: 0; flex: 1 1 auto; }
+.toast .close { flex: 0 0 auto; }
 .toast.ok { border-color: rgba(52, 211, 153, 0.5); }
 .toast.err { border-color: rgba(251, 113, 133, 0.55); }
 .toast.warn { border-color: rgba(251, 191, 36, 0.5); }

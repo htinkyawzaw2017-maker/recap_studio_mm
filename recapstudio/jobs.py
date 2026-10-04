@@ -63,6 +63,12 @@ class Job:
     coverage: dict[str, Any] = field(default_factory=dict)
     stats: dict[str, Any] = field(default_factory=dict)
     error: str = ""
+    #: short Burmese explanation for the toast / progress line.  v4.3.4: the
+    #: raw ffmpeg dump used to live here and got printed inside a toast, which
+    #: stretched the whole page (2,500 chars × 3 chunks of space-less paths).
+    error_detail: str = ""
+    #: what the user can do about it (shown above the collapsible log)
+    error_hint: str = ""
     logs: list[str] = field(default_factory=list)
     stages: dict[str, str] = field(default_factory=lambda: {k: "pending" for k, _ in STAGE_DEFS})
     cancel_requested: bool = False

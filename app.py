@@ -57,7 +57,8 @@ from recapstudio.config import ensure_dirs
 from recapstudio.jobs import JobStore
 from recapstudio.keys import key_ring, mask as mask_key, validate_key
 from recapstudio.media import (ffmpeg_available, ffmpeg_version, ffprobe_available,
-                               get_video_info, process_registry)
+                               get_video_info, preflight_video, process_registry,
+                               summarize_ffmpeg_error)
 from recapstudio.pipeline import RecapPipeline
 from recapstudio.tts import VOICE_CATALOG
 from recapstudio.uploads import upload_manager
@@ -118,9 +119,13 @@ def submit_job(target: Callable[..., Any], *args: Any) -> Future:
         except BaseException as exc:  # noqa: BLE001 - a job must never die silently
             log.exception("job %s crashed: %s", job_id, exc)
             try:
+                # v4.3.4 — same rule as the pipeline: a short message for the
+                # toast, the raw text in error_detail for the collapsible panel
+                from recapstudio.media import explain_exception
+                message, detail = explain_exception(exc)
                 store.update(str(job_id), status="failed",
-                             message=f"❌ မမျှော်လင့်သော error: {str(exc)[:600]}",
-                             error=str(exc)[:600])
+                             message=f"❌ မမျှော်လင့်သော error: {message}",
+                             error=message, error_detail=detail)
             except Exception:
                 pass
         finally:
@@ -211,7 +216,15 @@ admin_guard = webauth.require_admin
 
 
 def _json_error(exc: Exception, status: int = 400) -> HTTPException:
-    return HTTPException(status_code=status, detail=str(exc))
+    """HTTP error whose ``detail`` is safe to show in a toast / log box.
+
+    v4.3.4: a raw multi-line ffmpeg dump (or a 600 character space-less path)
+    is summarised into one short Burmese sentence; the browser never receives
+    a wall of text that can stretch the page.
+    """
+    raw = str(exc)
+    detail = summarize_ffmpeg_error(raw) if ("\n" in raw.strip() or len(raw) > 400) else raw
+    return HTTPException(status_code=status, detail=detail)
 
 
 def _scope(principal: Principal) -> str:
@@ -1058,6 +1071,17 @@ def normalise_media_url(url: str) -> str:
     return url
 
 
+#: shown when a downloaded file cannot be decoded (VP9/AV1 without a decoder,
+#: truncated MP4, audio-only "video") — v4.3.4
+_H264_IMPORT_HINT = (
+    "👉 ဖြေရှင်းနည်း (၂) မျိုး —\n"
+    "1) H.264 ဖြင့် ပြန်ဒေါင်းပါ: `yt-dlp -f \"bv*[vcodec^=avc1]+ba/b\" <URL>`\n"
+    "2) Server ရဲ့ ffmpeg မှာ codec decoder မရှိလျှင်: "
+    "`sudo apt install -y libavcodec-extra && sudo systemctl restart recap-studio`\n"
+    "စစ်ရန်: `ffmpeg -hide_banner -decoders | grep -Ei \"av1|vp9\"`"
+)
+
+
 def _ytdlp_error_hint(blob: str) -> str:
     """Translate a yt-dlp failure into something the user can act on."""
     low = (blob or "").lower()
@@ -1126,7 +1150,14 @@ def import_from_url(payload: dict[str, Any],
         "--restrict-filenames", "--merge-output-format", "mp4",
         "--retries", "10", "--fragment-retries", "20", "--concurrent-fragments", "4",
         "--socket-timeout", "30", "--geo-bypass",
-        "-f", ("bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]"
+        # v4.3.4 — H.264 (avc1) FIRST. The old ladder happily pulled VP9/AV1
+        # (`.webm`/`.mkv`) from YouTube; on an EC2 whose ffmpeg has no AV1/VP9
+        # decoder those files cannot be analysed, cut or re-encoded at all, and
+        # the failure surfaced minutes later as a bogus "AI analysis failed".
+        # `[vcodec^=avc1]` keeps the download playable everywhere; the old
+        # selectors stay as fallbacks for sources that only serve VP9/AV1.
+        "-f", ("bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/b[height<=1080][vcodec^=avc1]"
+               "/bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]"
                "/bv*[height<=1080]+ba/b[height<=1080]/b"),
         "-o", out_tmpl, "--print", "after_move:filepath",
     ]
@@ -1174,10 +1205,23 @@ def import_from_url(payload: dict[str, Any],
     for leftover in work_dir.glob(f"ytdl_{stamp}.*"):
         leftover.unlink(missing_ok=True)
     info = get_video_info(final)
+    # v4.3.4 — validate the downloaded file before it is offered to the user.
+    # A VP9/AV1 file on a server without that decoder used to look "fine"
+    # here and then kill the job with a misleading AI error much later.
+    report = preflight_video(final)
+    if not report["ok"]:
+        log.warning("imported file rejected (%s): %s | %s", report["code"],
+                    report["message"], (report.get("detail") or "")[-600:])
+        raise HTTPException(status_code=502,
+                            detail=report["message"] + "\n\n" + _H264_IMPORT_HINT)
     return {
         "status": "ok", "video_path": config.rel(final),
         "duration": round(info["duration"], 3), "width": info["width"],
         "height": info["height"], "has_audio": info["has_audio"],
+        "video_codec": info["video_codec"],
+        "decodable": True,
+        "validation": {"ok": True, "code": report["code"],
+                       "warnings": report.get("warnings", [])},
         "size": final.stat().st_size,
         "preview_url": f"/api/asset?path={config.rel(final)}",
     }

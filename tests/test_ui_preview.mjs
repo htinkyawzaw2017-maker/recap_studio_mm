@@ -13,7 +13,7 @@
  *   npm install jsdom          # တစ်ကြိမ်သာ
  *   node tests/test_ui_preview.mjs
  *
- * exit code 0 = အားလုံး အောင်မြင် (31 checks)
+ * exit code 0 = အားလုံး အောင်မြင် (v4.3.4: failed-job diagnostics + overflow guards ပါ)
  */
 import { JSDOM, VirtualConsole } from 'jsdom';
 import fs from 'node:fs';
@@ -58,6 +58,11 @@ check('iOS zoom-on-focus prevented (16px controls)',
 check('stacked layout re-orders cards (upload → preview → settings)',
   /\.grid\.studio > div \{ display: contents; \}/.test(css)
   && /#preview-card \{ order: 2; \}/.test(css));
+check('v4.3.4: page can never scroll sideways (overflow guard)', /html,\s*body \{[^}]*overflow-x:\s*hidden/.test(css));
+check('v4.3.4: .log-box breaks long unbreakable paths', /\.log-box \{[^}]*overflow-wrap:\s*anywhere/.test(css));
+check('v4.3.4: .toast breaks long unbreakable paths', /\.toast \{[^}]*overflow-wrap:\s*anywhere/.test(css));
+check('v4.3.4: raw log lives inside a collapsible <details>',
+  /\.err-detail pre \{/.test(css) && /<details class="err-detail"/.test(html));
 check('sticky mobile One-Click bar is phone/tablet only',
   /\.mobile-run-bar \{[^}]*display: none/.test(css)
   && /@media \(max-width: 1200px\) \{ \.mobile-run-bar\.show \{ display: block; \} \}/.test(css));
@@ -247,6 +252,49 @@ if (rendered) {
     ($('preview-video').getAttribute('src') || '').includes('clip_part_1'),
     $('preview-video').getAttribute('src') || '');
 }
+
+/* ── 6. failed job shows a short reason + collapsible raw log (v4.3.4) ─── */
+console.log('\n=== 6. failed job diagnostics ===');
+const RAW_LOG = 'ffmpeg version 6.1.1\n' + 'x'.repeat(1500) + '\nConversion failed!\n';
+const FAILED_JOB = {
+  id: 'task_failed', kind: 'recap', status: 'failed', progress: 12, stage: 'analyze',
+  message: '❌ 🎬 ffmpeg က ဗီဒီယိုကို ဖြတ်ထုတ်၍ မရပါ — AI ဆီ မပို့ရသေးပါ (chunk 3/3 လုံး မှာ ကျရှုံး)။',
+  error: '🎬 ffmpeg က ဗီဒီယိုကို ဖြတ်ထုတ်၍ မရပါ — AI ဆီ မပို့ရသေးပါ (chunk 3/3 လုံး မှာ ကျရှုံး)။',
+  error_detail: RAW_LOG,
+  error_hint: '👉 ဖိုင်ကို H.264 (avc1) အဖြစ် ပြန်ဒေါင်းပါ။',
+  stages: { prepare: 'done', analyze: 'failed' }, logs: ['[10:00:00] job started'],
+  elapsed_seconds: 41, eta_seconds: 0, dialogues: [], coverage: {}, stats: {},
+};
+window.fetch = async (input, opts = {}) => {
+  const url = new URL(typeof input === 'string' ? input : input.url, BASE);
+  const p = url.pathname;
+  if (p === '/api/tasks' && (opts.method || 'GET') === 'POST') {
+    return json({ status: 'ok', task_id: 'task_failed' });
+  }
+  if (p === '/api/tasks/task_failed') {
+    return json(Object.assign({ eta_seconds: 0, elapsed_seconds: 41 }, FAILED_JOB));
+  }
+  if (p === '/api/tasks') return json({ jobs: [FAILED_JOB] });
+  if (p === '/api/system') return json({ app_version: '4.3.4', ffmpeg: true, voices: { my: [{ id: 'thiha', label: 'မင်းသန့်' }] }, models: ['gemini-2.5-flash'], default_model: 'gemini-2.5-flash', api_keys: { keys: [] } });
+  if (p === '/api/config') return json({ access_ok: true, api_keys: { keys: [] } });
+  if (p === '/api/asset') return new Response('', { status: 200 });
+  return json({});
+};
+$('btn-start').click();
+const panelShown = await waitFor(() => !$('job-error-panel').classList.contains('hidden'), 6000);
+check('failed job reveals the error panel', panelShown);
+check('panel shows the short Burmese reason (not the raw log)',
+  ($('job-error-text').textContent || '').includes('ffmpeg')
+  && !($('job-error-text').textContent || '').includes('Conversion failed!'),
+  ($('job-error-text').textContent || '').slice(0, 60));
+check('"what to do" hint is shown', ($('job-error-hint').textContent || '').includes('H.264'));
+check('raw log is hidden but available (not expanded by default)',
+  !$('job-error-detail-wrap').hasAttribute('open')
+  && ($('job-error-detail').textContent || '').includes('Conversion failed!'),
+  `${($('job-error-detail').textContent || '').length} chars`);
+check('the toast does not carry the whole log',
+  !Array.from(doc.querySelectorAll('.toast')).some((el) => (el.textContent || '').length > 400),
+  Array.from(doc.querySelectorAll('.toast')).map((el) => (el.textContent || '').length).join(','));
 
 console.log('\n' + '='.repeat(58));
 console.log(`${checks - failures.length}/${checks} checks passed`);

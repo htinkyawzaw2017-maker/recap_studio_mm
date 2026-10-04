@@ -15,11 +15,13 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import config
-from .ai import extract_timeline, normalise as normalise_dialogues, repair_timeline
+from .ai import (ProxyBuildError, extract_timeline, normalise as normalise_dialogues,
+                 repair_timeline)
 from .jobs import JobCancelled, JobStore, StageProgress
 from .keys import key_ring
 from .media import process_registry
-from .media import get_media_duration, get_video_info, run_ffmpeg
+from .media import (InputValidationError, explain_exception, get_media_duration,
+                    get_video_info, preflight_video, run_ffmpeg, summarize_ffmpeg_error)
 from .render import export_srt, render_master
 from .subtitles import build_ass
 from .tts import (VOICE_CATALOG, fit_lines_to_windows, master_audio, tts_engine)
@@ -38,6 +40,35 @@ STAGE_BOUNDS = {
     "render": (89.0, 98.0),
     "finalize": (98.0, 100.0),
 }
+
+#: what the user should actually DO about a failure — shown above the
+#: collapsible raw log (v4.3.4). Plain text, safe for a toast and for the
+#: Myanmar EC2 runbooks.
+_H264_HINT = ("👉 ဖိုင်ကို H.264 (avc1) အဖြစ် ပြန်ဒေါင်းပါ — "
+              "`yt-dlp -f \"bv*[vcodec^=avc1]+ba/b\" <URL>` — ပြီးမှ ပြန်တင်ပါ။")
+_FFMPEG_HINT = ("👉 Server တွင် `sudo apt install -y ffmpeg && sudo systemctl restart "
+                "recap-studio` လုပ်ပြီး ပြန်စမ်းပါ။")
+_DISK_HINT = ("👉 EC2 volume (EBS) size တိုးပါ (သို့) `sudo rm -rf /opt/recap-studio/data/tmp/*` "
+              "ဖြင့် နေရာ ပြန်ရယူပါ။")
+
+
+def _error_hint(exc: BaseException, message: str = "") -> str:
+    """A short 'what to do now' line for the failed-job panel."""
+    code = getattr(exc, "code", "") or ""
+    if code in {"no_video", "decode_failed", "no_video_packets", "no_duration", "empty"}:
+        return _H264_HINT
+    if code == "no_ffmpeg":
+        return _FFMPEG_HINT
+    if isinstance(exc, ProxyBuildError):
+        return _H264_HINT
+    text = f"{message} {exc}".lower()
+    if "av1" in text or "vp9" in text or "decoder" in text or "codec" in text:
+        return _H264_HINT
+    if "ffmpeg" in text or "ffprobe" in text:
+        return _FFMPEG_HINT
+    if "space" in text or "disk" in text:
+        return _DISK_HINT
+    return ""
 
 #: stages used by the "shorts splitter" jobs (progress bar labels)
 SPLIT_STAGES = ["prepare", "split", "finalize"]
@@ -102,6 +133,24 @@ class RecapPipeline:
             duration = info["duration"]
             if duration <= 0.5:
                 raise ValueError("ဗီဒီယို ကြာချိန် ဖတ်၍ မရပါ - ဖိုင် ပျက်နေနိုင်ပါသည်။")
+
+            # ── input pre-flight (v4.3.4) ─────────────────────────────
+            # ffprobe + a real 5-frame decode test. Catching a broken / AV1
+            # file *here* costs 2 seconds; catching it inside the analysis
+            # stage cost the user a 7,500 character "AI analysis failed"
+            # message that had nothing to do with the AI.
+            store.update(job_id, message="🔍 ဗီဒီယိုဖိုင် စစ်ဆေးနေပါသည်...")
+            report = preflight_video(input_video)
+            for warning in report.get("warnings", []):
+                store.log(job_id, warning)
+                store.update(job_id, message=warning)
+            if not report["ok"]:
+                log.warning("preflight rejected %s: %s | %s",
+                            input_video, report["code"], (report.get("detail") or "")[-800:])
+                raise InputValidationError(
+                    report["message"], detail=report.get("detail", ""), code=report["code"])
+            store.log(job_id, f"preflight OK ({report['code']}, "
+                              f"frames={report.get('frames')}, codec={info['video_codec']})")
 
             quality = payload.get("quality", "balanced")
             ensure_disk_space(int(info["size"] * 2.5) + 200 * 1024 * 1024)
@@ -312,12 +361,20 @@ class RecapPipeline:
                 safe_rmtree(work_dir)
                 return
             log.exception("recap job %s failed", job_id)
-            message = str(exc)
-            if len(message) > 900:
-                message = message[:400] + " … " + message[-400:]
-            store.update(job_id, status="failed", error=message,
-                         message=f"❌ {message}")
+            # short Burmese sentence for the toast/progress line, raw log kept
+            # separately for the collapsible panel (v4.3.4 layout fix)
+            message, detail = explain_exception(exc)
+            hint = _error_hint(exc, message)
+            if len(message) > 600:
+                message = message[:580] + "…"
+            store.update(job_id, status="failed", error=message, error_detail=detail,
+                         error_hint=hint, message=f"❌ {message}")
             store.log(job_id, f"FAILED: {message}")
+            if hint:
+                store.log(job_id, f"👉 {hint}")
+            if detail and detail != message:
+                # the raw log stays in the job + server log, never in a toast
+                store.log(job_id, "── အပြည့်အစုံ (raw) ──\n" + detail[-3000:])
             safe_rmtree(work_dir)
         finally:
             # make sure a cancelled job never leaves an orphan encoder running
@@ -441,6 +498,12 @@ class RecapPipeline:
                 raise ValueError(f"ဗီဒီယိုဖိုင် လမ်းကြောင်း မမှန်ကန်ပါ: {exc}") from exc
             if not Path(video_path).exists():
                 raise FileNotFoundError("ဗီဒီယိုဖိုင် ရှာမတွေ့ပါ — ပြန်တင်ပေးပါ။")
+            # same pre-flight as the recap path: never start a split of a file
+            # ffmpeg cannot decode (v4.3.4)
+            report = preflight_video(video_path)
+            if not report["ok"]:
+                raise InputValidationError(report["message"],
+                                           detail=report.get("detail", ""), code=report["code"])
             slice_sec = max(5, int(payload.get("slice_sec", 60) or 60))
             aspect = str(payload.get("aspect", "9:16"))
             info = get_video_info(video_path)
@@ -468,9 +531,10 @@ class RecapPipeline:
             store.log(job_id, "split cancelled by user")
         except Exception as exc:  # noqa: BLE001
             log.exception("split job %s failed", job_id)
-            store.update(job_id, status="failed", error=str(exc)[:800],
-                         message=f"❌ {str(exc)[:700]}")
-            store.log(job_id, f"FAILED: {exc}")
+            message, detail = explain_exception(exc)
+            store.update(job_id, status="failed", error=message, error_detail=detail,
+                         error_hint=_error_hint(exc, message), message=f"❌ {message}")
+            store.log(job_id, f"FAILED: {message}")
         finally:
             process_registry.kill_owner(job_id)
 
@@ -570,8 +634,9 @@ class RecapPipeline:
                 store.update(job_id, status="cancelled", message="⏹️ ရပ်တန့်လိုက်ပါပြီ")
                 return
             log.exception("rerender %s failed", job_id)
-            store.update(job_id, status="failed", error=str(exc)[:900],
-                         message=f"❌ {str(exc)[:800]}")
+            message, detail = explain_exception(exc)
+            store.update(job_id, status="failed", error=message, error_detail=detail,
+                         error_hint=_error_hint(exc, message), message=f"❌ {message}")
         finally:
             process_registry.kill_owner(job_id)
 
