@@ -1,7 +1,7 @@
-# v4.3.0 ကို အစအဆုံး ပြန်တင်နည်း — Windows CMD → AWS EC2 (Step by Step)
+# v4.4.0 Studio Update တင်နည်း — Windows CMD → AWS EC2 (Step by Step)
 
-> **တင်မည့် commit** — `5de0263` · `feat(ui): v4.3 — WYSIWYG preview, all-device layout, Splitter → Studio`
-> **branch** — `arena/01a105ed-recap-studio-mm` · **version** — `4.3.0`
+> **branch** — `arena/01a10a80-recap-studio-mm` · **version** — `4.4.0`
+> This runbook pulls the current Studio refresh from the Arena update branch.
 > ဤစာရွက်ထဲက command အားလုံးကို **copy → paste** လုပ်ရုံပါပဲ။
 > `<EC2-IP>` နေရာတွင် မိမိ server ၏ **Public IPv4** (ဥပမာ `13.212.45.67`) ထည့်ပါ။
 
@@ -97,15 +97,15 @@ ssh -i "%USERPROFILE%\.ssh\recap-key.pem" ubuntu@<EC2-IP>
 
 ```bash
 cd /tmp
-curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm
+curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10a80-recap-studio-mm
 rm -rf recap_studio_mm-arena-* && tar xzf recap.tgz
-sudo bash /tmp/recap_studio_mm-arena-01a105ed-recap-studio-mm/deploy/ec2_install.sh
+sudo bash /tmp/recap_studio_mm-arena-01a10a80-recap-studio-mm/deploy/ec2_install.sh
 ```
 
 **တစ်ကြောင်းတည်း (copy-paste တစ်ချက်) —**
 
 ```bash
-cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm && rm -rf recap_studio_mm-arena-* && tar xzf recap.tgz && sudo bash /tmp/recap_studio_mm-arena-01a105ed-recap-studio-mm/deploy/ec2_install.sh
+cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10a80-recap-studio-mm && rm -rf recap_studio_mm-arena-* && tar xzf recap.tgz && sudo bash /tmp/recap_studio_mm-arena-01a10a80-recap-studio-mm/deploy/ec2_install.sh
 ```
 
 Installer က အလိုအလျောက် လုပ်ပေးသည် —
@@ -114,7 +114,7 @@ Installer က အလိုအလျောက် လုပ်ပေးသည် �
 0/8 preflight            OS/user/port စစ်
 1/8 အဟောင်း process ရပ်
 2/8 ffmpeg · python3 · fonts (apt)
-3/8 code download (branch @ v4.3.0)
+3/8 code download (branch @ v4.4.0)
 4/8 /opt/recap-studio သို့ sync   ← data/ နှင့် .env ကို မထိ
 5/8 .venv + pip install -r requirements.txt
 6/8 .env (RECAP_SECRET_KEY အလိုအလျောက်)
@@ -141,7 +141,7 @@ ls -lh /root/recap-backup-*.tgz          # backup ရှိ/မရှိ စစ�
 sudo rm -rf /opt/recap-studio
 
 # (3) အသစ် တင် (2A အဆင့်အတိုင်း)
-cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm && rm -rf recap_studio_mm-arena-* && tar xzf recap.tgz && sudo bash /tmp/recap_studio_mm-arena-01a105ed-recap-studio-mm/deploy/ec2_install.sh
+cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10a80-recap-studio-mm && rm -rf recap_studio_mm-arena-* && tar xzf recap.tgz && sudo bash /tmp/recap_studio_mm-arena-01a10a80-recap-studio-mm/deploy/ec2_install.sh
 ```
 
 **Backup ပြန်ထည့်လိုလျှင် (optional) —**
@@ -193,10 +193,10 @@ sudo systemctl restart recap-studio
 ### 4.1 Server ပေါ်မှာ (SSH ထဲမှ)
 
 ```bash
-curl -s http://localhost/healthz                      # "version":"4.3.0" ဖြစ်ရမည်
+curl -s http://localhost/healthz                      # "version":"4.4.0" ဖြစ်ရမည်
 curl -s http://localhost/api/auth/me                  # "mode":"users" ဖြစ်ရမည် (login စနစ် ဖွင့်ပြီ)
 curl -s http://localhost/ | grep -c preview-frame     # 1 ဖြစ်ရမည် ← v4.3 markup
-grep __version__ /opt/recap-studio/recapstudio/__init__.py        # 4.3.0
+grep __version__ /opt/recap-studio/recapstudio/__init__.py        # 4.4.0
 grep -c applyPreviewGeometry /opt/recap-studio/static/app.js      # 1 အထက် ဖြစ်ရမည်
 sudo systemctl status recap-studio --no-pager | head -5           # active (running)
 ```
@@ -207,7 +207,7 @@ sudo systemctl status recap-studio --no-pager | head -5           # active (runn
 
 ```cmd
 curl -s http://<EC2-IP>/healthz
-curl -s http://<EC2-IP>/healthz | findstr "4.3.0"
+curl -s http://<EC2-IP>/healthz | findstr "4.4.0"
 curl -s http://<EC2-IP>/ | findstr "preview-frame"
 ```
 
@@ -215,9 +215,9 @@ curl -s http://<EC2-IP>/ | findstr "preview-frame"
 
 ```cmd
 cd %USERPROFILE%\Downloads
-curl -L -o recap.zip https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/zip/refs/heads/arena/01a105ed-recap-studio-mm
+curl -L -o recap.zip https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/zip/refs/heads/arena/01a10a80-recap-studio-mm
 tar -xf recap.zip
-cd recap_studio_mm-arena-01a105ed-recap-studio-mm
+cd recap_studio_mm-arena-01a10a80-recap-studio-mm
 python tests\verify_deployment.py http://<EC2-IP>
 ```
 
@@ -234,7 +234,7 @@ python tests\verify_deployment.py http://<EC2-IP>
 | Android Chrome | ⋮ → History → Clear browsing data → Cached images and files |
 | iPhone Safari | Settings → Safari → Clear History and Website Data |
 
-ဖွင့်ပြီးလျှင် ခေါင်းစီးတွင် **`v4.3.0`** ပြရမည်။ `v4.2` / `v4.1` ပြနေလျှင် cache မရှင်းရသေးပါ
+ဖွင့်ပြီးလျှင် ခေါင်းစီးတွင် **`v4.4.0`** ပြရမည်။ `v4.2` / `v4.1` ပြနေလျှင် cache မရှင်းရသေးပါ
 (အရင်က “ပြင်ပြီးသား ပြဿနာတွေ ပြန်တွေ့နေတယ်” ဆိုတာ ဒီအကြောင်းကြောင့် ဖြစ်သည်)။
 
 **မြင်ရမည့် အသစ်များ** — preview box က ရွေးထားသော ဖော်မတ်အတိုင်း ပုံစံပြောင်း၊
@@ -357,9 +357,9 @@ winget install --id Gyan.FFmpeg -e
 
 :: 2) code
 cd %USERPROFILE%\Documents
-curl -L -o recap.zip https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/zip/refs/heads/arena/01a105ed-recap-studio-mm
+curl -L -o recap.zip https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/zip/refs/heads/arena/01a10a80-recap-studio-mm
 tar -xf recap.zip
-cd recap_studio_mm-arena-01a105ed-recap-studio-mm
+cd recap_studio_mm-arena-01a10a80-recap-studio-mm
 
 :: 3) python venv + packages
 python -m venv .venv
@@ -374,7 +374,7 @@ python -m venv .venv
 အကောင့်စနစ် စမ်းလိုလျှင် (CMD အသစ်တစ်ခုမှာ) —
 
 ```cmd
-cd %USERPROFILE%\Documents\recap_studio_mm-arena-01a105ed-recap-studio-mm
+cd %USERPROFILE%\Documents\recap_studio_mm-arena-01a10a80-recap-studio-mm
 .venv\Scripts\python -m recapstudio.useradmin create myname --admin --random
 ```
 
@@ -388,7 +388,7 @@ cd %USERPROFILE%\Documents\recap_studio_mm-arena-01a105ed-recap-studio-mm
 data/.env မပျက်ဘဲ code သစ်ကိုသာ တင်ပေးပါသည်။
 
 ```bash
-cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm && rm -rf recap_studio_mm-arena-* && tar xzf recap.tgz && sudo bash /tmp/recap_studio_mm-arena-01a105ed-recap-studio-mm/deploy/ec2_install.sh && sudo systemctl restart recap-studio && curl -s http://localhost/healthz
+cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10a80-recap-studio-mm && rm -rf recap_studio_mm-arena-* && tar xzf recap.tgz && sudo bash /tmp/recap_studio_mm-arena-01a10a80-recap-studio-mm/deploy/ec2_install.sh && sudo systemctl restart recap-studio && curl -s http://localhost/healthz
 ```
 
 ဆက်စပ်စာရွက်များ — [UI_V43.md](UI_V43.md) (v4.3 ဘာတွေ ပြောင်းသွားလဲ) ·

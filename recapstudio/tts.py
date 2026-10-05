@@ -134,7 +134,7 @@ def condense_line(text: str, seconds: float, lang: str = "my") -> tuple[str, boo
 
 
 def fit_lines_to_windows(dialogues: list[dict], duration: float,
-                         lang: str = "my") -> tuple[list[dict], int]:
+                         lang: str = "my", *, respect_end: bool = False) -> tuple[list[dict], int]:
     """Condense every line that cannot be spoken calmly inside its window.
 
     The window of a line ends where the next line starts (that is also how
@@ -150,7 +150,15 @@ def fit_lines_to_windows(dialogues: list[dict], duration: float,
     for idx, item in enumerate(ordered):
         start = max(0.0, float(item.get("start", 0.0) or 0.0))
         nxt = float(ordered[idx + 1].get("start", duration)) if idx + 1 < len(ordered) else duration
-        window = max(0.4, min(nxt, duration) - start - 0.06)
+        declared_end = float(item.get("end", nxt) or nxt)
+        window_end = min(nxt, duration, declared_end) if respect_end else min(nxt, duration)
+        window = max(0.4, window_end - start - 0.06)
+        if respect_end:
+            # Dubbing must preserve every source utterance. If translation or
+            # TTS cannot fit the actual speech interval, fail safely in the
+            # strict synthesis pass and ask for a human edit; never summarize
+            # or silently drop words to make the clock appear to fit.
+            continue
         text, changed = condense_line(str(item.get("text", "")), window, lang)
         if changed:
             item["text"] = text
@@ -358,7 +366,7 @@ class TTSEngine:
 
     # ── planning ───────────────────────────────────────────────────────
     def plan_lines(self, dialogues: list[dict], duration: float,
-                   lang: str = "my") -> list[PlannedLine]:
+                   lang: str = "my", *, strict_timing: bool = False) -> list[PlannedLine]:
         cleaned: list[tuple[float, float, str]] = []
         for item in sorted(dialogues, key=lambda d: float(d.get("start", 0.0))):
             text = clean_script_line(str(item.get("text", "")), lang)
@@ -378,21 +386,29 @@ class TTSEngine:
             # speech is never stretched, so a longer window simply means the
             # take is used at its natural speed instead of being compressed.
             next_start = cleaned[idx + 1][0] if idx + 1 < len(cleaned) else None
-            window_end = next_start if next_start is not None else duration
-            target = max(0.4, min(window_end, duration) - start - guard)
-            # Hard ceiling: a take may NEVER run past the next line's start.
-            # (Allowing a +0.3 s overshoot used to shift every following line
-            # later, so the narration fell off the end of the video.)
-            if next_start is not None:
-                hard = max(0.4, next_start - start - 0.02)
+            if strict_timing:
+                # Dialogue dubbing owns only the real speech span from the
+                # source, never the silence before a later speaker turn.
+                window_end = min(end, next_start if next_start is not None else duration,
+                                 duration)
+                window_end = max(start + 0.4, window_end)
+                target = max(0.4, window_end - start - guard)
+                hard = max(0.4, window_end - start - 0.02)
             else:
-                hard = max(target, min(max(0.4, duration - 0.05 - start), target + 3.0))
+                # Recap narration can use the gap up to the next planned line.
+                window_end = next_start if next_start is not None else duration
+                target = max(0.4, min(window_end, duration) - start - guard)
+                # Hard ceiling: a take may NEVER run past the next line's start.
+                if next_start is not None:
+                    hard = max(0.4, next_start - start - 0.02)
+                else:
+                    hard = max(target, min(max(0.4, duration - 0.05 - start), target + 3.0))
             planned.append(PlannedLine(index=idx, start=start, end=end, text=text,
                                        target_seconds=target, hard_limit_seconds=hard))
         return planned
 
     def _fit_to_window(self, line: PlannedLine, voice_cfg: dict[str, str],
-                       work_dir: Path, tag: str) -> Optional[Path]:
+                       work_dir: Path, tag: str, *, strict_timing: bool = False) -> Optional[Path]:
         """Synthesise ``line`` and make sure it fits ``line.target_seconds``.
 
         Strategy (best sounding first):
@@ -415,41 +431,78 @@ class TTSEngine:
             return None
         line.speech_seconds = raw_seconds
 
-        # 1) fits naturally
-        if raw_seconds <= target * 1.03:
+        # Dialogue dubbing is intentionally conservative: fit each line to
+        # its own spoken interval, allow at most a small 12% pace adjustment,
+        # and fail the dub rather than silently cutting words or running late.
+        natural_tolerance = 1.02 if strict_timing else 1.03
+        if raw_seconds <= target * natural_tolerance:
             line.tempo = 1.0
             line.reason = ""
         else:
             ratio = raw_seconds / target
-            # 2) faster take (edge-tts rate up to +45%, still very natural)
-            if ratio <= 1.35:
-                boost = min(45.0, (ratio - 1.0) * 100.0 + 5.0)
-                line.tts_rate = _percent_to_rate(boost)
+            if strict_timing:
+                boost = min(12.0, max(2.0, (ratio - 1.0) * 100.0 + 1.0))
                 faster = work_dir / f"raw_{tag}_{line.index}_fast.mp3"
-                if self.synthesize(line.text, voice_cfg, faster, rate_override=line.tts_rate):
+                applied_boost = 0.0
+                if self.synthesize(line.text, voice_cfg, faster,
+                                   rate_override=_percent_to_rate(boost)):
                     fast_seconds = get_media_duration(faster)
                     if fast_seconds > 0.05:
                         raw.unlink(missing_ok=True)
                         raw, raw_seconds = faster, fast_seconds
                         line.speech_seconds = fast_seconds
-                        line.reason = f"အသံ {boost:.0f}% မြန်စွာ ဖတ်ထားပါသည်"
+                        line.tts_rate = _percent_to_rate(boost)
+                        applied_boost = boost
+                        line.reason = f"အသံ {boost:.0f}% ဖြင့် အနည်းငယ် ချိန်ထားပါသည်"
                         ratio = raw_seconds / target
                     else:
                         faster.unlink(missing_ok=True)
-            # 3) atempo
-            if ratio > 1.03:
-                line.tempo = min(config.settings.max_tempo, ratio)
+                        line.tts_rate = "+0%"
+                else:
+                    faster.unlink(missing_ok=True)
+                    line.tts_rate = "+0%"
+                # `rate_override` and atempo multiply. Budget their product so
+                # combined speed-up never exceeds 12%, even when both stages
+                # are needed; otherwise a nominal 12% adjustment could turn
+                # into a very rushed ~25% take.
+                tempo_cap = 1.12 / (1.0 + applied_boost / 100.0)
+                line.tempo = min(tempo_cap, max(1.0, ratio))
                 if line.tempo > 1.02:
-                    extra = f" + atempo {line.tempo:.2f}x" if line.tts_rate != "+0%" else f"atempo {line.tempo:.2f}x"
-                    line.reason = (line.reason + extra) if line.reason else extra
-            # 4) trim if still over
-            if line.tempo >= config.settings.max_tempo and raw_seconds / line.tempo > target * 1.02:
-                line.trimmed = True
-                line.reason += " • အစွန်း အနည်းငယ် ဖြတ်ထားပါသည်"
+                    line.reason += f" · pitch-preserving {line.tempo:.2f}x"
+                if raw_seconds / line.tempo > target * 1.02:
+                    raw.unlink(missing_ok=True)
+                    line.skipped = True
+                    line.reason = "spoken text cannot fit this dialogue window at a natural pace"
+                    return None
+            else:
+                # Recap lines may use more expressive time fitting; they are
+                # not locked to source-speaker lip timing.
+                if ratio <= 1.35:
+                    boost = min(45.0, (ratio - 1.0) * 100.0 + 5.0)
+                    line.tts_rate = _percent_to_rate(boost)
+                    faster = work_dir / f"raw_{tag}_{line.index}_fast.mp3"
+                    if self.synthesize(line.text, voice_cfg, faster, rate_override=line.tts_rate):
+                        fast_seconds = get_media_duration(faster)
+                        if fast_seconds > 0.05:
+                            raw.unlink(missing_ok=True)
+                            raw, raw_seconds = faster, fast_seconds
+                            line.speech_seconds = fast_seconds
+                            line.reason = f"အသံ {boost:.0f}% မြန်စွာ ဖတ်ထားပါသည်"
+                            ratio = raw_seconds / target
+                        else:
+                            faster.unlink(missing_ok=True)
+                if ratio > 1.03:
+                    line.tempo = min(config.settings.max_tempo, ratio)
+                    if line.tempo > 1.02:
+                        extra = (f" + atempo {line.tempo:.2f}x" if line.tts_rate != "+0%"
+                                 else f"atempo {line.tempo:.2f}x")
+                        line.reason = (line.reason + extra) if line.reason else extra
+                if line.tempo >= config.settings.max_tempo and raw_seconds / line.tempo > target * 1.02:
+                    line.trimmed = True
+                    line.reason += " • အစွန်း အနည်းငယ် ဖြတ်ထားပါသည်"
 
         out_wav = work_dir / f"clip_{tag}_{line.index}.wav"
-        # Never exceed the hard ceiling (the next line's start), otherwise the
-        # whole timeline shifts and the last seconds of the video stay silent.
+        # Hard ceiling is the next speaker start (or source speech end in strict mode).
         hard_limit = max(0.4, line.hard_limit_seconds or target)
         if not self._convert(raw, out_wav, line.tempo, hard_limit):
             line.trimmed = True
@@ -476,14 +529,17 @@ class TTSEngine:
                         duration: float, work_dir: Path, tag: str = "job",
                         progress: ProgressFn = None,
                         cancel: Optional[Callable[[], bool]] = None,
-                        fallback_voice_cfg: dict[str, str] | None = None) -> MixResult:
+                        fallback_voice_cfg: dict[str, str] | None = None,
+                        strict_timing: bool = False) -> MixResult:
         lang = voice_cfg.get("lang", "my")
         work_dir = Path(work_dir)
         work_dir.mkdir(parents=True, exist_ok=True)
-        planned = self.plan_lines(dialogues, duration, lang)
+        planned = self.plan_lines(dialogues, duration, lang, strict_timing=strict_timing)
         warnings: list[str] = []
 
         if not planned:
+            if strict_timing:
+                raise RuntimeError("Dialogue Dubbing: no source dialogue lines were detected; refusing to render a silent dub.")
             silence = work_dir / f"narration_{tag}.wav"
             make_silence_wav(duration, silence)
             if progress:
@@ -505,19 +561,28 @@ class TTSEngine:
             cache_key = _hash_key(voice_cfg["voice"], voice_cfg.get("rate", "+0%"),
                                   voice_cfg.get("pitch", "+0Hz"), line.text,
                                   f"{line.target_seconds:.2f}",
-                                  f"{line.hard_limit_seconds:.2f}")
+                                  f"{line.hard_limit_seconds:.2f}",
+                                  "strict" if strict_timing else "flexible")
             cached = self.cache_dir / f"{cache_key}.wav"
             if cached.exists() and cached.stat().st_size > 500:
-                line.speech_seconds = get_media_duration(cached)
-                return line.index, cached
-            produced = self._fit_to_window(line, voice_cfg, work_dir, tag)
+                cached_seconds = get_media_duration(cached)
+                if (not strict_timing or
+                        (cached_seconds <= line.hard_limit_seconds + 0.05 and
+                         cached_seconds <= line.target_seconds * 1.02)):
+                    line.speech_seconds = cached_seconds
+                    return line.index, cached
+                log.warning("discarding cached dubbing line that exceeds its source window: %s", cached.name)
+                cached.unlink(missing_ok=True)
+            produced = self._fit_to_window(line, voice_cfg, work_dir, tag,
+                                           strict_timing=strict_timing)
             if produced is None and fallback_voice_cfg:
                 # A line that fails on one voice usually succeeds on the other
                 # (edge-tts throttles individual voices) - better than a hole
                 # in the narration.
                 line.skipped = False
                 line.reason = "အသံ အခြားတစ်ခုဖြင့် ပြန်သွင်းထားပါသည်"
-                produced = self._fit_to_window(line, fallback_voice_cfg, work_dir, f"{tag}_alt")
+                produced = self._fit_to_window(line, fallback_voice_cfg, work_dir, f"{tag}_alt",
+                                               strict_timing=strict_timing)
             if produced is None:
                 return line.index, None
             tmp_cache = cached.with_suffix(".tmp.wav")
@@ -550,6 +615,16 @@ class TTSEngine:
                              f"({human_time(duration * (done / total))} / {human_time(duration)})")
 
         skipped = [line for line in planned if line.skipped or line.index not in clips]
+        strict_trims = [line for line in planned if strict_timing and line.trimmed]
+        if strict_timing and (skipped or strict_trims):
+            failed = skipped + [line for line in strict_trims if line not in skipped]
+            labels = ", ".join(f"#{line.index + 1} ({line.start:.1f}s)" for line in failed[:6])
+            raise RuntimeError(
+                f"Dialogue Dubbing အချိန်ကိုက် စစ်ဆေးမှု မအောင်မြင်ပါ — "
+                f"လိုင်း {len(failed)} ခုကို သဘာဝကျသောနှုန်းဖြင့် မဖြည့်နိုင်ပါ ({labels})။ "
+                "အသံလွတ်/စကားပြတ်/နောက်ကျသော output မထုတ်ရန် render ကို ရပ်လိုက်ပါသည်။ "
+                "Timeline Editor တွင် ထိုစာကြောင်းကို တိုတိုပြင်ပါ သို့မဟုတ် speech window ကို တိုးပါ။"
+            )
         if skipped and not clips:
             # Every single line failed: telling the user "some lines failed"
             # here would be misleading, the video would be mute.

@@ -128,6 +128,18 @@ GAP_FILL_SCHEMA = {
     "required": ["lines"],
 }
 
+THUMBNAIL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "timestamp": {"type": "number"},
+        "headline": {"type": "string"},
+        "subheadline": {"type": "string"},
+        "text_position": {"type": "string", "enum": ["left", "right"]},
+        "rationale": {"type": "string"},
+    },
+    "required": ["timestamp", "headline", "subheadline", "text_position", "rationale"],
+}
+
 
 @dataclass
 class CoverageReport:
@@ -503,7 +515,11 @@ def build_proxy(video_path: str | Path, start: float, end: float, out_path: str 
     run_ffmpeg([
         "-y",
         "-ss", f"{start:.3f}", "-i", str(video_path), "-t", f"{length:.3f}",
-        "-vf", "scale=480:-2:force_original_aspect_ratio=decrease,fps=1",
+        # `force_original_aspect_ratio=decrease` can override the implicit
+        # `-2` rounding and produce 480x853 for a portrait 9:16 clip. x264's
+        # yuv420p output requires both dimensions to be even. Explicitly round
+        # down to multiples of two, then pad defensively before encoding.
+        "-vf", "scale=480:-2:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=ceil(iw/2)*2:ceil(ih/2)*2,fps=1",
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "48k", "-ac", "1", "-ar", "16000",
         "-movflags", "+faststart",
@@ -513,32 +529,37 @@ def build_proxy(video_path: str | Path, start: float, end: float, out_path: str 
 
 
 # ── prompts ──────────────────────────────────────────────────────────────
+# Genre is deliberately independent from task mode. Previously these prompts
+# said "dub every spoken line" even in Recap mode, while the shared coverage
+# rules told Dialogue Dubbing to narrate silent scenes. That made both choices
+# sound almost identical.
 MODE_PROMPTS = {
-    "auto": "Judge the genre yourself, then dub every spoken line faithfully.",
-    "movie": "This is a film / animation / drama. Dub every character line and keep the story flowing.",
-    "experiment": "This is a science, review or experiment video. Dub the narrator and on-screen speech.",
-    "craft": "This is a DIY / craft / cooking video. Dub the narrator and any spoken instructions.",
-    "news": "This is a news / documentary style video. Dub every spoken sentence faithfully.",
+    "auto": "Identify the video's genre and use its conventions without changing the task mode.",
+    "movie": "Genre: film, animation, or drama. Track character motivation and scene causality.",
+    "experiment": "Genre: science, experiment, or review. Preserve observable steps and results.",
+    "craft": "Genre: DIY, craft, or cooking. Preserve the order of visible actions and instructions.",
+    "news": "Genre: news or documentary. Keep claims factual and distinguish what is shown from inference.",
 }
 
 FILL_MODE_PROMPTS = {
-    # ── whole-video recap: the narrator never stops talking ──────────────
     "continuous": (
-        "MODE = WHOLE-VIDEO RECAP. The recap must be narrated CONTINUOUSLY from the first second "
-        "to the last second, like a Burmese movie-recap YouTuber. Wherever nobody is speaking on "
-        "screen, write short connective narration that keeps the story moving (describe what is "
-        "visibly happening and what it leads to). Re-tell the story in your own words — you do NOT "
-        "have to translate the dialogue literally. Never invent facts."
+        "MODE = PROFESSIONAL MOVIE RECAP. You are narrating as an experienced movie-recap "
+        "storyteller, not dubbing the actors. Watch the visual action in sequence: explain who does "
+        "what, why the moment matters, and how it changes the story. Use vivid but natural spoken "
+        "language, suspense and smooth transitions. Paraphrase dialogue only when it is essential "
+        "to explain the plot; do not translate every spoken line. Cover the complete clip, including "
+        "quiet visual scenes, but never invent a fact that is not supported by the video."
     ),
-    # ── dialogue dubbing: a precise lip-sync-ish track, nothing invented ──
     "dialogue": (
-        "MODE = DIALOGUE DUBBING. Output a line ONLY where a human actually speaks on screen or "
-        "off screen. Never describe the picture, never add narration, never summarise, never fill "
-        "silence — silence stays silent. `start` and `end` must match the real speech boundaries "
-        "to within 0.3 seconds (start exactly when the mouth/voice starts, end when it stops), "
-        "because the dub is laid over those moments. One entry per spoken sentence; split long "
-        "speeches into separate entries at their natural pauses. Keep the speaker's meaning and "
-        "tone faithfully — this is dubbing, not a summary."
+        "MODE = PROFESSIONAL DIALOGUE DUBBING. Act as a professional dubbing translator and "
+        "voice director. Listen to the source audio and use it as the authority for what was said; "
+        "do not infer dialogue from the picture, subtitles, or plot. Transcribe the meaning internally "
+        "then render a faithful, natural spoken translation in the requested target language, keeping "
+        "the speaker's intent, emotion, register, and turn-taking. Output ONLY genuine audible speech: "
+        "never describe the picture, summarize, add narration, or fill silence. Start at the audible "
+        "speech onset and end at the audible speech offset (within 0.3 seconds when the boundary is "
+        "clear). Keep each translated line concise enough to finish inside that same speech window; "
+        "do not make it fast just to fit."
     ),
 }
 
@@ -548,68 +569,78 @@ def _chunk_prompt(chunk_start: float, chunk_end: float, target_language: str,
                   boundary_hint: str = "") -> str:
     lang_instruction = (
         "Burmese language (မြန်မာစကားပြော အသုံးအနှုန်းသီးသန့်၊ သဘာဝကျသော မြန်မာစကားဖြင့်)"
-        if target_language == "my" else
-        "natural spoken English"
+        if target_language == "my" else "natural spoken English"
     )
     style_block = ""
-    if target_language == "my":
+    if target_language == "my" and fill_mode == "continuous":
         try:
             from .lexicon import lexicon
             hint = "\n".join(lexicon.connectors_hint(26).splitlines())
             if hint:
                 style_block = (
-                    "\nSTORYTELLING CONNECTORS (use these exact Burmese words so the recap flows "
-                    "like a human narrator, not a translation):\n" + hint + "\n"
+                    "\nNATURAL STORYTELLING CONNECTORS (use sparingly; avoid translationese):\n"
+                    + hint + "\n"
                 )
         except Exception:
             style_block = ""
+
     from .tts import budget_chars, chars_per_second
     cps = chars_per_second(target_language)
     lang_word = "Burmese" if target_language == "my" else "English"
     four_sec, eight_sec = budget_chars(4.0, target_language), budget_chars(8.0, target_language)
-    return f"""You are a professional film dubbing director and Myanmar recap script writer.
+    selected_mode = fill_mode if fill_mode in FILL_MODE_PROMPTS else "continuous"
+    if selected_mode == "continuous":
+        task_rules = f"""RECAP TIMELINE RULES
+- Narrate continuously from the beginning to the end of this clip.
+- The first entry should start within 4 seconds of {chunk_start:.2f}s; the final entry should reach
+  the final scene near {chunk_end:.2f}s. No unexplained narration gap may exceed 4 seconds.
+- During quiet scenes, narrate the visible action and its story consequence. This is the only mode
+  in which you should add connective narration.
+- Make each entry one concise thought with a start/end window that can be spoken naturally."""
+    else:
+        task_rules = f"""DIALOGUE DUB TIMELINE RULES
+- Return an entry ONLY for real speech audible in the source audio. A quiet interval is correct;
+  never add a line to satisfy clip coverage.
+- Timestamp each utterance from the audio onset to audio offset using absolute full-video seconds.
+  Use separate entries for separate speaker turns or clear pauses; do not merge distant speech.
+- Translate the audible meaning faithfully into {lang_instruction}. Keep names, intent and emotion;
+  do not omit important information or add plot explanation.
+- Keep the translation short enough for its own [start, end] speech window at a calm, natural pace.
+  Do not use a later speaker's start as extra time and do not stretch a line into silence."""
 
-VIDEO SEGMENT: this clip is ONLY a part of a longer video. The clip starts at {chunk_start:.2f}s and
-ends at {chunk_end:.2f}s (total video length = {duration:.2f}s).
+    return f"""You are an award-winning film recap writer and professional dubbing director. Follow the
+selected task exactly; Recap and Dialogue Dubbing are different products.
 
-{MODE_PROMPTS.get(mode_key, MODE_PROMPTS['auto'])}
-{FILL_MODE_PROMPTS.get(fill_mode, FILL_MODE_PROMPTS['continuous'])}
+VIDEO SEGMENT: this is only part of a longer video. It starts at {chunk_start:.2f}s and ends at
+{chunk_end:.2f}s. Full-video duration: {duration:.2f}s.
+TARGET SPOKEN LANGUAGE: {lang_instruction}.
+GENRE CONTEXT: {MODE_PROMPTS.get(mode_key, MODE_PROMPTS['auto'])}
+{FILL_MODE_PROMPTS[selected_mode]}
 {style_block}
 
 MANDATORY RULES
-1. TIMESTAMPS ARE ABSOLUTE: use seconds counted from the START OF THE FULL VIDEO.
-   The first second of this clip is {chunk_start:.2f}s (NOT 0). The last is {chunk_end:.2f}s.
-2. COVER THE WHOLE CLIP — THIS IS THE MOST IMPORTANT RULE:
-   * The FIRST entry must start at or before {chunk_start + 4:.2f}s.
-   * The LAST entry must start after {max(chunk_start, chunk_end - 8):.2f}s and end at
-     {chunk_end:.2f}s (or later) — never finish the clip early.
-   * No silent window longer than 4 seconds anywhere between {chunk_start:.2f}s and
-     {chunk_end:.2f}s: where nothing is spoken, write short narration describing what is
-     visibly happening so the voice-over never stops.
-   * Do not stop early, do not summarise the ending, do not skip the middle.
-3. LENGTH BUDGET (hard rule — breaking it makes the voice-over race and sound robotic):
-   a human narrator speaks about {cps:.0f} {lang_word} characters per second. A window of W
-   seconds therefore allows at most {cps:.0f} x W characters INCLUDING spaces. A 4 second window
-   = about {four_sec} characters, 8 seconds = about {eight_sec}. If you need to say more, add a
-   SECOND entry with its own time window instead of writing a longer line.
-4. STYLE — short, punchy, natural spoken {lang_word}: one idea per line, 6-14 words, active voice,
-   everyday spoken words (not literary/translationese), no filler like "ဒီနေရာမှာတော့ ကျွန်တော်
-   တို့ မြင်ရတာကတော့", no repeating what the previous line already said, no English words unless
-   they are the normal spoken form. Write it the way a popular recap channel talks.
-5. NO double quotes inside text. Use single quotes if needed. No timestamps, no scene directions,
-   no camera instructions, no speaker labels inside the text itself.
-6. Never invent names, places, numbers or events that are not visible/audible in the clip.
-7. Return STRICT JSON only (no markdown fences).{" boundary_hint" if boundary_hint else ""}
+1. TIMESTAMPS ARE ABSOLUTE full-video seconds. The first second of this clip is {chunk_start:.2f}s,
+   not zero. Keep every line inside {chunk_start:.2f}s–{chunk_end:.2f}s.
+2. {task_rules}
+3. NATURAL SPEAKING BUDGET: a calm {lang_word} voice speaks about {cps:.0f} characters per second.
+   A 4-second window is about {four_sec} characters; 8 seconds is about {eight_sec}. Do not exceed
+   the actual line window. In Dubbing mode, preserve meaning first and use a concise, idiomatic
+   translation rather than rushing; set both hook fields to empty strings.
+4. STYLE: short, clear, active spoken language. Recap mode should feel cinematic, engaging and
+   professionally told. Dubbing mode should sound like a skilled actor speaking the translated
+   source line, with matching emotion and no narrator voice. Avoid filler and repeated phrases.
+5. Do not include timecodes, camera directions, stage directions, or speaker labels inside `text`.
+   Never invent names, places, numbers, dialogue, or events. Return STRICT JSON only.
+{boundary_hint}
 
 JSON SHAPE
 {{
-  "hook_line1": "short punchy hook in Burmese",
-  "hook_line2": "second hook line in Burmese",
+  "hook_line1": "short truthful hook in the target language",
+  "hook_line2": "optional second short hook",
   "dialogues": [
-    {{"start": {chunk_start:.2f}, "end": {chunk_start + 4:.2f}, "speaker": "Hero", "text": "မြန်မာလို စကားပြောစာ"}}
+    {{"start": {chunk_start:.2f}, "end": {chunk_start + 4:.2f}, "speaker": "Speaker", "text": "spoken line"}}
   ]
 }}"""
-
 
 def _gap_fill_prompt(gaps: list[dict], lang: str, context_lines: list[dict]) -> str:
     lang_word = "Burmese" if lang == "my" else "English"
@@ -902,7 +933,7 @@ class TimelineExtractor:
             # ── tail pass: never let a clip end in silence ─────────────
             # Models like to "summarise" the ending, so the last line often
             # stops far before the clip does and the dub fell silent there.
-            if config.settings.ai_tail_pass and shifted:
+            if config.settings.ai_tail_pass and self.fill_mode == "continuous" and shifted:
                 last_end = max(l["end"] for l in shifted)
                 missing_tail = end - last_end
                 if missing_tail > max(6.0, (end - start) * 0.12) and end - start > 12.0:
@@ -1227,3 +1258,79 @@ def repair_timeline(video_path: str, duration: float, *, language: str = "my",
     extractor.client = GeminiClient(key_ring=key_ring,
                                     on_switch=lambda m: extractor.log(m))
     return extractor.fill_windows(gaps or [], duration)
+
+
+def suggest_thumbnail(video_path: str, duration: float, *, api_key: str = "",
+                      model: str = "", language: str = "my",
+                      key_ring: KeyRing | None = None) -> dict[str, Any]:
+    """Choose a truthful high-CTR thumbnail moment and short on-image copy.
+
+    Gemini reviews the full video proxy, not a caller-supplied still. The
+    returned timestamp is in the original video timeline and is used by the
+    renderer to extract the actual frame.
+    """
+    if duration <= 0:
+        raise ValueError("Video duration must be positive")
+    if config.settings.demo_mode:
+        headline, subheadline = (
+            ("မထင်မှတ်တဲ့ အလှည့်အပြောင်း", "ဇာတ်လမ်း အကျဉ်းချုပ်")
+            if language == "my" else ("An Unexpected Twist", "Watch to the end")
+        )
+        return {
+            "timestamp": round(min(duration, max(0.0, duration * 0.38)), 2),
+            "headline": headline,
+            "subheadline": subheadline,
+            "text_position": "left",
+            "rationale": "Demo mode: synthetic suggestion; enable Gemini for a real video review.",
+            "demo": True,
+        }
+
+    proxy = Path(config.TMP_DIR) / f"thumb_proxy_{uuid.uuid4().hex[:8]}.mp4"
+    ref = None
+    client = GeminiClient(api_key=api_key, key_ring=key_ring)
+    lang = "natural spoken Burmese" if language == "my" else "natural spoken English"
+    prompt = f"""You are a senior YouTube thumbnail designer and audience-retention strategist.
+Review the complete video carefully and choose ONE real, sharp, emotionally strong frame that
+would earn a high click-through rate on a mobile feed. Prefer a clear face, decisive action,
+strong reaction, or distinctive object; avoid black frames, transitions, blur, empty scenery,
+and spoilers that the video does not support. Return its timestamp in seconds from the ORIGINAL
+video start (0 to {duration:.2f}s).
+
+Design the actual thumbnail around one truthful, curiosity-driving hook. Write a headline of at
+most 4 short words in {lang}; an optional subheadline of at most 3 short words. Avoid generic
+phrases, fake claims, and long sentences. Choose `text_position` as the side with the most empty
+space opposite the main subject (`left` or `right`). Keep mobile readability and a single clear
+focal point in mind. Explain the frame choice in one short rationale sentence.
+Return only the requested JSON schema."""
+    try:
+        build_proxy(video_path, 0.0, duration, proxy)
+        part, ref = client.build_media_part(proxy, label="thumbnail designer")
+        raw = client.generate_json(
+            model or config.settings.default_model,
+            [part, prompt], THUMBNAIL_SCHEMA,
+            temperature=0.35, max_tokens=700,
+        )
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned,
+                             flags=re.IGNORECASE)
+        result = json.loads(cleaned)
+        timestamp = float(result.get("timestamp", duration * 0.4))
+        if not math.isfinite(timestamp):
+            timestamp = duration * 0.4
+        headline = re.sub(r"\s+", " ", str(result.get("headline", ""))).strip()[:120]
+        subheadline = re.sub(r"\s+", " ", str(result.get("subheadline", ""))).strip()[:120]
+        if not headline:
+            raise ValueError("AI thumbnail designer returned an empty headline")
+        return {
+            "timestamp": round(max(0.0, min(duration, timestamp)), 2),
+            "headline": headline,
+            "subheadline": subheadline,
+            "text_position": "right" if result.get("text_position") == "right" else "left",
+            "rationale": re.sub(r"\s+", " ", str(result.get("rationale", ""))).strip()[:300],
+            "demo": False,
+        }
+    finally:
+        if ref is not None:
+            client.delete(ref)
+        proxy.unlink(missing_ok=True)

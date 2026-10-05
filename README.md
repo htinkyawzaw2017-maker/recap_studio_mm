@@ -36,14 +36,23 @@ flow တစ်ခုလုံးကို စမ်းနိုင်သည်)�
       ↓
 1 fps proxy များအဖြစ် အပိုင်းခွဲ → Gemini ဖြင့် timeline ခွဲခြမ်းစိတ်ဖြာ (absolute timestamps)
       ↓
-Coverage sweep — AI ကျန်ခဲ့သော အပိုင်းများကို ပြန်စစ်/ဖြည့်  → အစအဆုံး စကားပြောစာ ရရှိ
+Continuous recap တွင် coverage sweep — Dialogue dubbing တွင် မူရင်းတိတ်ဆိတ်ချိန်ကို ထိန်းသိမ်း
       ↓
-edge-tts parallel အသံသွင်းခြင်း + time-fitting (rate boost → atempo → trim)
+edge-tts parallel အသံသွင်းခြင်း — recap time-fit; dubbing ကို မူရင်းစကားအဆုံးချိန်အတွင်း စစ်ဆေး
       ↓
 Timeline အလိုက် အသံ ပေါင်းစပ် (drift-free) + loudnorm (I=-16 LUFS)
       ↓
 ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → MP4 + SRT + MP3
 ```
+
+### 🎬 v4.4.0 — Professional Recap/Dubbing · Caption Studio · AI Thumbnail
+
+* **Movie Recap နှင့် Dialogue Dubbing ကို ခွဲထားသည်** — Recap သည် မြင်ရသော လုပ်ဆောင်ချက်ကို အခြေခံသည့် cinematic narration၊ dubbing သည် မူရင်းအသံထဲက စကားကိုသာ ဘာသာပြန်၍ စကားတစ်ကြောင်းစီ၏ မူရင်းအဆုံးအချိန်အတွင်း သဘာဝကျစွာ ပြောသည်။ Fit မဖြစ်လျှင် စကားမဖြတ်၊ အလွန်မမြန်စေဘဲ render ကို ရပ်ပြီး ပြင်ရန် အကြောင်းပြသည်။
+* **Shorts → Studio portrait proxy fix** — x264/yuv420p အတွက် width/height နှစ်ခုစလုံးကို even-pixel ဖြင့် ထုတ်သည် (480×853 အမှား မဖြစ်တော့ပါ)။
+* **Caption tools preview ဘေးတွင်** — CapCut pop-up စာတန်း၊ default **42px**, box width နှင့် vertical position slider များကို video အောက်တွင် တစ်နေရာတည်း ချိန်နိုင်သည်။
+* **Per-account SQLite preferences** — slider, font, color, recap/dubbing mode အပါအဝင် Studio setting များကို user account တစ်ခုစီတွင် သိမ်းထားပြီး အခြား browser မှလည်း ဆက်သုံးနိုင်သည်.
+* **AI Thumbnail Designer** — Gemini သည် source/rendered video အပြည့်ကို စစ်ပြီး သက်ဆိုင်ရာ frame၊ truthful high-CTR hook၊ text-safe side ကို အကြံပြုသည်။ 16:9၊ 9:16၊ 1:1 JPG ထုတ်နိုင်သည်။
+* **Tests** — `tests/test_userprefs.py`, `tests/test_narration_fit.py`, `tests/test_thumbnail_render.py`, `tests/test_ui_preview.mjs`, `tests/test_auth.py`.
 
 ### 🗣️ v4.3.1 — Link import, narration အရှည်အတို, Recap ⇄ Dubbing ခွဲခြားမှု (Phase 3 · Batch B-1)
 
@@ -55,7 +64,7 @@ ASS subtitle + hook + logo overlay + reframe → ffmpeg single-pass render → M
 * **#4 တို/ပြတ်သား/သဘာဝကျ** — prompt တွင် budget ကိန်းဂဏန်း အတိအကျ + filler စကား ပိတ်ပင်ချက်။
 * **#6 Recap ⇄ Dubbing** — 🎭 dubbing mode တွင် တိတ်ဆိတ်ချိန်ကို **စကား လုံးဝ မဖြည့်တော့**၊
   speech boundary ±0.3s တိကျရန် တောင်းဆိုသည်။ 🎬 recap mode သာ အစအဆုံး narration ထည့်သည်။
-* **Tests** — `tests/test_narration_fit.py` (39 checks, offline)
+* **Tests** — `tests/test_narration_fit.py` (49 checks, offline)
 
 ### 🎛️ v4.3 — WYSIWYG Live Preview + ဖုန်း/တက်ဘလက်/ကွန်ပျူတာ အားလုံး အဆင်ပြေ (Phase 3 · Batch A)
 
@@ -81,7 +90,7 @@ Live Preview သည် ယခင်က **9:16 box တစ်မျိုးတည
 * **🍿 Splitter → 🎬 Studio** — ခွဲထုတ်ပြီးသော အပိုင်းတိုင်းတွင်
   **"🎬 Studio သို့ ပို့မည်"** ခလုတ် — နှိပ်လိုက်သည်နှင့် Studio သို့ ရောက်ပြီး
   One-Click နှိပ်ရုံဖြင့် recap ထုတ်နိုင်သည် (ပြန်တင်စရာ မလို)
-* **Tests** — `tests/test_ui_preview.mjs` (31 checks, server မလိုပါ)
+* **Tests** — `tests/test_ui_preview.mjs` (41 checks, server မလိုပါ)
 
 ### 🔐 v4.2 — အကောင့်စနစ် + Database လုံခြုံရေး + User အများသုံး (Phase 2)
 
@@ -100,7 +109,7 @@ Site ကို link သိသူတိုင်း ဝင်နိုင်ခ�
   Settings → **အကောင့်** (password ပြောင်း / device အားလုံး ထွက်) နှင့်
   **အကောင့် စီမံခန့်ခွဲမှု** (admin: user ဖန်တီး/ပိတ်/reset/ဖျက် + audit log)
 * **CLI** — `python -m recapstudio.useradmin status|migrate|create|list|passwd|disable|promote|delete|sessions|audit`
-* **Tests** — `tests/test_auth.py` (69 checks, offline)
+* **Tests** — `tests/test_auth.py` (75 checks, offline)
 
 👉 သင် ကိုယ်တိုင် လုပ်ရမည့် အဆင့်များ (secret key, admin အကောင့်, restart, စစ်ဆေးချက်) —
 **[docs/PHASE2_AUTH.md](docs/PHASE2_AUTH.md)**
@@ -229,7 +238,7 @@ running job ကို refresh လုပ်လျှင် ပြန်ချိ�
 
 * **AWS EC2 (Instance Connect, port 80) — command တစ်ကြောင်းတည်း** — [docs/EC2_INSTANCE_CONNECT.md](docs/EC2_INSTANCE_CONNECT.md)
   ```bash
-  cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
+  cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10a80-recap-studio-mm && rm -rf recap_studio_mm-arena-* && tar xzf recap.tgz && sudo RECAP_BRANCH=arena/01a10a80-recap-studio-mm bash /tmp/recap_studio_mm-arena-01a10a80-recap-studio-mm/deploy/ec2_install.sh
   ```
   install ပြီးလျှင် **admin အကောင့် ဖန်တီးရန် မမေ့ပါနှင့်** →
   [docs/PHASE2_AUTH.md](docs/PHASE2_AUTH.md) အဆင့် ၄
@@ -251,13 +260,15 @@ python tests/test_real_run.py         # demo မပါဘဲ AI analysis အပ�
 python tests/test_self_attrs.py       # self.<name> static စစ်ဆေးခြင်း (12 modules)
 python tests/test_cancel.py          # ⏹ ရပ်တန့်ခြင်း = CancelledError (5 checks, ~3s)
 python tests/test_key_ring.py         # API key ၃ ခု + quota failover (27 checks, network မလိုပါ)
-python tests/test_auth.py             # အကောင့်/session/CSRF/quota/isolation (69 checks, offline)
+python tests/test_auth.py             # အကောင့်/session/CSRF/quota/isolation (75 checks, offline)
 python tests/test_audio_coverage.py   # narration အစအဆုံး ရောက်/မရောက် (16 checks, ffmpeg လိုသည်)
-python tests/test_narration_fit.py    # narration budget · mode ခွဲခြားမှု · link import (39 checks)
+python tests/test_narration_fit.py    # narration budget · mode ခွဲခြားမှု · link import (49 checks)
+python tests/test_userprefs.py        # per-account preferences (SQLite, offline)
+python tests/test_thumbnail_render.py # thumbnail JPEG layout (synthetic frame, no ffmpeg)
 
 # Front-end (jsdom)
 npm install jsdom
-node tests/test_ui_preview.mjs                                           # 31 checks (server မလိုပါ)
+node tests/test_ui_preview.mjs                                           # 41 checks (server မလိုပါ)
 node tests/test_ui_auth.mjs http://127.0.0.1:8000 myname 'မိမိစကားဝှက်'   # 17 checks (server လိုသည်)
 
 # Deploy လုပ်ပြီးသော server (AWS/Render) ကို စစ်ရန် — dependencies မလိုပါ

@@ -162,6 +162,18 @@ def main() -> int:
     bearer_res = bearer.post("/api/keys", json={"keys": []},
                              headers={"Authorization": f"Bearer {admin_token}"})
     check("bearer token clients are exempt from CSRF", bearer_res.status_code == 200)
+    default_prefs = admin.get("/api/me/preferences")
+    check("account preferences have the 42px caption default",
+          default_prefs.status_code == 200
+          and default_prefs.json()["preferences"]["sub_font_size"] == 42)
+    prefs_no_csrf = admin.put("/api/me/preferences", json={"sub_width_percent": 76})
+    check("preference writes require CSRF", prefs_no_csrf.status_code == 403)
+    prefs_saved = admin.put("/api/me/preferences", json={"sub_width_percent": 76,
+                                                           "sub_font_size": 54},
+                            headers={"X-CSRF-Token": admin_csrf})
+    check("caption width/size save into the signed-in account", prefs_saved.status_code == 200
+          and prefs_saved.json()["preferences"]["sub_width_percent"] == 76
+          and prefs_saved.json()["preferences"]["sub_font_size"] == 54)
 
     # ── 6. admin can manage accounts ──────────────────────────────────
     section("admin: account management")
@@ -180,6 +192,16 @@ def main() -> int:
                          json={"username": "editor", "password": "Cl1p-Craft-77"})
     check("new account can sign in", elogin.status_code == 200, elogin.text[:70])
     editor_csrf = elogin.json()["csrf_token"]
+    editor_defaults = editor.get("/api/me/preferences")
+    check("new admin-created user receives their own defaults",
+          editor_defaults.status_code == 200
+          and editor_defaults.json()["preferences"]["sub_width_percent"] == 90)
+    editor_saved = editor.put("/api/me/preferences", json={"sub_width_percent": 64},
+                              headers={"X-CSRF-Token": editor_csrf})
+    check("new user can persist their own slider setting", editor_saved.status_code == 200
+          and editor_saved.json()["preferences"]["sub_width_percent"] == 64)
+    check("user preferences remain isolated from the admin",
+          admin.get("/api/me/preferences").json()["preferences"]["sub_width_percent"] == 76)
     check("non-admin blocked from /api/admin/users",
           editor.get("/api/admin/users").status_code == 403)
     check("non-admin cannot change server defaults",

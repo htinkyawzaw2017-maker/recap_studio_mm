@@ -59,15 +59,15 @@
 ```bash
 # 1) server terminal (EC2 Instance Connect / SSH) ထဲ ဝင်ပါ — code အသစ် ဆွဲချ
 cd /tmp
-curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm
+curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10a80-recap-studio-mm
 rm -rf recap_studio_mm-arena-* && tar xzf recap.tgz
-sudo bash /tmp/recap_studio_mm-arena-01a105ed-recap-studio-mm/deploy/ec2_install.sh
+sudo bash /tmp/recap_studio_mm-arena-01a10a80-recap-studio-mm/deploy/ec2_install.sh
 
 # 2) restart
 sudo systemctl restart recap-studio
 
 # 3) တကယ် ရောက်/မရောက် စစ်
-curl -s http://localhost/healthz          # "version":"4.3.0" ဖြစ်ရမည်
+curl -s http://localhost/healthz          # "version":"4.4.0" ဖြစ်ရမည်
 curl -s http://localhost/ | grep -c preview-frame    # 1 ဖြစ်ရမည် (v4.3 markup)
 ```
 
@@ -87,7 +87,7 @@ Server မှာ v4.3 တင်ပြီးဖြစ်သော်လည်း 
 | Android Chrome | ⋮ → History → Clear browsing data → Cached images and files |
 | iPhone Safari | Settings → Safari → Clear History and Website Data |
 
-ပြီးလျှင် စာမျက်နှာ ခေါင်းစီးတွင် **`v4.3.0`** ဟု ပြနေရပါမည်။
+ပြီးလျှင် စာမျက်နှာ ခေါင်းစီးတွင် **`v4.4.0`** ဟု ပြနေရပါမည်။
 `v4.2` / `v4.1` ပြနေသေးလျှင် cache မရှင်းရသေးပါ။
 
 ---
@@ -123,10 +123,10 @@ Server မှာ v4.3 တင်ပြီးဖြစ်သော်လည်း 
 ## 4. Developer — offline test များ
 
 ```bash
-node tests/test_ui_preview.mjs        # 31 checks — preview geometry + splitter→studio (server မလို)
+node tests/test_ui_preview.mjs        # 41 checks — preview geometry, modes + splitter→studio (server မလို)
 node tests/test_ui_auth.mjs http://127.0.0.1:8000 myname 'password'   # 17 checks
-python tests/smoke_test.py            # 69 checks
-python tests/test_auth.py             # 69 checks
+python tests/smoke_test.py            # 75 checks
+python tests/test_auth.py             # 75 checks
 python tests/verify_deployment.py http://<EC2-IP>     # deploy ပြီးနောက် စစ်ရန်
 ```
 

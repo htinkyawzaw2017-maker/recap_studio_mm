@@ -28,7 +28,7 @@ recapstudio/crypto.py      secret key management + Fernet/HMAC encryption
 recapstudio/auth.py        Principal, password policy, session, quota, audit logic
 recapstudio/webauth.py     FastAPI dependency guards (cookie / Bearer / access key)
 recapstudio/useradmin.py   command line account manager
-tests/test_auth.py         69 checks (offline)
+tests/test_auth.py         75 checks (offline)
 ```
 
 ---
@@ -57,9 +57,9 @@ tests/test_auth.py         69 checks (offline)
 ```bash
 cd /tmp
 curl -fsSL -o recap.tgz \
-  https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm
+  https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10a80-recap-studio-mm
 rm -rf recap_studio_mm-arena-* && tar xzf recap.tgz
-sudo bash /tmp/recap_studio_mm-arena-01a105ed-recap-studio-mm/deploy/ec2_install.sh
+sudo bash /tmp/recap_studio_mm-arena-01a10a80-recap-studio-mm/deploy/ec2_install.sh
 ```
 
 Installer က အောက်ပါတို့ကို **အလိုအလျောက်** လုပ်ပေးသည် —
@@ -302,7 +302,7 @@ ua status                                          # accounts ဘယ်နှစ
 ## 9. စမ်းသပ်ချက် (developer)
 
 ```bash
-python tests/test_auth.py          # 69 checks — auth, session, CSRF, quota, isolation
+python tests/test_auth.py          # 75 checks — auth, session, CSRF, quota, isolation
 python tests/smoke_test.py         # 69 checks — core pipeline
 python tests/verify_deployment.py https://your-domain.com --username admin --password '...'
 ```

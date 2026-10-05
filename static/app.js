@@ -25,7 +25,13 @@
     serverOk: null,           // null = unknown, true/false after a probe
     video: null,              // studio upload  {path, duration, …, previewUrl, name}
     splitVideo: null,         // shorts splitter upload
-    thumbVideo: null,         // thumbnail tab upload
+    thumbVideo: null,         // explicit thumbnail-tab upload
+    thumbJobSource: null,     // last rendered output selected from Job Progress
+    thumbImageUrl: null,
+    thumbTextPosition: 'left',
+    preferencesReady: false,
+    preferencesSaving: false,
+    preferencesTimer: null,
     logo: null,
     job: null,                // current job object from the API
     poll: null,
@@ -370,6 +376,8 @@
         estimateSplitParts();
       } else if (target === 'thumb') {
         state.thumbVideo = makeVideoEntry(data, file);
+        state.thumbJobSource = null;
+        $('thumb-source-note').textContent = `${state.thumbVideo.name} ကို explicit source အဖြစ် အသုံးပြုမည်။ AI သည် frame ကို ရွေးမည်။`;
         toast('Thumbnail အတွက် ဗီဒီယို အဆင်သင့်', 'ok');
       } else {
         applyVideoResult(data, file);
@@ -569,11 +577,14 @@
     const size = Number($('sub-font').value);
     const color = $('sub-color').value;
     const bg = $('sub-bg').value;
+    const width = Number($('sub-width').value || 90);
     $('lbl-font').textContent = size;
+    $('lbl-sub-width').textContent = width;
     el.style.color = color;
     const scale = previewScale(f);
     el.style.fontSize = Math.max(9, Math.round(size * (scale || 0.44))) + 'px';
-    el.style.maxWidth = '90%';                     // ASS MarginL/R = 5% each
+    el.style.width = `${width}%`;
+    el.style.maxWidth = `${width}%`;
     if (bg === 'Outline Only') {
       el.style.background = 'transparent';
       el.style.textShadow = '0 0 6px #000, 0 0 6px #000';
@@ -595,17 +606,27 @@
   }
 
   const FILL_MODE_HELP = {
-    continuous: 'ဇာတ်လမ်းတစ်ခုလုံးကို ကိုယ်ပိုင်စကားဖြင့် အစမှအဆုံး ပြောပြသည် — narrator ဘယ်တော့မှ မရပ် (recap channel ပုံစံ)။',
-    dialogue: 'ဇာတ်ကောင် တကယ် စကားပြောသည့် အချိန်များကိုသာ ဒပ်ဘ်လုပ်သည် — တိတ်ဆိတ်ချိန်တွင် စကား ထပ်မထည့်ပါ၊ အချိန်ကိုက် တိကျသည်။'
+    continuous: 'Movie Recap: မြင်ရသော လုပ်ဆောင်ချက်နှင့် ဇာတ်လမ်းကို professional recap narrator ပုံစံဖြင့် ဆက်တိုက်ပြောမည်။ မရှိသောဖြစ်ရပ်/စကား မတီထွင်ပါ။',
+    dialogue: 'Dialogue Dubbing: မူရင်း video ထဲက တကယ်ပြောသော စာသားကိုသာ သဘာဝကျစွာ ပြန်ဆိုမည်။ စကားတစ်ကြောင်းစီ၏ အဆုံးအချိန်ကို မကျော်ရ — မသဘာဝအောင် မြန်စေရမည့်အစား render ကို ရပ်ပြီး timeline ပြင်ခိုင်းမည်။'
   };
   function syncFillModeHelp() {
+    const mode = $('fill-mode').value;
     const el = $('fill-mode-help');
-    if (el) el.textContent = FILL_MODE_HELP[$('fill-mode').value] || FILL_MODE_HELP.continuous;
+    if (el) el.textContent = FILL_MODE_HELP[mode] || FILL_MODE_HELP.continuous;
+    const btn = $('btn-start');
+    if (btn) {
+      btn.textContent = mode === 'dialogue'
+        ? '🎭 Dialogue Dubbing စတင်မည်'
+        : '🎬 Movie Recap စတင်မည်';
+      btn.dataset.fillMode = mode;
+    }
+    updateHookOverlay();
   }
 
   function updateHookOverlay() {
     const h1 = $('hook1').value.trim(), h2 = $('hook2').value.trim();
-    $('overlay-hook').innerHTML = h1 || h2
+    const isDialogue = $('fill-mode') && $('fill-mode').value === 'dialogue';
+    $('overlay-hook').innerHTML = !isDialogue && (h1 || h2)
       ? `${escapeHtml(h1)}<small>${escapeHtml(h2)}</small>` : '';
     styleHookOverlay();
   }
@@ -613,6 +634,7 @@
   function setSubPos(percent) {
     state.subPosPercent = Math.max(3, Math.min(92, Math.round(percent)));
     $('overlay-sub').style.bottom = state.subPosPercent + '%';
+    $('sub-position').value = state.subPosPercent;
     $('lbl-sub-pos').textContent = state.subPosPercent;
   }
 
@@ -645,7 +667,11 @@
       handler(Math.max(0, Math.min(100, xPct)), Math.max(0, Math.min(100, yPct)), rect, el);
       e.preventDefault();
     };
-    const end = () => { dragging = false; };
+    const end = () => {
+      if (!dragging) return;
+      dragging = false;
+      el.dispatchEvent(new Event('studio-drag-end'));
+    };
     el.addEventListener('mousedown', start);
     el.addEventListener('touchstart', start, { passive: false });
     window.addEventListener('mousemove', move, { passive: false });
@@ -700,19 +726,97 @@
     if (saved && models.includes(saved)) { $('model').value = saved; $('cfg-model').value = saved; }
   }
 
-  function persistUiState() {
+  function preferencePayload() {
+    return {
+      lang: $('lang').value,
+      mode: $('mode').value,
+      fill_mode: $('fill-mode').value,
+      voice: $('voice').value,
+      quality: $('quality').value,
+      output_aspect: $('aspect').value,
+      reframe_mode: $('reframe').value,
+      enable_subtitles: $('enable-subs').checked,
+      sub_font_size: Number($('sub-font').value),
+      sub_color_hex: $('sub-color').value,
+      sub_bg_style: $('sub-bg').value,
+      sub_v_pos_percent: state.subPosPercent,
+      sub_width_percent: Number($('sub-width').value)
+    };
+  }
+
+  function schedulePreferenceSave() {
+    if (!state.preferencesReady) return;
+    clearTimeout(state.preferencesTimer);
+    state.preferencesTimer = setTimeout(async () => {
+      const note = $('subtitle-profile-status');
+      try {
+        await api('/api/me/preferences', {
+          method: 'PUT', body: preferencePayload(), timeout: 15000, retries: 1
+        });
+        if (note) note.textContent = '✓ ဤအကောင့်၏ စာတန်းနှင့် Studio ဆက်တင်များ သိမ်းပြီးပါပြီ';
+      } catch (err) {
+        if (note) note.textContent = 'Server တွင် သိမ်းမရပါ — ချိတ်ဆက်မှု ပြန်ရလျှင် ထပ်စမ်းပါမည်';
+        console.warn('Could not save Studio preferences:', err);
+      }
+    }, 500);
+  }
+
+  async function loadUserPreferences() {
+    state.preferencesReady = false;
+    try {
+      const data = await api('/api/me/preferences', { timeout: 15000, retries: 1 });
+      const prefs = (data && data.preferences) || {};
+      const setSelect = (id, value) => {
+        const el = $(id);
+        if (el && [...el.options].some((option) => option.value === String(value))) el.value = String(value);
+      };
+      setSelect('lang', prefs.lang);
+      renderVoices();
+      setSelect('voice', prefs.voice);
+      setSelect('mode', prefs.mode);
+      setSelect('fill-mode', prefs.fill_mode);
+      setSelect('quality', prefs.quality);
+      setSelect('aspect', prefs.output_aspect);
+      setSelect('reframe', prefs.reframe_mode);
+      if (typeof prefs.enable_subtitles === 'boolean') $('enable-subs').checked = prefs.enable_subtitles;
+      if (Number.isFinite(Number(prefs.sub_font_size))) $('sub-font').value = String(prefs.sub_font_size);
+      if (/^#[0-9a-f]{6}$/i.test(String(prefs.sub_color_hex || ''))) $('sub-color').value = prefs.sub_color_hex;
+      setSelect('sub-bg', prefs.sub_bg_style);
+      if (Number.isFinite(Number(prefs.sub_width_percent))) $('sub-width').value = String(prefs.sub_width_percent);
+      setSubPos(Number(prefs.sub_v_pos_percent ?? 22));
+      state.preferencesReady = true;
+      // Server preferences are authoritative after sign-in; mirror them locally
+      // only for fast paint/offline continuity on this same browser.
+      persistUiState(false);
+      syncFillModeHelp();
+      $('overlay-sub').classList.toggle('hidden', !$('enable-subs').checked);
+      applyPreviewGeometry();
+      const note = $('subtitle-profile-status');
+      if (note) note.textContent = '✓ အကောင့်အလိုက် သိမ်းထားသော Studio ဆက်တင်များကို ဖွင့်ထားပါသည်';
+    } catch (err) {
+      // Open/offline installs still retain per-browser settings. A signed-in
+      // account will retry the server preference request on its next session.
+      state.preferencesReady = false;
+      console.warn('Could not load Studio preferences:', err);
+    }
+  }
+
+  function persistUiState(saveServer = true) {
     LS.set('rs_voice_' + $('lang').value, $('voice').value);
     LS.set('rs_model', $('model').value);
-    ['lang', 'mode', 'fill-mode', 'quality', 'sub-font', 'sub-color', 'sub-bg', 'aspect',
-     'reframe', 'hook1', 'hook2', 'hook-seconds', 'thumb-sec'].forEach((id) => {
+    ['lang', 'mode', 'fill-mode', 'quality', 'sub-font', 'sub-width', 'sub-position',
+     'sub-color', 'sub-bg', 'aspect', 'reframe', 'hook1', 'hook2', 'hook-seconds',
+     'thumb-sec', 'thumb-aspect'].forEach((id) => {
       const el = $(id);
       if (el) LS.set('rs_' + id, el.value);
     });
+    LS.set('rs_enable_subtitles', $('enable-subs').checked ? '1' : '0');
+    if (saveServer) schedulePreferenceSave();
   }
 
   function restoreUiState() {
-    ['lang', 'mode', 'fill-mode', 'quality', 'sub-font', 'sub-color', 'sub-bg', 'aspect',
-     'reframe', 'hook-seconds'].forEach((id) => {
+    ['lang', 'mode', 'fill-mode', 'quality', 'sub-font', 'sub-width', 'sub-position',
+     'sub-color', 'sub-bg', 'aspect', 'reframe', 'hook-seconds', 'thumb-aspect'].forEach((id) => {
       const saved = LS.get('rs_' + id, null);
       const el = $(id);
       if (saved !== null && el && [...el.options].some((o) => o.value === saved)) el.value = saved;
@@ -720,6 +824,10 @@
     });
     $('hook1').value = LS.get('rs_hook1', '');
     $('hook2').value = LS.get('rs_hook2', '');
+    $('thumb-sec').value = LS.get('rs_thumb-sec', $('thumb-sec').value);
+    $('enable-subs').checked = LS.get('rs_enable_subtitles', '1') !== '0';
+    setSubPos(Number($('sub-position').value || 22));
+    $('overlay-sub').classList.toggle('hidden', !$('enable-subs').checked);
   }
 
   /* ═══════════════════════════ JOB RUNNER ══════════════════════════ */
@@ -743,6 +851,7 @@
       sub_color_hex: $('sub-color').value,
       sub_bg_style: $('sub-bg').value,
       sub_v_pos_percent: state.subPosPercent,
+      sub_width_percent: Number($('sub-width').value),
       logo_path: state.logo ? state.logo.path : null,
       logo_pos_x: state.logo ? state.logoPos.x : null,
       logo_pos_y: state.logo ? state.logoPos.y : null,
@@ -888,6 +997,12 @@
         ['ကြာချိန်', fmtTime(out.duration || job.duration)]
       ].map(([k, v]) => `<div class="stat"><b>${escapeHtml(String(v))}</b><span>${k}</span></div>`).join('');
       if (job.preview_url) $('preview-video').src = job.preview_url;
+      if (job.output_video) {
+        state.thumbJobSource = {
+          path: job.output_video, name: 'Rendered recap',
+          duration: job.duration, previewUrl: job.preview_url
+        };
+      }
       renderTimeline(job);
       renderCoverage(job);
       const warnings = (job.stats && job.stats.warnings) || [];
@@ -1105,38 +1220,125 @@
   /* ═════════════════ THUMBNAIL / SPLITTER / JOBS ═══════════════════ */
   wireDropzone('thumb-dropzone', 'thumb-file', (file) => handleVideoFile(file, { target: 'thumb' }));
 
+  function getThumbnailSource() {
+    return state.thumbVideo || state.thumbJobSource || state.video;
+  }
+
+  function setThumbnailStatus(message, kind = 'info') {
+    const el = $('thumb-status');
+    if (!el) return;
+    el.textContent = message;
+    el.classList.toggle('hidden', !message);
+    el.dataset.kind = kind;
+  }
+
+  function showThumbnail(blob, design = null) {
+    if (state.thumbImageUrl) URL.revokeObjectURL(state.thumbImageUrl);
+    const url = URL.createObjectURL(blob);
+    state.thumbImageUrl = url;
+    const aspect = $('thumb-aspect').value || '16:9';
+    $('thumb-img').src = url;
+    $('thumb-img').style.aspectRatio = aspect.replace(':', ' / ');
+    $('thumb-dl').href = url;
+    $('thumb-empty').classList.add('hidden');
+    $('thumb-result').classList.remove('hidden');
+    $('thumb-rationale').textContent = design
+      ? `${Number(design.timestamp || 0).toFixed(2)}s · ${design.rationale || 'AI သည် video မှ ရွေးထားသော frame'}`
+      : 'သင်ရွေးထားသော frame နှင့် စာသားကို အသုံးပြုထားသည်။';
+    $('thumb-result-note').textContent = `${aspect} · JPG · ${design ? 'AI က video ကို ခွဲခြမ်းစိတ်ဖြာပြီး frame ရွေးထားသည်' : 'Manual design'}`;
+  }
+
+  async function makeThumbnail(source, design = null) {
+    const request = design || {};
+    const res = await fetch('/api/thumbnail', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', ...authHeaders('POST') },
+      body: JSON.stringify({
+        video_path: source.path,
+        timestamp: Number(request.timestamp ?? $('thumb-sec').value) || 0,
+        hook_line1: request.headline ?? $('thumb-h1').value,
+        hook_line2: request.subheadline ?? $('thumb-h2').value,
+        text_position: request.text_position || state.thumbTextPosition || 'left',
+        aspect: $('thumb-aspect').value,
+        style: $('thumb-style').value
+      })
+    });
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { msg = (await res.json()).detail || msg; } catch { /* ignore */ }
+      throw new Error(msg);
+    }
+    showThumbnail(await res.blob(), design);
+  }
+
   $('btn-thumb').onclick = async () => {
-    const source = state.thumbVideo || state.video;
+    const source = getThumbnailSource();
     if (!source) return toast('ဗီဒီယိုဖိုင် အရင်တင်ပါ', 'err');
     const btn = $('btn-thumb');
     btn.disabled = true;
+    setThumbnailStatus('သင်ရွေးထားသော frame ကို ဖန်တီးနေပါသည်…');
     try {
-      const res = await fetch('/api/thumbnail', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json', ...authHeaders('POST') },
-        body: JSON.stringify({
-          video_path: source.path,
-          timestamp: Number($('thumb-sec').value) || 2.5,
-          hook_line1: $('thumb-h1').value,
-          hook_line2: $('thumb-h2').value,
-          style: $('thumb-style').value
-        })
-      });
-      if (!res.ok) {
-        let msg = `HTTP ${res.status}`;
-        try { msg = (await res.json()).detail || msg; } catch { /* ignore */ }
-        throw new Error(msg);
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      $('thumb-img').src = url;
-      $('thumb-dl').href = url;
-      $('thumb-empty').classList.add('hidden');
-      $('thumb-result').classList.remove('hidden');
+      await makeThumbnail(source);
+      setThumbnailStatus('✓ Thumbnail အဆင်သင့် — JPG အဖြစ် ဒေါင်းလုဒ်လုပ်နိုင်ပါပြီ');
       toast('Thumbnail အဆင်သင့်', 'ok');
-    } catch (err) { toast('Thumbnail မရပါ: ' + err.message, 'err'); }
-    finally { btn.disabled = false; }
+    } catch (err) {
+      setThumbnailStatus(`Thumbnail မရပါ: ${err.message}`, 'error');
+      toast('Thumbnail မရပါ: ' + err.message, 'err');
+    } finally { btn.disabled = false; }
+  };
+
+  $('btn-thumb-ai').onclick = async () => {
+    const source = getThumbnailSource();
+    if (!source) return toast('Video တင်ပါ သို့မဟုတ် Job ပြီးဆုံးပြီးနောက် AI Thumbnail ကို နှိပ်ပါ', 'err');
+    const btn = $('btn-thumb-ai');
+    btn.disabled = true;
+    $('btn-thumb').disabled = true;
+    $('thumb-rationale').textContent = '';
+    setThumbnailStatus('Gemini သည် video တစ်ခုလုံးကို ကြည့်ပြီး အကောင်းဆုံး frame, hook နဲ့ စာနေရာ ရွေးနေပါသည်…');
+    try {
+      const data = await api('/api/thumbnail/suggest', {
+        method: 'POST',
+        body: { video_path: source.path, model: $('model').value,
+                lang: $('lang').value, aspect: $('thumb-aspect').value },
+        timeout: 180000,
+        retries: 0
+      });
+      const design = data.design || {};
+      $('thumb-sec').value = Number(design.timestamp || 0).toFixed(2);
+      $('thumb-h1').value = design.headline || '';
+      $('thumb-h2').value = design.subheadline || '';
+      state.thumbTextPosition = design.text_position === 'right' ? 'right' : 'left';
+      setThumbnailStatus(`✓ Video analysis ပြီးပါပြီ · ${Number(design.timestamp || 0).toFixed(2)}s တွင် high-CTR frame ရွေးပြီး thumbnail ပုံ ဖန်တီးနေပါသည်…`);
+      await makeThumbnail(source, design);
+      setThumbnailStatus(design.demo
+        ? 'Demo preview ဖန်တီးထားသည် — video အမှန်ကို ခွဲခြမ်းစိတ်ဖြာရန် Gemini server/API Key ကို ပြင်ဆင်ပါ။'
+        : '✓ AI က video ထဲက frame နှင့် truthful hook ကို ရွေးပြီး thumbnail ပြုလုပ်ပြီးပါပြီ');
+      toast('AI Thumbnail အဆင်သင့်', 'ok', 7000);
+    } catch (err) {
+      setThumbnailStatus(`AI Thumbnail မရပါ: ${err.message}`, 'error');
+      toast('AI Thumbnail မရပါ: ' + err.message, 'err', 12000);
+    } finally {
+      btn.disabled = false;
+      $('btn-thumb').disabled = false;
+    }
+  };
+
+  $('btn-create-ai-thumb').onclick = () => {
+    if (state.job && state.job.output_video) {
+      state.thumbVideo = null;
+      state.thumbJobSource = {
+        path: state.job.output_video,
+        name: 'Rendered recap',
+        duration: state.job.duration,
+        previewUrl: state.job.preview_url
+      };
+      $('thumb-source-note').textContent = 'Job Progress မှ နောက်ဆုံး render လုပ်ထားသော video ကို AI ခွဲခြမ်းစိတ်ဖြာမည်။';
+    }
+    switchTab('thumb');
+    const card = $('tab-thumb');
+    if (card && card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    $('btn-thumb-ai').click();
   };
 
   // ── shorts splitter (own upload slot + background job) ───────────────
@@ -1605,9 +1807,15 @@
     ['aspect', 'reframe'].forEach((id) =>
       $(id).addEventListener('change', () => { applyPreviewGeometry(); persistUiState(); }));
     $('model').addEventListener('change', () => { LS.set('rs_model', $('model').value); });
-    ['sub-font', 'sub-color', 'sub-bg'].forEach((id) => {
-      $(id).addEventListener('input', () => { styleSubtitleOverlay(); persistUiState(); });
+    ['sub-font', 'sub-width', 'sub-color', 'sub-bg', 'sub-position'].forEach((id) => {
+      $(id).addEventListener('input', () => {
+        if (id === 'sub-position') setSubPos(Number($('sub-position').value));
+        styleSubtitleOverlay();
+        persistUiState();
+      });
     });
+    $('overlay-sub').addEventListener('studio-drag-end', persistUiState);
+    $('thumb-aspect').addEventListener('change', persistUiState);
     // keep the overlays pixel-accurate on rotate / resize / responsive reflow
     let geomRaf = 0;
     const reflow = () => {
@@ -1643,6 +1851,7 @@
     });
     $('enable-subs').addEventListener('change', () => {
       $('overlay-sub').classList.toggle('hidden', !$('enable-subs').checked);
+      persistUiState();
     });
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); $('btn-start').click(); }
@@ -1885,6 +2094,7 @@
       $('auth-password').value = '';
       $('auth-password2').value = '';
       await refreshAuth();
+      await loadUserPreferences();
       showAuthOverlay(false);
       toast(`မင်္ဂလာပါ ${state.auth.user ? state.auth.user.username : ''} 👋`, 'ok', 4000);
       await bootApp();
@@ -2064,6 +2274,7 @@
     appBooted = true;
     // 2) … then upgrade from the server (never blocks the page)
     refreshSystem();
+    loadUserPreferences();
     restoreKeys();
     restoreVideos();
 

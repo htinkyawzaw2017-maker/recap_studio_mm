@@ -218,7 +218,7 @@
           </div>
           <div class="row c2">
             <label class="field">
-              <span>Recap အမျိုးအစား</span>
+              <span>ဗီဒီယို အမျိုးအစား (Genre)</span>
               <select id="mode">
                 <option value="auto">🔍 Auto-Detect</option>
                 <option value="movie">🎬 Movie / Drama</option>
@@ -228,12 +228,12 @@
               </select>
             </label>
             <label class="field">
-              <span>အသံသွင်းပုံစံ (Dubbing Mode)</span>
+              <span>ထုတ်လုပ်မည့်ပုံစံ</span>
               <select id="fill-mode">
-                <option value="continuous">🎬 ဇာတ်ကား အစအဆုံး Recap (narrator မရပ်)</option>
-                <option value="dialogue">🎭 စကားပြောသာ Dubbing (တိတ်ဆိတ်ချိန် တိတ်ဆိတ်)</option>
+                <option value="continuous">🎬 Professional Movie Recap — လှုပ်ရှားမှုအတိုင်း ပြောပြမည်</option>
+                <option value="dialogue">🎭 Professional Dubbing — မူရင်းစကားသာ၊ အချိန်ကိုက်</option>
               </select>
-              <p class="help" id="fill-mode-help">ဇာတ်လမ်းတစ်ခုလုံးကို ကိုယ်ပိုင်စကားဖြင့် အစမှအဆုံး ပြောပြသည် — recap channel ပုံစံ။</p>
+              <p class="help" id="fill-mode-help">Recap နှင့် dubbing တို့သည် သီးခြားလုပ်ငန်းစဉ်များဖြစ်သည်။ ရွေးချယ်မှုအလိုက် အသံ၊ စာသားနှင့် အချိန်ကို ခွဲခြားထုတ်လုပ်ပါမည်။</p>
             </label>
           </div>
           <div class="row c2">
@@ -271,78 +271,56 @@
           <div class="card-head">
             <span class="step">3</span>
             <div class="head-text">
-              <h3>စာတန်းထိုး · Logo · ဖော်မတ်</h3>
-              <p class="sub">စာတန်းစတိုင်၊ လိုဂိုနေရာနှင့် output ဖော်မတ်ကို ချိန်ပါ။</p>
+              <h3>Branding · Output ဖော်မတ်</h3>
+              <p class="sub">စာတန်းကို Live Preview အောက်တွင် ချိန်ပါ၊ ဒီနေရာတွင် logo နှင့် reframe ကို သတ်မှတ်ပါ။</p>
             </div>
           </div>
-          <div class="row c2">
-            <div>
-              <label class="check"><input type="checkbox" id="enable-subs" checked>
-                <span><b>စာတန်းထိုး Burn-in</b> — CapCut စတိုင် pop-up စာတန်း</span></label>
-              <label class="field"><span>စာလုံးအရွယ် — <b id="lbl-font">42</b>px</span>
-                <input type="range" id="sub-font" min="24" max="72" value="42">
-              </label>
-              <div class="row c2">
-                <label class="field"><span>စာလုံးအရောင်</span>
-                  <input type="color" id="sub-color" value="#00f2fe"></label>
-                <label class="field"><span>နောက်ခံပုံစံ</span>
-                  <select id="sub-bg">
-                    <option value="Solid Box">Solid Box</option>
-                    <option value="Semi Transparent Box">Semi Transparent</option>
-                    <option value="Outline Only">Outline Only</option>
-                  </select>
-                </label>
-              </div>
+          <div class="style-options">
+            <label class="field"><span>Logo တင်ရန် (Optional — Preview ပေါ်တွင် ဆွဲ၍ နေရာချနိုင်သည်)</span>
+              <input type="file" id="logo-file" accept="image/*">
+            </label>
+            <div class="btn-row" id="logo-presets">
+              <button class="btn small" data-logo-pos="82,4">↗ Top-Right</button>
+              <button class="btn small" data-logo-pos="4,4">↖ Top-Left</button>
+              <button class="btn small" data-logo-pos="82,82">↘ Bottom-Right</button>
+              <button class="btn small danger" id="btn-remove-logo">✕ Logo ဖျက်မည်</button>
             </div>
-            <div>
-              <label class="field"><span>Logo တင်ရန် (Optional — Preview ပေါ်တွင် ဆွဲ၍ နေရာချနိုင်သည်)</span>
-                <input type="file" id="logo-file" accept="image/*">
+            <div class="row c2" style="margin-top:12px">
+              <label class="field"><span>Output ဖော်မတ်</span>
+                <select id="aspect">
+                  <option value="9:16">9:16 ဒေါင်လိုက် (Shorts/TikTok)</option>
+                  <option value="1:1">1:1 စတုရန်း (Feed)</option>
+                  <option value="16:9">16:9 အလျားလိုက် (YouTube)</option>
+                  <option value="original">မူရင်း အတိုင်း</option>
+                </select>
               </label>
-              <div class="btn-row" id="logo-presets">
-                <button class="btn small" data-logo-pos="82,4">↗ Top-Right</button>
-                <button class="btn small" data-logo-pos="4,4">↖ Top-Left</button>
-                <button class="btn small" data-logo-pos="82,82">↘ Bottom-Right</button>
-                <button class="btn small danger" id="btn-remove-logo">✕ Logo ဖျက်မည်</button>
-              </div>
-              <div class="row c2" style="margin-top:12px">
-                <label class="field"><span>Output ဖော်မတ်</span>
-                  <select id="aspect">
-                    <option value="9:16">9:16 ဒေါင်လိုက် (Shorts/TikTok)</option>
-                    <option value="1:1">1:1 စတုရန်း (Feed)</option>
-                    <option value="16:9">16:9 အလျားလိုက် (YouTube)</option>
-                    <option value="original">မူရင်း အတိုင်း</option>
-                  </select>
-                </label>
-                <label class="field"><span>Reframe</span>
-                  <select id="reframe">
-                    <option value="Smart Blur Background">Smart Blur Background</option>
-                    <option value="Center Crop">Center Crop</option>
-                    <option value="Original (no reframe)">မပြောင်းလဲ (အလျင်မြန်ဆုံး)</option>
-                  </select>
-                </label>
-              </div>
-              <div class="row c2">
-                <label class="field"><span>Hook စာသား (အပေါ်ထိပ်)</span>
-                  <input type="text" id="hook1" placeholder="စိတ်ဝင်စားဖွယ် အစပိုင်း"></label>
-                <label class="field"><span>Hook စာသား ၂</span>
-                  <input type="text" id="hook2" placeholder="အဆုံးအထိ ကြည့်ပါ"></label>
-              </div>
-              <label class="field"><span>Hook ပြသမည့် ကြာချိန်</span>
-                <select id="hook-seconds">
-                  <option value="0" selected>တစ်ဗီဒီယိုလုံး (persistent)</option>
-                  <option value="8">၈ စက္ကန့်</option>
-                  <option value="15">၁၅ စက္ကန့်</option>
-                  <option value="30">၃၀ စက္ကန့်</option>
+              <label class="field"><span>Reframe</span>
+                <select id="reframe">
+                  <option value="Smart Blur Background">Smart Blur Background</option>
+                  <option value="Center Crop">Center Crop</option>
+                  <option value="Original (no reframe)">မပြောင်းလဲ (အလျင်မြန်ဆုံး)</option>
                 </select>
               </label>
             </div>
+            <div class="row c2">
+              <label class="field"><span>Hook စာသား (အပေါ်ထိပ်)</span>
+                <input type="text" id="hook1" placeholder="စိတ်ဝင်စားဖွယ် အစပိုင်း"></label>
+              <label class="field"><span>Hook စာသား ၂</span>
+                <input type="text" id="hook2" placeholder="အဆုံးအထိ ကြည့်ပါ"></label>
+            </div>
+            <label class="field"><span>Hook ပြသမည့် ကြာချိန်</span>
+              <select id="hook-seconds">
+                <option value="0" selected>တစ်ဗီဒီယိုလုံး (persistent)</option>
+                <option value="8">၈ စက္ကန့်</option>
+                <option value="15">၁၅ စက္ကန့်</option>
+                <option value="30">၃၀ စက္ကန့်</option>
+              </select>
+            </label>
           </div>
         </div>
 
         <div class="cta-card">
-          <button class="btn primary block cta" id="btn-start">
-            ⚡ ONE-CLICK RECAP + DUBBING စတင်မည်
-          </button>
+          <button class="btn primary block cta" id="btn-start">🎬 Movie Recap စတင်မည်</button>
           <p class="help" style="text-align:center;margin-top:10px">
             AI analysis → အသံသွင်း → စာတန်းထိုး → Render — အားလုံး အလိုအလျောက်။
             ရပ်လိုပါက ညာဘက် <b>Job Progress</b> panel မှ <b>⏹ ရပ်မည်</b> ကို နှိပ်ပါ (ffmpeg ချက်ချင်း ရပ်ပါမည်)။
@@ -372,7 +350,38 @@
           <div class="chips" id="preview-meta" style="margin-top:12px">
             <span class="chip muted">ဗီဒီယို မတင်ရသေးပါ</span>
           </div>
-          <p class="help" id="position-help">Subtitle အနိမ့်: <b id="lbl-sub-pos">22</b>% · Logo: <b id="lbl-logo-pos">မထည့်ရသေးပါ</b> · Preview စကေး: <b id="lbl-preview-scale">—</b></p>
+          <div class="subtitle-tools" id="subtitle-tools">
+            <div class="subtitle-tools-head">
+              <div><b>📝 Burn-in စာတန်းထိုး</b><span class="sub">Preview အောက်တွင် ချိန်ညှိပါ · စာတန်းကို ဆွဲရွှေ့နိုင်သည်</span></div>
+              <label class="check compact-check"><input type="checkbox" id="enable-subs" checked>
+                <span>ဖွင့်ထားမည်</span></label>
+            </div>
+            <div class="row c2">
+              <label class="field range-field"><span>စာလုံးအရွယ် — <b id="lbl-font">42</b>px</span>
+                <input type="range" id="sub-font" min="24" max="72" value="42">
+              </label>
+              <label class="field range-field"><span>စာတန်းဘောက်စ် အကျယ် — <b id="lbl-sub-width">90</b>%</span>
+                <input type="range" id="sub-width" min="60" max="96" value="90">
+              </label>
+            </div>
+            <label class="field range-field">
+              <span>စာတန်းအောက်ခြေ အနေအထား — <b id="lbl-sub-pos">22</b>%</span>
+              <input type="range" id="sub-position" min="3" max="92" value="22">
+            </label>
+            <div class="row c2">
+              <label class="field"><span>စာလုံးအရောင်</span>
+                <input type="color" id="sub-color" value="#00f2fe"></label>
+              <label class="field"><span>စာတန်းနောက်ခံ</span>
+                <select id="sub-bg">
+                  <option value="Solid Box">CapCut Pop-up</option>
+                  <option value="Semi Transparent Box">တစ်ဝက် ဖောက်မြင်ရ</option>
+                  <option value="Outline Only">အနားသတ်သာ</option>
+                </select>
+              </label>
+            </div>
+            <p class="help" id="position-help">စာတန်းဘောက်စ်ကို video ပေါ်တွင် ဆွဲရွှေ့ပါ၊ slider ဖြင့် အကျယ်/နေရာကို တိတိကျကျ ချိန်ပါ။ Logo: <b id="lbl-logo-pos">မထည့်ရသေးပါ</b> · Preview: <b id="lbl-preview-scale">—</b></p>
+            <p class="profile-save-note" id="subtitle-profile-status">စာတန်းပုံစံကို အကောင့်အလိုက် သိမ်းဆည်းထားသည်။</p>
+          </div>
         </div>
 
         <div class="card" id="job-card">
@@ -409,6 +418,7 @@
               <a class="btn small ghost hidden" id="btn-srt" download>SRT</a>
               <a class="btn small ghost hidden" id="btn-ass" download>ASS</a>
               <a class="btn small ghost hidden" id="btn-mp3" download>Narration MP3</a>
+              <button class="btn small primary" id="btn-create-ai-thumb">✨ AI Thumbnail</button>
             </div>
           </div>
         </div>
@@ -460,38 +470,48 @@
       <div class="card">
         <div class="card-head">
           <div class="head-text">
-            <h3>🖼️ Viral Thumbnail Generator</h3>
-            <p class="sub">ဗီဒီယိုမှ ဖရိမ်တစ်ခုကို ဖမ်းယူပြီး Hook စာသား ထည့်ပေးသည်</p>
+            <h3>🖼️ AI Thumbnail Designer</h3>
+            <p class="sub">AI သည် video အပြည့်ကို စစ်ပြီး အကောင်းဆုံး frame နှင့် high-CTR hook ကို ရွေးပေးမည်</p>
           </div>
         </div>
         <div class="dropzone compact" id="thumb-dropzone">
-          <div class="dz-icon">🖼️</div>
-          <div class="dz-title">ဗီဒီယိုဖိုင် ဆွဲထည့်ပါ / နှိပ်၍ ရွေးပါ</div>
-          <div class="dz-hint">မတင်ပါက Studio တွင် တင်ထားသော ဗီဒီယိုကို အသုံးပြုပါမည်</div>
+          <div class="dz-icon">🎞️</div>
+          <div class="dz-title">Thumbnail လုပ်မည့် video ကို ရွေးပါ</div>
+          <div class="dz-hint" id="thumb-source-note">အခု Studio မှ ထွက်လာသော video ကို ဦးစားပေးမည်။ မတင်ထားပါက Studio source ကို သုံးပါမည်။</div>
           <input type="file" id="thumb-file" accept="video/*" class="hidden-input">
         </div>
+        <label class="field"><span>Thumbnail ဖော်မတ်</span>
+          <select id="thumb-aspect">
+            <option value="16:9" selected>YouTube 16:9 — 1280×720</option>
+            <option value="9:16">Shorts / Reels 9:16</option>
+            <option value="1:1">Square 1:1</option>
+          </select>
+        </label>
         <div class="row c2">
-          <label class="field"><span>ဖမ်းယူမည့် စက္ကန့်</span>
+          <label class="field"><span>ဖမ်းယူမည့် စက္ကန့် (AI က အကြံပြုမည်)</span>
             <input type="number" id="thumb-sec" value="2.5" step="0.5" min="0"></label>
-          <label class="field"><span>စတိုင်</span>
-            <select id="thumb-style"><option value="bold">Bold (Yellow/Cyan)</option></select></label>
+          <label class="field"><span>ဒီဇိုင်းစတိုင်</span>
+            <select id="thumb-style"><option value="bold">Bold · High contrast</option></select></label>
         </div>
-        <label class="field"><span>အပေါ် Hook စာသား</span>
+        <label class="field"><span>ခေါင်းစဉ် (ပြင်နိုင်သည်)</span>
           <input type="text" id="thumb-h1" value="စိတ်ဝင်စားဖွယ်ရာ"></label>
-        <label class="field"><span>အောက် Hook စာသား</span>
+        <label class="field"><span>အောက်စာ (Optional)</span>
           <input type="text" id="thumb-h2" value="ဇာတ်ကွက်များ"></label>
-        <button class="btn primary block" id="btn-thumb">✨ Thumbnail ဖန်တီးမည်</button>
+        <div class="thumb-status hidden" id="thumb-status" aria-live="polite"></div>
+        <button class="btn primary block" id="btn-thumb-ai">✨ AI ကြည့်ပြီး Thumbnail အလိုအလျောက် ထုတ်မည်</button>
+        <button class="btn ghost block" id="btn-thumb" style="margin-top:8px">✏️ ကိုယ်တိုင် ပြင်ထားသည့် ပုံစံ ထုတ်မည်</button>
       </div>
       <div class="card">
         <div class="card-head">
           <div class="head-text">
             <h3>Preview</h3>
-            <p class="sub">JPG အဖြစ် ဒေါင်းလုဒ် လုပ်နိုင်သည်</p>
+            <p class="sub" id="thumb-result-note">AI က video ထဲက အကောင်းဆုံး frame ကို ရွေးပြီး 1280×720 thumbnail ပြုလုပ်မည်</p>
           </div>
         </div>
         <div id="thumb-empty" class="empty">Thumbnail ဖန်တီးပြီးပါက ဒီနေရာတွင် ပေါ်လာပါမည်။</div>
         <div id="thumb-result" class="hidden" style="text-align:center">
-          <img id="thumb-img" style="width:min(420px,92%);border-radius:14px;border:1px solid var(--line)" alt="thumbnail">
+          <img id="thumb-img" class="thumb-preview-image" alt="AI-designed thumbnail">
+          <p class="help" id="thumb-rationale"></p>
           <div class="btn-row" style="justify-content:center;margin-top:12px">
             <a class="btn success small" id="thumb-dl" download="thumbnail.jpg">📥 ဒေါင်းလုဒ်</a>
           </div>

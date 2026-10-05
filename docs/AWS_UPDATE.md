@@ -1,14 +1,13 @@
-# AWS ပေါ်မှာ Update တင်နည်း (Runbook) — v4.3
+# AWS ပေါ်မှာ Update တင်နည်း (Runbook) — v4.4.0
 
 ## 0. အခု အခြေအနေ
 
-**v4.2 = Phase 2 (အကောင့်စနစ် + database လုံခြုံရေး + user အများသုံး)** ပြီးစီးပါပြီ။
+**v4.4.0 Studio refresh** တွင် Recap/Dubbing workflow, per-account caption controls, AI thumbnail design နှင့် portrait proxy fix ပါဝင်ပါသည်။
 အသေးစိတ် + သင် ကိုယ်တိုင်လုပ်ရမည့် အဆင့်များ → **[PHASE2_AUTH.md](PHASE2_AUTH.md)**
 
 ```
-origin/arena/01a105ed-recap-studio-mm   ← v4.3 (အသစ်ဆုံး — အကောင့်စနစ် + WYSIWYG preview)
-origin/arena/01a1027a-recap-studio-mm   ← v4.1
-origin/main                             ← ဟောင်း (v4.0)
+origin/arena/01a10a80-recap-studio-mm   ← v4.4.0 Studio refresh (ဤ update branch)
+origin/main                             ← merge လုပ်ပြီးနောက် stable deployment branch
 ```
 
 > 🔐 **v4.2 သို့ တက်လျှင် အပို ၂ ဆင့် လိုသည်** — (၁) `.env` ထဲ `RECAP_SECRET_KEY`
@@ -16,7 +15,7 @@ origin/main                             ← ဟောင်း (v4.0)
 > အကောင့် မဖန်တီးမချင်း site သည် ယခင်အတိုင်းပင် (access key / ဖွင့်ထား) ဖြစ်နေမည်။
 
 > ⚠️ `origin/main` ကို merge လုပ်ပြီးသားမဟုတ်သေးပါ — ဒါကြောင့် **install script က branch ကို
-> တိုက်ရိုက် ဆွဲချသည်** (`RECAP_BRANCH` default = `arena/01a105ed-recap-studio-mm`)။
+> တိုက်ရိုက် ဆွဲချသည်** (`RECAP_BRANCH` default = `arena/01a10a80-recap-studio-mm`)။
 > အောက်ပါ command များကို အပြောင်းအလဲ မလိုဘဲ တိုက်ရိုက် run နိုင်သည်။
 
 ### ဘယ်လမ်းကို ရွေးမလဲ
@@ -38,9 +37,9 @@ origin/main                             ← ဟောင်း (v4.0)
 ```bash
 # 1) server terminal (Instance Connect / SSH) ထဲ ဝင်ပြီး — code အသစ် တင်ပါ
 cd /tmp
-curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm
+curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10a80-recap-studio-mm
 rm -rf recap_studio_mm-arena-* && tar xzf recap.tgz
-sudo bash /tmp/recap_studio_mm-arena-01a105ed-recap-studio-mm/deploy/ec2_install.sh
+sudo RECAP_BRANCH=arena/01a10a80-recap-studio-mm bash /tmp/recap_studio_mm-arena-01a10a80-recap-studio-mm/deploy/ec2_install.sh
 
 # 2) ⭐ admin အကောင့် — installer က အလိုအလျောက် ဖန်တီးပြီး password ကို ပြပါမည်
 #    (အကောင့် မရှိသေးမှသာ)။ ကိုယ်တိုင် ထပ်ဖန်တီးလိုလျှင် —
@@ -49,7 +48,7 @@ ua create myname --admin --random
 
 # 3) restart + စစ်ဆေး
 sudo systemctl restart recap-studio
-curl -s http://localhost/healthz      # "version":"4.3.0" ဖြစ်ရမည်
+curl -s http://localhost/healthz      # "version":"4.4.0" ဖြစ်ရမည်
 curl -s http://localhost/api/auth/me  # "mode":"users" ဖြစ်ရမည် ← login ပေါ်/မပေါ် ဒီမှာ သိသည်
 ua status                             # accounts : 1
 ```
@@ -62,9 +61,9 @@ Browser တွင် `http://<EC2-IP>` ဖွင့်ပြီး **Ctrl + Shif
 
 ### နည်းလမ်း A — PR ကို merge (အကြံပြု၊ အလွယ်ဆုံး)
 
-1. Arena session မှ ဖွင့်ထားသော PR (`arena/01a105ed-recap-studio-mm` → `main`) ကို ဖွင့်ပါ
+1. Arena session မှ ဖွင့်ထားသော PR (`arena/01a10a80-recap-studio-mm` → `main`) ကို ဖွင့်ပါ
 2. **Merge pull request** → **Confirm merge**
-3. ပြီးလျှင် `main` သည် v4.1 ဖြစ်သွားမည် — Auto-deploy pipeline ရှိပါက အလိုအလျောက် deploy စပါမည်
+3. ပြီးလျှင် `main` သည် v4.4.0 ဖြစ်သွားမည် — Auto-deploy pipeline ရှိပါက အလိုအလျောက် deploy စပါမည်
    (EC2 ဖြစ်ပါက §1b ကို `RECAP_BRANCH=main` ဖြင့် run နိုင်သည်)
 
 ### နည်းလမ်း B — merge မလုပ်ဘဲ branch ကို တိုက်ရိုက် deploy
@@ -72,19 +71,19 @@ Browser တွင် `http://<EC2-IP>` ဖွင့်ပြီး **Ctrl + Shif
 ```bash
 # EC2 ကဲ့သို့ server ပေါ်မှာ
 git fetch origin
-git checkout arena/01a105ed-recap-studio-mm     # ← fix ရှိသည့် branch
-git pull origin arena/01a105ed-recap-studio-mm
+git checkout arena/01a10a80-recap-studio-mm     # ← fix ရှိသည့် branch
+git pull origin arena/01a10a80-recap-studio-mm
 ```
 
 ECS/CodePipeline သုံးပါက source stage ၏ **branch name** ကို
-`arena/01a105ed-recap-studio-mm` သို့ ပြောင်းလိုက်ပါ။
+`arena/01a10a80-recap-studio-mm` သို့ ပြောင်းလိုက်ပါ။
 
 ### နည်းလမ်း C — git မသုံးဘဲ tarball ဖြင့်
 
 ```bash
 # laptop ပေါ်တွင်
 curl -L -o recap.tar.gz \
-  https://github.com/htinkyawzaw2017-maker/recap_studio_mm/archive/refs/heads/arena/01a105ed-recap-studio-mm.tar.gz
+  https://github.com/htinkyawzaw2017-maker/recap_studio_mm/archive/refs/heads/arena/01a10a80-recap-studio-mm.tar.gz
 
 # server ပေါ်တွင်
 scp recap.tar.gz ec2-user@YOUR_EC2:/tmp/
@@ -97,7 +96,7 @@ sudo mkdir -p /opt/recap && sudo tar xzf /tmp/recap.tar.gz -C /opt/recap --strip
 ## 1b. EC2 (Instance Connect / Docker မသုံး) ဖြစ်ပါက — command တစ်ကြောင်းတည်း
 
 ```bash
-cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm && tar xzf recap.tgz && sudo bash recap_studio_mm-*/deploy/ec2_install.sh
+cd /tmp && curl -fsSL -o recap.tgz https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10a80-recap-studio-mm && rm -rf recap_studio_mm-arena-* && tar xzf recap.tgz && sudo RECAP_BRANCH=arena/01a10a80-recap-studio-mm bash /tmp/recap_studio_mm-arena-01a10a80-recap-studio-mm/deploy/ec2_install.sh
 ```
 
 Script က code အသစ်ကို ရယူပြီး `/opt/recap-studio` ထဲ တပ်ဆင်၊ systemd service အဖြစ်
@@ -142,7 +141,7 @@ aws ecs wait services-stable --cluster YOUR_CLUSTER --services YOUR_SERVICE --re
 ```bash
 ssh ec2-user@YOUR_EC2
 cd /opt/recap                                  # repo ရှိသည့်နေရာ
-git fetch origin && git checkout arena/01a105ed-recap-studio-mm && git pull
+git fetch origin && git checkout arena/01a10a80-recap-studio-mm && git pull
 
 docker compose down
 docker compose up -d --build
@@ -153,7 +152,7 @@ docker compose logs -f --tail=50               # 'Recap Studio 4.0.0 starting' �
 
 ```bash
 ssh ec2-user@YOUR_EC2
-cd /opt/recap && git fetch origin && git checkout arena/01a105ed-recap-studio-mm && git pull
+cd /opt/recap && git fetch origin && git checkout arena/01a10a80-recap-studio-mm && git pull
 
 source .venv/bin/activate
 pip install -r requirements.txt                # ← ယခုမှ အလုပ်လုပ်ပါသည် (အရင် apt package များ ကြောင့် fail ဖြစ်ခဲ့သည်)

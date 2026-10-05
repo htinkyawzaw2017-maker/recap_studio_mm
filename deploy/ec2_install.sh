@@ -23,7 +23,7 @@
 set -euo pipefail
 
 REPO="${RECAP_REPO:-htinkyawzaw2017-maker/recap_studio_mm}"
-BRANCH="${RECAP_BRANCH:-arena/01a105ed-recap-studio-mm}"
+BRANCH="${RECAP_BRANCH:-arena/01a10a80-recap-studio-mm}"
 APP_DIR="${RECAP_DIR:-/opt/recap-studio}"
 PORT="${RECAP_PORT:-80}"
 SERVICE="${RECAP_SERVICE:-recap-studio}"

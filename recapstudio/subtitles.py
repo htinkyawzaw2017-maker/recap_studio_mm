@@ -70,14 +70,17 @@ BG_STYLES = {
 
 def build_ass(dialogues: list[dict[str, Any]], duration: float, ass_path: str | Path,
               *, hook_line1: str = "", hook_line2: str = "",
-              font_size: int = 40, font_family: str = MM_FONT_FAMILY,
+              font_size: int = 42, font_family: str = MM_FONT_FAMILY,
               v_margin: int = 280, hex_color: str = "#00F2FE",
               bg_style: str = "Solid Box", play_res: tuple[int, int] = (720, 1280),
               hook_seconds: float = 0.0, subtitle_alpha: int = 0,
-              stroke_width: float = 0.0, uppercase_hook: bool = False) -> Path:
+              stroke_width: float = 0.0, uppercase_hook: bool = False,
+              width_percent: int = 90) -> Path:
     """Write an ASS file. ``hook_seconds=0`` means "show for the whole video"."""
     ass_path = Path(ass_path)
     width, height = play_res
+    width_percent = max(60, min(96, int(width_percent)))
+    side_margin = int(round(width * (100 - width_percent) / 200.0))
     primary = hex_to_ass(hex_color)
     border, outline, shadow, back = BG_STYLES.get(bg_style, BG_STYLES["Solid Box"])
     if stroke_width > 0:
@@ -101,7 +104,7 @@ def build_ass(dialogues: list[dict[str, Any]], duration: float, ass_path: str | 
         "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
         f"Style: SubtitleStyle,{font_family},{max(12, int(font_size))},{primary_with_alpha},"
         f"&H000000FF,&H00101010,{back},-1,0,0,0,100,100,0,0,{border},{outline},{shadow},"
-        f"2,{int(width * 0.05)},{int(width * 0.05)},{int(v_margin)},1",
+        f"2,{side_margin},{side_margin},{int(v_margin)},1",
         f"Style: HookStyle,{font_family},{max(16, int(width * 0.058))},&H0000FFFF,&H000000FF,"
         f"&H00202020,&HA0000000,-1,0,0,0,100,100,0,0,1,4.0,2,8,{int(width * 0.04)},"
         f"{int(width * 0.04)},{int(height * 0.06)},1",

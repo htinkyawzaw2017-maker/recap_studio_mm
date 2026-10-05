@@ -751,3 +751,85 @@ input[type=file].hidden-input { display: none; }
   font-size: .92em;
   white-space: nowrap;
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   Studio redesign — controls stay with the live video they affect
+   ══════════════════════════════════════════════════════════════════════ */
+#style-card .style-options { display: grid; gap: 6px; }
+.subtitle-tools {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid rgba(34, 211, 238, .24);
+  border-radius: 15px;
+  background: linear-gradient(145deg, rgba(8, 23, 39, .88), rgba(15, 22, 41, .84));
+}
+.subtitle-tools-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.subtitle-tools-head > div { min-width: 0; }
+.subtitle-tools-head > div > b { display: block; color: #dffaff; font-size: 15px; }
+.subtitle-tools-head .sub { display: block; margin-top: 2px; }
+.compact-check { margin: 0; white-space: nowrap; }
+.compact-check span { font-size: 12px; }
+.range-field { margin-bottom: 8px !important; }
+.range-field input[type="range"] { accent-color: var(--cyan); }
+.subtitle-tools .row { gap: 14px; }
+.subtitle-tools .field > span { color: var(--text-dim); }
+.subtitle-tools .profile-save-note {
+  margin: 9px 0 0;
+  color: #81d8c2;
+  font-size: 11.5px;
+}
+.subtitle-tools .help { margin: 8px 0 0; }
+#preview-meta { margin-bottom: 4px; }
+#position-help { overflow-wrap: anywhere; }
+#fill-mode-help { padding: 7px 10px; border-left: 2px solid var(--violet); background: rgba(167, 139, 250, .055); border-radius: 0 8px 8px 0; }
+#btn-start[data-fill-mode="dialogue"] { background: linear-gradient(135deg, #8b5cf6, #d946ef); }
+.thumb-preview-image {
+  display: block;
+  width: min(100%, 660px);
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  margin: 0 auto;
+  border-radius: 15px;
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 18px 55px rgba(0, 0, 0, .42);
+  background: #03050c;
+}
+.thumb-status {
+  padding: 10px 12px;
+  margin: 0 0 12px;
+  border-radius: 11px;
+  border: 1px solid rgba(34, 211, 238, .28);
+  color: #a8efff;
+  background: rgba(34, 211, 238, .07);
+  font-size: 12.5px;
+}
+#thumb-rationale { max-width: 660px; margin: 12px auto 0; text-align: left; }
+#thumb-result-note { max-width: 720px; }
+#btn-create-ai-thumb { white-space: nowrap; }
+
+@media (max-width: 1200px) {
+  /* The video, caption preview and every caption adjustment now travel as
+     one card in the stacked layout. */
+  #preview-card { order: 2; }
+  #setup-card { order: 3; }
+  #style-card { order: 4; }
+}
+@media (max-width: 620px) {
+  .subtitle-tools { padding: 13px 12px; margin-top: 13px; }
+  .subtitle-tools-head { align-items: flex-start; flex-wrap: wrap; }
+  .subtitle-tools .row.c2 { grid-template-columns: 1fr; }
+  .subtitle-tools .field { margin-bottom: 9px; }
+  .thumb-preview-image { width: 100%; border-radius: 10px; }
+}
+.thumb-status[data-kind="error"] {
+  border-color: rgba(251, 113, 133, .4);
+  color: #ffd0d8;
+  background: rgba(251, 113, 133, .08);
+}

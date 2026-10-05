@@ -270,6 +270,9 @@ def delete_user(user_id: str) -> None:
     db.init()
     if _is_last_admin(user_id):
         raise ValueError("နောက်ဆုံး admin အကောင့်ကို မဖျက်နိုင်ပါ")
+    # Preference rows intentionally support the non-account `shared` scope,
+    # so clean them explicitly rather than relying on a foreign-key cascade.
+    db.execute("DELETE FROM user_preferences WHERE scope = ?", (user_id,))
     db.execute("DELETE FROM users WHERE id = ?", (user_id,))
 
 

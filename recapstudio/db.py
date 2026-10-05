@@ -43,7 +43,7 @@ _init_lock = threading.RLock()
 _initialised: set[str] = set()
 
 #: bumped whenever MIGRATIONS grows
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 MIGRATIONS: list[tuple[int, str]] = [
@@ -129,6 +129,13 @@ MIGRATIONS: list[tuple[int, str]] = [
             key        TEXT PRIMARY KEY,
             value      TEXT NOT NULL,
             updated_at REAL NOT NULL
+        );
+    """),
+    (4, """
+        CREATE TABLE IF NOT EXISTS user_preferences (
+            scope              TEXT PRIMARY KEY,
+            preferences_json   TEXT NOT NULL DEFAULT '{}',
+            updated_at         REAL NOT NULL
         );
     """),
 ]
@@ -264,7 +271,7 @@ def stats() -> dict[str, Any]:
     except OSError:
         out["size_bytes"] = 0
         out["mode"] = "?"
-    for table in ("users", "sessions", "audit_log", "job_index"):
+    for table in ("users", "sessions", "audit_log", "job_index", "user_preferences"):
         try:
             row = query_one(f"SELECT COUNT(*) AS n FROM {table}")  # noqa: S608 - fixed names
             out[f"{table}_count"] = int(row["n"]) if row else 0
