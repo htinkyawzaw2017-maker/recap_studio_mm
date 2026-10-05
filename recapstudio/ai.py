@@ -32,7 +32,7 @@ from typing import Any, Callable, Iterable, Optional
 
 from . import config
 from .keys import KeyRing, key_ring as default_key_ring
-from .media import FFmpegFailure, run_ffmpeg
+from .media import FFmpegFailure, run_ffmpeg, with_even_dimensions
 from .util import CancelledError, estimate_speech_seconds, get_logger
 
 log = get_logger("recap.ai")
@@ -599,6 +599,20 @@ class ProxyBuildError(RuntimeError):
         return self.summary
 
 
+#: Video filter for the Gemini proxy.
+#:
+#: v4.3.5 — ``scale=480:-2`` alone rounds the height to an even number, but
+#: adding ``force_original_aspect_ratio=decrease`` cancels that rounding and a
+#: 720x1280 source came out as **480x853**. libx264 then aborted the whole
+#: encode with "height not divisible by 2 (480x853)", which surfaced in the UI
+#: as a failure during rendering even though the real cause was this proxy
+#: step. :func:`media.with_even_dimensions` appends the guard that makes odd
+#: frames impossible.
+PROXY_VF = with_even_dimensions(
+    "scale=480:-2:force_original_aspect_ratio=decrease,fps=1"
+)
+
+
 def build_proxy(video_path: str | Path, start: float, end: float, out_path: str | Path,
                 progress: ProgressFn = None) -> Path:
     """1 fps / 480p / mono 16 kHz proxy - the exact sampling Gemini uses.
@@ -616,7 +630,7 @@ def build_proxy(video_path: str | Path, start: float, end: float, out_path: str 
         run_ffmpeg([
             "-y",
             "-ss", f"{start:.3f}", "-i", str(video_path), "-t", f"{length:.3f}",
-            "-vf", "scale=480:-2:force_original_aspect_ratio=decrease,fps=1",
+            "-vf", PROXY_VF,
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "48k", "-ac", "1", "-ar", "16000",
             "-movflags", "+faststart",
@@ -630,32 +644,77 @@ def build_proxy(video_path: str | Path, start: float, end: float, out_path: str 
 
 
 # ── prompts ──────────────────────────────────────────────────────────────
+#
+# v4.3.5 — these used to all say "dub every spoken line faithfully", which is
+# a *dubbing* instruction. In recap mode that contradicted the recap block
+# below, so whichever genre the user picked the model was pushed towards the
+# same dubbing-style output ("ဘာရွေးရွေး တူနေတယ်"). They now describe the
+# GENRE only; what to *do* with it comes from FILL_MODE_PROMPTS +
+# COVERAGE_RULES.
 MODE_PROMPTS = {
-    "auto": "Judge the genre yourself, then dub every spoken line faithfully.",
-    "movie": "This is a film / animation / drama. Dub every character line and keep the story flowing.",
-    "experiment": "This is a science, review or experiment video. Dub the narrator and on-screen speech.",
-    "craft": "This is a DIY / craft / cooking video. Dub the narrator and any spoken instructions.",
-    "news": "This is a news / documentary style video. Dub every spoken sentence faithfully.",
+    "auto": "Judge the genre yourself from what you see and hear.",
+    "movie": "This is a film / animation / drama: characters, a plot, and scenes that change.",
+    "experiment": "This is a science, review or experiment video: a narrator plus on-screen speech.",
+    "craft": "This is a DIY / craft / cooking video: a narrator plus spoken instructions.",
+    "news": "This is a news / documentary style video: continuous spoken sentences.",
 }
 
 FILL_MODE_PROMPTS = {
     # ── whole-video recap: the narrator never stops talking ──────────────
     "continuous": (
-        "MODE = WHOLE-VIDEO RECAP. The recap must be narrated CONTINUOUSLY from the first second "
-        "to the last second, like a Burmese movie-recap YouTuber. Wherever nobody is speaking on "
-        "screen, write short connective narration that keeps the story moving (describe what is "
-        "visibly happening and what it leads to). Re-tell the story in your own words — you do NOT "
-        "have to translate the dialogue literally. Never invent facts."
+        "MODE = WHOLE-VIDEO RECAP. You are a professional movie-recap narrator. WATCH THE PICTURE: "
+        "follow the movement and action on screen — who moves, what they do, what changes in the "
+        "scene, what it leads to — and narrate it out loud in your own words, continuously from the "
+        "first second to the last, the way a popular Burmese recap channel does. Wherever nobody is "
+        "speaking on screen, write short connective narration describing the action that is visibly "
+        "happening. Re-tell the story in your own words — you do NOT have to translate the dialogue "
+        "literally. Never invent facts."
     ),
     # ── dialogue dubbing: a precise lip-sync-ish track, nothing invented ──
     "dialogue": (
-        "MODE = DIALOGUE DUBBING. Output a line ONLY where a human actually speaks on screen or "
-        "off screen. Never describe the picture, never add narration, never summarise, never fill "
+        "MODE = DIALOGUE DUBBING. You are a professional voice actor re-voicing this video in "
+        "another language. Output a line ONLY where a human actually speaks on screen or off "
+        "screen. Never describe the picture, never add narration, never summarise, never fill "
         "silence — silence stays silent. `start` and `end` must match the real speech boundaries "
         "to within 0.3 seconds (start exactly when the mouth/voice starts, end when it stops), "
-        "because the dub is laid over those moments. One entry per spoken sentence; split long "
-        "speeches into separate entries at their natural pauses. Keep the speaker's meaning and "
-        "tone faithfully — this is dubbing, not a summary."
+        "because the dub is laid directly over those moments: a boundary that is even half a "
+        "second out makes the dub feel late, early or rushed. One entry per spoken sentence; split "
+        "long speeches into separate entries at their natural pauses so each line fits its own "
+        "window. Speak the way a person in that scene would really talk — natural, conversational, "
+        "matching the speaker's tone and emotion. Keep the speaker's meaning faithfully — this is "
+        "dubbing, not a summary."
+    ),
+}
+
+#: Rule 2 of the chunk prompt.
+#:
+#: v4.3.5 — this used to be hard-coded to "cover the whole clip, no silence
+#: longer than 4 seconds", and it was marked THE MOST IMPORTANT RULE. In
+#: dialogue/dubbing mode that directly contradicted the dubbing block above,
+#: so the model kept filling silence and dubbing came out sounding exactly
+#: like a recap. The rule is now chosen by ``fill_mode``.
+COVERAGE_RULES = {
+    "continuous": (
+        "2. COVER THE WHOLE CLIP — THIS IS THE MOST IMPORTANT RULE:\n"
+        "   * The FIRST entry must start at or before {first_by:.2f}s.\n"
+        "   * The LAST entry must start after {last_after:.2f}s and end at\n"
+        "     {chunk_end:.2f}s (or later) — never finish the clip early.\n"
+        "   * No silent window longer than 4 seconds anywhere between {chunk_start:.2f}s and\n"
+        "     {chunk_end:.2f}s: where nothing is spoken, write short narration describing the\n"
+        "     action that is visibly happening so the voice-over never stops.\n"
+        "   * Do not stop early, do not summarise the ending, do not skip the middle."
+    ),
+    "dialogue": (
+        "2. EXACT SPEECH BOUNDARIES — THIS IS THE MOST IMPORTANT RULE:\n"
+        "   * Write an entry ONLY where a voice is actually audible in this clip.\n"
+        "   * DO NOT cover the whole clip and DO NOT fill silence. A silent stretch of this\n"
+        "     clip must produce NO entry at all. It is correct — and expected — for this clip\n"
+        "     to yield few entries, or none, when nobody speaks.\n"
+        "   * `start` = the exact second the voice begins, `end` = the exact second it stops\n"
+        "     (accurate to 0.3 s). Never pad a line to cover a gap, and never let one entry\n"
+        "     span across a silent gap: split at the natural pause instead.\n"
+        "   * The first entry may start anywhere in the clip, and the last may end well before\n"
+        "     {chunk_end:.2f}s — do not stretch or invent lines to reach the end."
     ),
 }
 
@@ -684,7 +743,15 @@ def _chunk_prompt(chunk_start: float, chunk_end: float, target_language: str,
     cps = chars_per_second(target_language)
     lang_word = "Burmese" if target_language == "my" else "English"
     four_sec, eight_sec = budget_chars(4.0, target_language), budget_chars(8.0, target_language)
-    return f"""You are a professional film dubbing director and Myanmar recap script writer.
+    fill = fill_mode if fill_mode in COVERAGE_RULES else "continuous"
+    coverage_rule = COVERAGE_RULES[fill].format(
+        chunk_start=chunk_start, chunk_end=chunk_end,
+        first_by=chunk_start + 4, last_after=max(chunk_start, chunk_end - 8),
+    )
+    persona = ("You are a professional movie-recap narrator and Myanmar script writer."
+               if fill == "continuous" else
+               "You are a professional voice actor and dubbing director working in Myanmar.")
+    return f"""{persona}
 
 VIDEO SEGMENT: this clip is ONLY a part of a longer video. The clip starts at {chunk_start:.2f}s and
 ends at {chunk_end:.2f}s (total video length = {duration:.2f}s).
@@ -696,14 +763,7 @@ ends at {chunk_end:.2f}s (total video length = {duration:.2f}s).
 MANDATORY RULES
 1. TIMESTAMPS ARE ABSOLUTE: use seconds counted from the START OF THE FULL VIDEO.
    The first second of this clip is {chunk_start:.2f}s (NOT 0). The last is {chunk_end:.2f}s.
-2. COVER THE WHOLE CLIP — THIS IS THE MOST IMPORTANT RULE:
-   * The FIRST entry must start at or before {chunk_start + 4:.2f}s.
-   * The LAST entry must start after {max(chunk_start, chunk_end - 8):.2f}s and end at
-     {chunk_end:.2f}s (or later) — never finish the clip early.
-   * No silent window longer than 4 seconds anywhere between {chunk_start:.2f}s and
-     {chunk_end:.2f}s: where nothing is spoken, write short narration describing what is
-     visibly happening so the voice-over never stops.
-   * Do not stop early, do not summarise the ending, do not skip the middle.
+{coverage_rule}
 3. LENGTH BUDGET (hard rule — breaking it makes the voice-over race and sound robotic):
    a human narrator speaks about {cps:.0f} {lang_word} characters per second. A window of W
    seconds therefore allows at most {cps:.0f} x W characters INCLUDING spaces. A 4 second window

@@ -30,6 +30,41 @@ FFMPEG = os.getenv("FFMPEG_BINARY", "ffmpeg")
 FFPROBE = os.getenv("FFPROBE_BINARY", "ffprobe")
 ProgressFn = Optional[Callable[[float, str], None]]
 
+# ── even frame dimensions (v4.3.5) ────────────────────────────────────────
+#
+# libx264 + ``-pix_fmt yuv420p`` refuses odd frame sizes and dies with::
+#
+#     [libx264 @ 0x...] height not divisible by 2 (480x853)
+#     Error while opening encoder - maybe incorrect parameters such as
+#     bit_rate, rate, width or height.
+#
+# ``scale=W:-2`` normally rounds the computed height to an even number, but
+# as soon as ``force_original_aspect_ratio`` is added that rounding is
+# defeated: a 720x1280 clip scaled to 480 wide yields 480x853 and the whole
+# job dies at the proxy/analysis stage — which the UI showed as a failure in
+# the *rendering* step. Short-splitter parts handed to the Studio hit this
+# constantly because YouTube/TikTok sources are rarely exactly 16:9.
+#
+# ``EVEN_DIMENSION_GUARD`` is appended to every filter chain that feeds
+# libx264, so no source aspect ratio or SAR can produce an odd frame again.
+EVEN_DIMENSION_GUARD = "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+
+
+def with_even_dimensions(vf: str | None) -> str:
+    """Return ``vf`` with a trailing guard that forces even width/height.
+
+    Safe to call with ``None`` / ``"null"`` / an empty string — the guard
+    alone is a valid filter chain, and it also protects the "no scaling
+    requested" path where an odd-sized source would otherwise reach libx264
+    untouched.
+    """
+    chain = (vf or "").strip().strip(",")
+    if not chain or chain == "null":
+        return EVEN_DIMENSION_GUARD
+    if EVEN_DIMENSION_GUARD in chain:
+        return chain
+    return f"{chain},{EVEN_DIMENSION_GUARD}"
+
 _TIME_RE = re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)")
 _SPEED_RE = re.compile(r"speed=\s*([\d.]+)x")
 _OUT_TIME_RE = re.compile(r"out_time_ms=(\d+)")

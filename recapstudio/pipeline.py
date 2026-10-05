@@ -21,7 +21,8 @@ from .jobs import JobCancelled, JobStore, StageProgress
 from .keys import key_ring
 from .media import process_registry
 from .media import (InputValidationError, explain_exception, get_media_duration,
-                    get_video_info, preflight_video, run_ffmpeg, summarize_ffmpeg_error)
+                    get_video_info, preflight_video, run_ffmpeg, summarize_ffmpeg_error,
+                    with_even_dimensions)
 from .render import export_srt, render_master
 from .subtitles import build_ass
 from .tts import (VOICE_CATALOG, fit_lines_to_windows, master_audio, tts_engine)
@@ -827,6 +828,10 @@ class RecapPipeline:
                 vf = "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2"
             else:
                 vf = "null"
+            # v4.3.5 — an odd-sized source (phone uploads are often 1080x1921)
+            # reaches libx264 untouched on the "no reframe" path and kills the
+            # split with "height not divisible by 2".
+            vf = with_even_dimensions(vf)
             run_ffmpeg([
                 "-y", "-ss", f"{start:.3f}", "-i", video_path, "-t", f"{length:.3f}",
                 "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",

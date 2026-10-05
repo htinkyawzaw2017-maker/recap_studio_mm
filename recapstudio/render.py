@@ -21,7 +21,7 @@ from typing import Callable, Optional
 from . import config
 from . import media
 from .fonts import FONTS_DIR
-from .media import get_video_info, run_ffmpeg
+from .media import EVEN_DIMENSION_GUARD, get_video_info, run_ffmpeg
 from .subtitles import ass_filter_arg
 from .util import CancelledError, get_logger
 
@@ -87,6 +87,14 @@ def _video_filter_chain(reframe: str, width: int, height: int,
         parts.append(f"[{logo_input_index}:v]scale={logo_w}:-1:flags=bicubic,format=rgba[logo];"
                      f"[{current}][logo]overlay={x_expr}:{y_expr}:format=auto[{nxt}]")
         current, label_index = nxt, label_index + 1
+
+    # v4.3.5 — final safety net. ``scale=W:H:force_original_aspect_ratio=decrease``
+    # can emit an odd height for some source aspect ratios / SAR values, and
+    # libx264 + yuv420p aborts the whole render with "height not divisible by 2".
+    # Forcing even dimensions here makes that impossible whatever the chain did.
+    nxt = f"v{label_index}"
+    parts.append(f"[{current}]{EVEN_DIMENSION_GUARD}[{nxt}]")
+    current = nxt
     return ";".join(parts), current
 
 
