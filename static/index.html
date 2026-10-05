@@ -373,6 +373,30 @@
             <span class="chip muted">ဗီဒီယို မတင်ရသေးပါ</span>
           </div>
           <p class="help" id="position-help">Subtitle အနိမ့်: <b id="lbl-sub-pos">22</b>% · Logo: <b id="lbl-logo-pos">မထည့်ရသေးပါ</b> · Preview စကေး: <b id="lbl-preview-scale">—</b></p>
+
+          <!-- v4.3.5 — text-box controls live HERE, directly under the video.
+               They used to exist only in the step-3 card on the other side of
+               the page, so adjusting the caption meant scrolling back and forth
+               between the video and the subtitle settings ("subtitles tab နဲ့
+               ဝေးနေတယ်"). Everything is two-way synced with that card. -->
+          <div class="subbox" id="subbox">
+            <div class="subbox-head">
+              <b>📝 စာတန်း နေရာချခြင်း</b>
+              <span class="chip muted" id="subbox-saved">သိမ်းပြီး</span>
+            </div>
+            <label class="field"><span>အနိမ့် / အမြင့် — <b id="lbl-sub-pos-v">22</b>%</span>
+              <input type="range" id="sub-pos" min="3" max="92" step="1" value="22">
+            </label>
+            <label class="field"><span>စာလုံးအရွယ် — <b id="lbl-font-v">42</b>px</span>
+              <input type="range" id="sub-font-quick" min="24" max="72" step="1" value="42">
+            </label>
+            <div class="row c3">
+              <button class="btn ghost sm" type="button" data-subpos="22">အလယ်</button>
+              <button class="btn ghost sm" type="button" data-subpos="12">အောက်နီး</button>
+              <button class="btn ghost sm" type="button" data-subpos="34">အပေါ်နီး</button>
+            </div>
+            <p class="help" id="sub-pos-hint">Preview ပေါ်တွင် စာတန်းကို <b>ဆွဲ၍</b>လည်း နေရာချနိုင်သည် — ဤ slider သည် အတိအကျ ချိန်ရန် ဖြစ်သည်။ ချိန်လိုက်သည်နှင့် သင့် account ထဲ <b>အလိုအလျောက် သိမ်း</b>ပါမည်။</p>
+          </div>
         </div>
 
         <div class="card" id="job-card">
@@ -474,7 +498,7 @@
         <div class="card-head">
           <div class="head-text">
             <h3>🍌 AI Viral Thumbnail Studio</h3>
-            <p class="sub">Studio မှာ <b>ပြီးသွားသော ဗီဒီယို</b>ကို nano-banana AI ဖြင့် thumbnail အမျိုးမျိုး ထုတ်ပေးသည်</p>
+            <p class="sub">Studio မှာ <b>ပြီးသွားသော ဗီဒီယို</b>ကို professional thumbnail designer role ဖြင့် ဖရိမ်ကို ကြည့်ပြီး high-CTR thumbnail အမျိုးမျိုး ထုတ်ပေးသည်</p>
           </div>
           <span class="ai-pill" id="thumb-ai-pill" title="nano-banana (Gemini 2.5 Flash Image)">AI စစ်ဆေးနေသည်…</span>
         </div>

@@ -541,6 +541,94 @@ def admin_list_users(principal: Principal = Depends(admin_guard)) -> dict:
             }}
 
 
+# ── per-user UI preferences (v4.3.5) ─────────────────────────────────────
+#
+# The Studio used to keep every control in localStorage, so a user who opened
+# the app on another device (or cleared the browser) lost their subtitle size,
+# text-box position, voice and mode. These endpoints store them against the
+# account in SQLite (``db.user_settings``) so they follow the user.
+#
+# The whitelist matters: this is arbitrary JSON coming from the browser and it
+# is written straight into the DB, so unknown keys are dropped instead of
+# letting the table grow without bound.
+USER_SETTING_KEYS: dict[str, type] = {
+    "enable_subs": bool,
+    "sub_font_size": int,
+    "sub_v_pos_percent": int,
+    "sub_h_pos_percent": int,
+    "sub_color_hex": str,
+    "sub_bg_style": str,
+    "sub_alpha": int,
+    "hook_uppercase": bool,
+    "hook_seconds": float,
+    "mode": str,
+    "fill_mode": str,
+    "aspect": str,
+    "quality": str,
+    "reframe_mode": str,
+    "voice": str,
+    "lang": str,
+    "model": str,
+}
+
+#: hard bounds so a hand-crafted request cannot store nonsense that would
+#: later break build_ass / render (e.g. a 4000% subtitle position)
+USER_SETTING_BOUNDS: dict[str, tuple[float, float]] = {
+    "sub_font_size": (12, 120),
+    "sub_v_pos_percent": (0, 95),
+    "sub_h_pos_percent": (0, 100),
+    "sub_alpha": (0, 255),
+    "hook_seconds": (0.0, 60.0),
+}
+
+
+def _coerce_user_setting(key: str, value: Any) -> Any:
+    """Validate/coerce one preference. Raises ValueError when unusable."""
+    kind = USER_SETTING_KEYS.get(key)
+    if kind is None:
+        raise ValueError(f"မသိသော setting: {key}")
+    if kind is bool:
+        return bool(value)
+    if kind is int:
+        number = int(value)
+    elif kind is float:
+        number = float(value)
+    else:
+        text = str(value).strip()
+        if len(text) > 120:
+            raise ValueError(f"{key} သည် အလွန်ရှည်ပါသည်")
+        return text
+    low, high = USER_SETTING_BOUNDS.get(key, (0, 100))
+    if not low <= number <= high:
+        raise ValueError(f"{key} သည် {low:g}–{high:g} အတွင်းသာ ဖြစ်ရပါမည်")
+    return number
+
+
+@app.get("/api/me/settings")
+def get_my_settings(principal: Principal = Depends(guard)) -> dict:
+    return {"status": "ok", "settings": db.get_user_settings(_scope(principal)),
+            "keys": sorted(USER_SETTING_KEYS)}
+
+
+@app.post("/api/me/settings")
+def save_my_settings(payload: dict[str, Any],
+                     principal: Principal = Depends(guard)) -> dict:
+    """Merge the given preferences into the caller's stored settings."""
+    if not isinstance(payload, dict) or not payload:
+        raise HTTPException(status_code=400, detail="သိမ်းမည့် setting မပါပါ")
+    clean: dict[str, Any] = {}
+    errors: list[str] = []
+    for key, value in payload.items():
+        try:
+            clean[key] = _coerce_user_setting(str(key), value)
+        except (ValueError, TypeError) as exc:
+            errors.append(str(exc))
+    if not clean:
+        raise HTTPException(status_code=400, detail="; ".join(errors) or "setting မမှန်ကန်ပါ")
+    stored = db.set_user_settings(_scope(principal), clean)
+    return {"status": "ok", "settings": stored, "skipped": errors}
+
+
 @app.post("/api/admin/users")
 def admin_create_user(payload: dict[str, Any], request: Request,
                       principal: Principal = Depends(admin_guard)) -> dict:

@@ -637,6 +637,111 @@
     state.subPosPercent = Math.max(3, Math.min(92, Math.round(percent)));
     $('overlay-sub').style.bottom = state.subPosPercent + '%';
     $('lbl-sub-pos').textContent = state.subPosPercent;
+    // v4.3.5 — keep the slider that sits under the preview and the old readout
+    // in sync, whichever one the user touched.
+    const slider = $('sub-pos');
+    if (slider && Number(slider.value) !== state.subPosPercent) {
+      slider.value = String(state.subPosPercent);
+    }
+    const label = $('lbl-sub-pos-v');
+    if (label) label.textContent = state.subPosPercent;
+    schedulePrefsSave();
+  }
+
+  // ── v4.3.5: server-side per-user preferences ────────────────────────────
+  // These controls lived in localStorage only, so another browser or device
+  // lost them. They are now stored against the account (SQLite user_settings
+  // via /api/me/settings); localStorage is just the offline cache.
+  let prefsTimer = null;
+  function schedulePrefsSave() {
+    if (prefsTimer) clearTimeout(prefsTimer);
+    prefsTimer = setTimeout(savePrefsToServer, 700);   // debounce slider drags
+  }
+
+  function collectPrefs() {
+    const p = { sub_v_pos_percent: state.subPosPercent };
+    const put = (key, el, num) => { if (el) p[key] = num ? Number(el.value) : el.value; };
+    put('sub_font_size', $('sub-font'), true);
+    put('sub_color_hex', $('sub-color'), false);
+    put('sub_bg_style', $('sub-bg'), false);
+    put('mode', $('mode'), false);
+    put('fill_mode', $('fill-mode'), false);
+    put('aspect', $('aspect'), false);
+    put('quality', $('quality'), false);
+    put('lang', $('lang'), false);
+    put('voice', $('voice'), false);
+    const subs = $('enable-subs');
+    if (subs) p.enable_subs = subs.checked;
+    return p;
+  }
+
+  async function savePrefsToServer() {
+    const chip = $('subbox-saved');
+    try {
+      if (chip) { chip.textContent = 'သိမ်းနေသည်…'; chip.classList.add('muted'); }
+      const prefs = collectPrefs();
+      LS.set('rs_prefs', JSON.stringify(prefs));
+      await api('/api/me/settings', { method: 'POST', body: prefs });
+      if (chip) { chip.textContent = 'သိမ်းပြီး'; chip.classList.remove('muted'); }
+    } catch (err) {
+      // never interrupt the user over a preference write — the value is in
+      // localStorage, and the next change retries.
+      if (chip) { chip.textContent = 'မသိမ်းနိုင်ပါ'; chip.classList.add('muted'); }
+    }
+  }
+
+  function applyPrefs(p) {
+    if (!p || typeof p !== 'object') return;
+    const apply = (id, key) => {
+      const el = $(id);
+      if (el && p[key] !== undefined && p[key] !== null && String(p[key]) !== '') el.value = p[key];
+    };
+    apply('sub-font', 'sub_font_size');
+    apply('sub-color', 'sub_color_hex');
+    apply('sub-bg', 'sub_bg_style');
+    apply('mode', 'mode'); apply('fill-mode', 'fill_mode');
+    apply('aspect', 'aspect'); apply('quality', 'quality');
+    apply('lang', 'lang'); apply('voice', 'voice');
+    if ($('enable-subs') && typeof p.enable_subs === 'boolean') $('enable-subs').checked = p.enable_subs;
+    if (typeof p.sub_v_pos_percent === 'number') state.subPosPercent = p.sub_v_pos_percent;
+    syncSubtitleUi();
+    syncFillModeHelp();
+    schedulePrefsSave();
+  }
+
+  async function loadPrefsFromServer() {
+    try {
+      const data = await api('/api/me/settings');
+      if (data && data.settings && Object.keys(data.settings).length) {
+        applyPrefs(data.settings);
+        return;
+      }
+    } catch (err) { /* not logged in / older server — fall back to the cache */ }
+    try {
+      const cached = LS.get('rs_prefs', '');
+      if (cached) applyPrefs(JSON.parse(cached));
+    } catch (err) { /* ignore a corrupt cache */ }
+  }
+
+  // One place that mirrors every subtitle control into the preview and both
+  // labels, so the step-3 card and the under-video slider can never disagree.
+  // The actual pixel maths lives in styleSubtitleOverlay() — do NOT duplicate
+  // it here (a hard-coded factor here broke "subtitle px = Fontsize × scale").
+  function syncSubtitleUi() {
+    const fontEl = $('sub-font');
+    const size = fontEl ? Number(fontEl.value) : 42;
+    const lblV = $('lbl-font-v'); if (lblV) lblV.textContent = size;
+    const quick = $('sub-font-quick');
+    if (quick && Number(quick.value) !== size) quick.value = String(size);
+    styleSubtitleOverlay();
+    const slider = $('sub-pos');
+    if (slider && Number(slider.value) !== state.subPosPercent) {
+      slider.value = String(state.subPosPercent);
+    }
+    const sub = $('overlay-sub');
+    if (sub) sub.style.bottom = state.subPosPercent + '%';
+    const readout = $('lbl-sub-pos'); if (readout) readout.textContent = state.subPosPercent;
+    const readoutV = $('lbl-sub-pos-v'); if (readoutV) readoutV.textContent = state.subPosPercent;
   }
 
   function setLogoPos(x, y) {
@@ -1737,7 +1842,28 @@
       $(id).addEventListener('change', () => { applyPreviewGeometry(); persistUiState(); }));
     $('model').addEventListener('change', () => { LS.set('rs_model', $('model').value); });
     ['sub-font', 'sub-color', 'sub-bg'].forEach((id) => {
-      $(id).addEventListener('input', () => { styleSubtitleOverlay(); persistUiState(); });
+      $(id).addEventListener('input', () => {
+        styleSubtitleOverlay(); syncSubtitleUi(); persistUiState(); schedulePrefsSave();
+      });
+    });
+
+    // v4.3.5 — the text-box controls that live under the preview
+    const posSlider = $('sub-pos');
+    if (posSlider) {
+      posSlider.addEventListener('input', () => setSubPos(Number(posSlider.value)));
+    }
+    const fontQuick = $('sub-font-quick');
+    if (fontQuick && $('sub-font')) {
+      fontQuick.addEventListener('input', () => {
+        $('sub-font').value = fontQuick.value;      // step-3 card stays in sync
+        styleSubtitleOverlay(); syncSubtitleUi(); persistUiState(); schedulePrefsSave();
+      });
+    }
+    document.querySelectorAll('[data-subpos]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        setSubPos(Number(btn.dataset.subpos));
+        persistUiState();
+      });
     });
     // keep the overlays pixel-accurate on rotate / resize / responsive reflow
     let geomRaf = 0;
@@ -2197,6 +2323,10 @@
     refreshSystem();
     restoreKeys();
     restoreVideos();
+    // v4.3.5 — pull this account's saved UI preferences (subtitle size,
+    // text-box position, mode, voice…) from the server. Falls back to the
+    // localStorage cache when the account has none yet.
+    loadPrefsFromServer();
 
     // 3) re-attach to whatever is already running
     const attached = await restoreActiveJob();

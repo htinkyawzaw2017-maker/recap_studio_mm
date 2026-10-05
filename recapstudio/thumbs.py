@@ -62,14 +62,81 @@ STYLES: dict[str, dict] = {
 }
 STYLE_ORDER = ("bold", "alert", "clean", "neon")
 
+#: The AI is briefed as a working thumbnail designer, not as a generic
+#: "make it pretty" filter. v4.3.5 — the old prompt was one flat paragraph, so
+#: every variant came back looking the same and the user had no real choice.
+#: ``designer_prompt()`` appends a different creative brief per variant.
 AI_PROMPT = (
-    "Re-style this exact video frame into a high-CTR YouTube thumbnail background. "
-    "Keep the same subject, pose and composition — do NOT invent a new scene and do not "
-    "add any text, letters, numbers, watermark or logo. Make it look cinematic and loud: "
-    "punchy contrast, crisp details, warm key light on the subject, slightly darkened and "
-    "blurred background, vivid saturated colours, subtle rim light, clean empty space at the "
-    "top and bottom so captions can be added later. Photorealistic, sharp, 4k poster quality."
+    "You are a professional YouTube thumbnail designer with 10 years of experience "
+    "making high-CTR thumbnails for channels with millions of subscribers. You are "
+    "looking at ONE REAL FRAME taken from a finished video, and your job is to turn "
+    "that exact frame into a thumbnail that makes people stop scrolling and click.\n"
+    "\n"
+    "HARD CONSTRAINTS — never break these:\n"
+    "* Keep the SAME subject, the same pose, the same scene and the same camera angle. "
+    "You are re-lighting and re-grading this frame, NOT inventing a new one. Do not add "
+    "people, objects, places or events that are not already in the frame.\n"
+    "* Add NO text, NO letters, NO numbers, NO captions, NO watermark, NO logo, NO "
+    "arrows and NO border. Captions are composited afterwards by the app; any text you "
+    "draw will collide with them and ruin the thumbnail.\n"
+    "* Keep the original framing and aspect ratio; do not crop the subject's face.\n"
+    "\n"
+    "WHAT A HIGH-CTR THUMBNAIL NEEDS — apply all of it:\n"
+    "* ONE clear focal point. The eye must land on the subject within a fraction of a "
+    "second, even at 120px wide on a phone.\n"
+    "* Strong separation between subject and background: darken and blur the background, "
+    "add a subtle rim/edge light on the subject so it pops off the frame.\n"
+    "* Punchy contrast and vivid but believable colour. Warm key light on the face, cool "
+    "shadow side. No muddy mid-tones, no flat grey.\n"
+    "* A readable emotion. Push the expression and body language slightly so the feeling "
+    "of the moment is unmistakable — surprise, tension, joy, shock — without making it "
+    "look fake or plastic.\n"
+    "* Leave clean, uncluttered negative space at the TOP and BOTTOM third so the hook "
+    "text stays legible.\n"
+    "* Photorealistic, tack sharp, 4k poster quality. No painterly or illustrated look, "
+    "no plastic skin, no over-sharpened halos, no AI glow."
 )
+
+#: per-variant creative direction, so 3-4 thumbnails are genuinely different
+#: options instead of four copies of the same grade
+VARIANT_BRIEFS: dict[str, str] = {
+    "bold": (
+        "BRIEF A — 'Bold & Loud': maximum contrast, saturated warm colours, a strong "
+        "golden key light on the subject, deep dark background. Energetic and unmissable."
+    ),
+    "alert": (
+        "BRIEF B — 'Urgent / Danger': cooler overall grade with a strong red or amber "
+        "accent light on one side of the subject, harder shadows, higher tension. It "
+        "should feel like something is about to go wrong."
+    ),
+    "clean": (
+        "BRIEF C — 'Clean & Bright': airy and well lit, soft even key light, bright but "
+        "not blown-out background, natural skin tones. Premium, trustworthy, minimal."
+    ),
+    "neon": (
+        "BRIEF D — 'Neon Cinematic': teal-and-magenta cinematic split grade, glowing rim "
+        "light, moody dark background with a coloured haze. Stylised but still "
+        "photorealistic."
+    ),
+}
+
+
+def designer_prompt(style_key: str = "bold", aspect: str = "16:9",
+                    index: int = 0) -> str:
+    """Full briefing for one thumbnail variant.
+
+    Composing the persona + the variant brief keeps every result on-brand while
+    making the 3-4 options actually differ, which is the point of offering them.
+    """
+    brief = VARIANT_BRIEFS.get(style_key) or VARIANT_BRIEFS["bold"]
+    width, height = ASPECT_SIZES.get(aspect, ASPECT_SIZES["16:9"])
+    return (
+        f"{AI_PROMPT}\n\n"
+        f"{brief}\n\n"
+        f"Output a single {width}x{height} ({aspect}) photorealistic image, "
+        f"variant #{index + 1}. Remember: no text, no letters, no watermark."
+    )
+
 
 
 @dataclass
@@ -307,7 +374,10 @@ def generate_variants(video_path: str | Path, out_dir: Path, hook1: str, hook2: 
         ai_used = False
         if wants_ai:
             ai_path = Path(config.TMP_DIR) / f"nb_{tag}_{idx}.png"
-            if ai_restyle(cand.path, ai_path, api_key=api_key, key_ring=key_ring, cancel=cancel):
+            # v4.3.5 — each variant gets its own creative brief, so the user is
+            # choosing between genuinely different thumbnails.
+            if ai_restyle(cand.path, ai_path, api_key=api_key, key_ring=key_ring,
+                          prompt=designer_prompt(style, aspect, idx), cancel=cancel):
                 base, ai_used = ai_path, True
         out_path = out_dir / f"thumb_{tag}_{idx + 1}.jpg"
         try:
@@ -344,4 +414,5 @@ def generate_variants(video_path: str | Path, out_dir: Path, hook1: str, hook2: 
 
 
 __all__ = ["generate_variants", "pick_frames", "compose", "ai_restyle", "ai_available",
-           "ASPECT_SIZES", "STYLES", "STYLE_ORDER", "NANO_BANANA_MODELS", "AI_PROMPT"]
+           "ASPECT_SIZES", "STYLES", "STYLE_ORDER", "NANO_BANANA_MODELS", "AI_PROMPT",
+           "VARIANT_BRIEFS", "designer_prompt"]

@@ -25,6 +25,7 @@ tests can use the same code without spinning up the web app.
 """
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
@@ -43,7 +44,7 @@ _init_lock = threading.RLock()
 _initialised: set[str] = set()
 
 #: bumped whenever MIGRATIONS grows
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 MIGRATIONS: list[tuple[int, str]] = [
@@ -131,6 +132,20 @@ MIGRATIONS: list[tuple[int, str]] = [
             updated_at REAL NOT NULL
         );
     """),
+    # v4.3.5 — per-account UI preferences (subtitle size / text-box position,
+    # voice, mode, ...). ``settings_kv`` is global (server defaults, admin
+    # only); this table is scoped to one account so each editor keeps their
+    # own layout after logging in on any device.
+    (4, """
+        CREATE TABLE IF NOT EXISTS user_settings (
+            user_id    TEXT NOT NULL,
+            key        TEXT NOT NULL,
+            value      TEXT NOT NULL,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (user_id, key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_settings_user ON user_settings(user_id);
+    """),
 ]
 
 
@@ -207,6 +222,38 @@ def query_one(sql: str, params: Sequence[Any] | dict[str, Any] = ()) -> Optional
 
 def executemany(sql: str, rows: Iterable[Sequence[Any]]) -> None:
     connect().executemany(sql, rows)
+
+
+# ── per-user UI preferences (v4.3.5) ─────────────────────────────────────
+def get_user_settings(user_id: str) -> dict[str, Any]:
+    """All stored preferences for one account (``{}`` when none exist)."""
+    if not user_id:
+        return {}
+    rows = query("SELECT key, value FROM user_settings WHERE user_id = ?", (user_id,))
+    out: dict[str, Any] = {}
+    for row in rows:
+        try:
+            out[str(row["key"])] = json.loads(row["value"])
+        except (ValueError, TypeError):
+            out[str(row["key"])] = row["value"]
+    return out
+
+
+def set_user_settings(user_id: str, values: dict[str, Any]) -> dict[str, Any]:
+    """Merge ``values`` into the account's stored preferences and return them."""
+    if not user_id:
+        return {}
+    init()
+    now = time.time()
+    with transaction() as conn:
+        for key, value in values.items():
+            conn.execute(
+                "INSERT INTO user_settings(user_id, key, value, updated_at) VALUES (?,?,?,?) "
+                "ON CONFLICT(user_id, key) DO UPDATE SET value=excluded.value, "
+                "updated_at=excluded.updated_at",
+                (user_id, str(key), json.dumps(value), now),
+            )
+    return get_user_settings(user_id)
 
 
 # ── migrations ───────────────────────────────────────────────────────────
