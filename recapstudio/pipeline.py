@@ -139,6 +139,10 @@ class RecapPipeline:
                 log_fn=lambda msg: store.log(job_id, msg),
                 key_ring=payload_key_ring,
             )
+            if fill_mode == "dialogue":
+                # Hooks are recap marketing copy, not part of a faithful dub.
+                result["hook_line1"] = ""
+                result["hook_line2"] = ""
             dialogues = result["dialogues"]
             if not dialogues:
                 raise ValueError(
@@ -163,7 +167,8 @@ class RecapPipeline:
             # what made the narration sound rushed (#2). Trim it to what can
             # be spoken calmly — the subtitle then shows exactly what is said.
             dialogues, condensed = fit_lines_to_windows(
-                dialogues, duration, payload.get("lang", "my"))
+                dialogues, duration, payload.get("lang", "my"),
+                respect_end=(fill_mode == "dialogue"))
             if condensed:
                 store.log(job_id, f"✂️ စာကြောင်း {condensed} ကြောင်းကို အချိန်ကိုက် တိုအောင် ချုံ့လိုက်သည် "
                                   f"(အသံ မြန်လွန်းခြင်း မဖြစ်စေရန်)")
@@ -190,6 +195,7 @@ class RecapPipeline:
                 progress=voice_cb,
                 cancel=self._cancel(job_id),
                 fallback_voice_cfg=alt_voice_cfg,
+                strict_timing=(fill_mode == "dialogue"),
             )
             # ── silence repair: the video must be voiced from start to end ─
             dialogues, mix = self._repair_silences(
@@ -233,6 +239,7 @@ class RecapPipeline:
                     v_margin=int(target_h * (float(payload.get("sub_v_pos_percent", 22)) / 100.0)),
                     hex_color=payload.get("sub_color_hex", "#00F2FE"),
                     bg_style=payload.get("sub_bg_style", "Solid Box"),
+                    width_percent=int(payload.get("sub_width_percent", 90)),
                     play_res=(target_w, target_h),
                     hook_seconds=float(payload.get("hook_seconds", 0)),
                     subtitle_alpha=int(payload.get("sub_alpha", 0)),
@@ -489,8 +496,12 @@ class RecapPipeline:
             ]
             if not dialogues:
                 raise ValueError("Timeline တွင် စာသား မရှိပါ - အနည်းဆုံး လိုင်းတစ်ခု ထည့်ပါ။")
+            fill_mode = payload.get("fill_mode", (job.request or {}).get("fill_mode", "continuous"))
             input_video = str(config.resolve(job.input_video))
             duration = get_media_duration(input_video) or job.duration
+            if fill_mode == "dialogue":
+                dialogues, _ = fit_lines_to_windows(
+                    dialogues, duration, payload.get("lang", "my"), respect_end=True)
             info = get_video_info(input_video)
             work_dir = _job_workdir(job_id)
             ensure_disk_space(300 * 1024 * 1024)
@@ -504,6 +515,7 @@ class RecapPipeline:
                 work_dir=work_dir, tag=f"{job_id}_v2",
                 progress=self._stage(job_id, "voice"), cancel=self._cancel(job_id),
                 fallback_voice_cfg=alt_voice_cfg,
+                strict_timing=(fill_mode == "dialogue"),
             )
             store.update(job_id, stage="mix")
             narration_mp3 = work_dir / f"narration_{job_id}_v2.mp3"
@@ -519,12 +531,13 @@ class RecapPipeline:
                 ass_path = str(work_dir / f"{job_id}_v2.ass")
                 build_ass(
                     dialogues=dialogues, duration=duration, ass_path=ass_path,
-                    hook_line1=payload.get("hook_line1", job.hook_line1),
-                    hook_line2=payload.get("hook_line2", job.hook_line2),
+                    hook_line1=(payload.get("hook_line1", job.hook_line1) if fill_mode != "dialogue" else ""),
+                    hook_line2=(payload.get("hook_line2", job.hook_line2) if fill_mode != "dialogue" else ""),
                     font_size=int(payload.get("sub_font_size", 42)),
                     v_margin=int(target_h * (float(payload.get("sub_v_pos_percent", 22)) / 100.0)),
                     hex_color=payload.get("sub_color_hex", "#00F2FE"),
                     bg_style=payload.get("sub_bg_style", "Solid Box"),
+                    width_percent=int(payload.get("sub_width_percent", 90)),
                     play_res=(target_w, target_h),
                     hook_seconds=float(payload.get("hook_seconds", 0)),
                     uppercase_hook=bool(payload.get("hook_uppercase", False)),
@@ -619,65 +632,108 @@ class RecapPipeline:
 
     # ── thumbnail ──────────────────────────────────────────────────────
     def generate_thumbnail(self, video_path: str, timestamp: float, hook1: str, hook2: str,
-                           output_path: str, style: str = "bold") -> dict:
+                           output_path: str, style: str = "bold", aspect: str = "16:9",
+                           text_position: str = "left") -> dict:
+        """Extract a real video frame and compose a high-contrast thumbnail."""
         from PIL import Image, ImageDraw
         from .fonts import get_mm_pil_font
 
-        width, height = 720, 1280
+        dimensions = {"16:9": (1280, 720), "9:16": (720, 1280), "1:1": (1080, 1080)}
+        width, height = dimensions.get(aspect, dimensions["16:9"])
+        text_position = "right" if text_position == "right" else "left"
         frame_path = config.TMP_DIR / f"frame_{uuid.uuid4().hex[:8]}.png"
-        run_ffmpeg([
-            "-y", "-ss", f"{max(0.0, timestamp):.3f}", "-i", video_path, "-frames:v", "1",
-            "-vf", f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}",
-            str(frame_path),
-        ], check=True)
-        if not frame_path.exists():
-            raise RuntimeError("Frame ဖမ်းယူ၍ မရပါ - စက္ကန့် အနေအထားကို ပြောင်းကြည့်ပါ။")
+        try:
+            run_ffmpeg([
+                "-y", "-ss", f"{max(0.0, timestamp):.3f}", "-i", video_path,
+                "-frames:v", "1",
+                "-vf", f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+                       f"crop={width}:{height}",
+                str(frame_path),
+            ], check=True)
+            if not frame_path.exists():
+                raise RuntimeError("Frame ဖမ်းယူ၍ မရပါ — AI အကြံပြုထားသော timestamp ကို ပြောင်းစမ်းပါ။")
 
-        base = Image.open(frame_path).convert("RGBA")
-        shade = Image.new("RGBA", base.size, (0, 0, 0, 0))
-        draw_shade = ImageDraw.Draw(shade)
-        draw_shade.rectangle([0, 0, width, int(height * 0.26)], fill=(0, 0, 0, 190))
-        draw_shade.rectangle([0, int(height * 0.72), width, height], fill=(0, 0, 0, 150))
-        base = Image.alpha_composite(base, shade)
+            base = Image.open(frame_path).convert("RGBA")
+            # Fade a dark gradient into the text-safe side; keep the video
+            # subject visible instead of covering the whole frame with a box.
+            shade = Image.new("RGBA", base.size, (0, 0, 0, 0))
+            shade_draw = ImageDraw.Draw(shade)
+            fade_width = int(width * 0.72)
+            for step in range(fade_width):
+                progress = step / max(1, fade_width - 1)
+                alpha = int(218 * ((1.0 - progress) ** 1.6))
+                x = step if text_position == "left" else width - 1 - step
+                shade_draw.line((x, 0, x, height), fill=(3, 8, 18, alpha))
+            # Subtle bottom fade protects copy on busy / bright footage.
+            for step in range(int(height * 0.27)):
+                progress = step / max(1, int(height * 0.27) - 1)
+                alpha = int(92 * progress)
+                y = height - 1 - step
+                shade_draw.line((0, y, width, y), fill=(3, 8, 18, alpha))
+            base = Image.alpha_composite(base, shade)
 
-        draw = ImageDraw.Draw(base)
-        font_big = get_mm_pil_font(int(width * 0.072), bold=True)
-        font_small = get_mm_pil_font(int(width * 0.048), bold=True)
-        accent = (0, 242, 254, 255)
-        yellow = (255, 214, 10, 255)
+            draw = ImageDraw.Draw(base)
+            headline = (hook1 or "စိတ်လှုပ်ရှားစရာ ဇာတ်လမ်း").strip()
+            subheadline = (hook2 or "အဆုံးထိ ကြည့်ပါ").strip()
+            font_big = get_mm_pil_font(max(42, int(width * 0.076)), bold=True)
+            font_small = get_mm_pil_font(max(24, int(width * 0.040)), bold=True)
+            yellow = (255, 220, 55, 255)
+            white = (255, 255, 255, 255)
+            cyan = (0, 226, 245, 255)
+            max_text_width = int(width * (0.52 if aspect == "16:9" else 0.78))
 
-        def wrap(text: str, font, max_width: int) -> list[str]:
-            words = (text or "").split()
-            if not words:
-                return []
-            lines, current = [], words[0]
-            for word in words[1:]:
-                probe = f"{current} {word}"
-                if draw.textlength(probe, font=font) <= max_width:
-                    current = probe
-                else:
-                    lines.append(current)
-                    current = word
-            lines.append(current)
-            return lines[:3]
+            def wrap(text: str, font, max_width: int, max_lines: int = 3) -> list[str]:
+                words = (text or "").split()
+                if not words:
+                    return []
+                lines: list[str] = []
+                current = words[0]
+                for word in words[1:]:
+                    probe = f"{current} {word}"
+                    if draw.textlength(probe, font=font) <= max_width:
+                        current = probe
+                    else:
+                        lines.append(current)
+                        current = word
+                lines.append(current)
+                if len(lines) > max_lines:
+                    lines = lines[:max_lines]
+                    tail = lines[-1]
+                    while tail and draw.textlength(tail + "…", font=font) > max_width:
+                        tail = tail[:-1]
+                    lines[-1] = tail.rstrip() + "…"
+                return lines
 
-        top_lines = wrap(hook1, font_big, int(width * 0.9))
-        bottom_lines = wrap(hook2, font_small, int(width * 0.86))
-        y = int(height * 0.055)
-        for line in top_lines:
-            draw.text((width // 2, y), line, font=font_big, fill=yellow, anchor="ma",
-                      stroke_width=7, stroke_fill=(0, 0, 0, 255))
-            y += int(width * 0.088)
-        y = int(height * 0.755)
-        for line in bottom_lines:
-            draw.text((width // 2, y), line, font=font_small, fill=accent, anchor="ma",
-                      stroke_width=5, stroke_fill=(0, 0, 0, 255))
-            y += int(width * 0.062)
+            lines = wrap(headline, font_big, max_text_width, 3)
+            secondary_lines = wrap(subheadline, font_small, max_text_width, 2)
+            margin_x = int(width * 0.065)
+            anchor_x = margin_x if text_position == "left" else width - margin_x
+            anchor = "la" if text_position == "left" else "ra"
+            y = int(height * (0.27 if aspect == "16:9" else 0.24))
+            line_height = int(font_big.size * 1.12)
+            for line in lines:
+                draw.text((anchor_x, y), line, font=font_big, fill=yellow, anchor=anchor,
+                          stroke_width=max(3, int(width * 0.004)), stroke_fill=(0, 0, 0, 255))
+                y += line_height
+            y += int(height * 0.035)
+            for line in secondary_lines:
+                draw.text((anchor_x, y), line, font=font_small, fill=white, anchor=anchor,
+                          stroke_width=max(2, int(width * 0.0025)), stroke_fill=(0, 0, 0, 255))
+                y += int(font_small.size * 1.18)
 
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        base.convert("RGB").save(output_path, "JPEG", quality=94, optimize=True)
-        frame_path.unlink(missing_ok=True)
-        return {"path": output_path, "size": os.path.getsize(output_path)}
+            # A single accent rule creates a consistent branded hierarchy.
+            bar_y = max(int(height * 0.14), y - line_height - int(height * 0.035))
+            bar_x = anchor_x if text_position == "left" else anchor_x - int(width * 0.09)
+            draw.rounded_rectangle(
+                (bar_x, bar_y, bar_x + int(width * 0.075), bar_y + max(6, int(height * 0.012))),
+                radius=max(3, int(height * 0.008)), fill=cyan)
+
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            base.convert("RGB").save(output_path, "JPEG", quality=95, optimize=True)
+            return {"path": output_path, "size": os.path.getsize(output_path),
+                    "width": width, "height": height, "aspect": aspect}
+        finally:
+            frame_path.unlink(missing_ok=True)
 
     # ── shorts splitter ────────────────────────────────────────────────
     def split_video(self, video_path: str, slice_sec: int, aspect: str,

@@ -114,9 +114,9 @@ ssh -i ~/Downloads/recap-key.pem ubuntu@13.212.45.67
 ### 🚀 အမြန်ဆုံးနည်းလမ်း — command တစ်ကြောင်းတည်း
 
 ```bash
-curl -fsSL https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm \
+curl -fsSL https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10a80-recap-studio-mm \
   | tar xz -C /tmp \
-  && sudo bash /tmp/recap_studio_mm-arena-01a105ed-recap-studio-mm/deploy/ec2_install.sh
+  && sudo RECAP_BRANCH=arena/01a10a80-recap-studio-mm bash /tmp/recap_studio_mm-arena-01a10a80-recap-studio-mm/deploy/ec2_install.sh
 ```
 
 > `main` branch ပေါ် merge လုပ်ပြီးသားလျှင် အထက်ပါ link ရှိ branch နာမည်ကို `main` ဖြင့် အစားထိုးပါ (သို့)
@@ -128,11 +128,11 @@ curl -fsSL https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar
 # 1) code ရယူပါ
 cd /tmp
 curl -fsSL -o recap.tar.gz \
-  https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm
+  https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10a80-recap-studio-mm
 tar xzf recap.tar.gz
 
 # 2) installer run (idempotent — ဘယ်နှစ်ခါ run လည်း ရသည်၊ data/key မပျောက်)
-sudo bash /tmp/recap_studio_mm-arena-01a105ed-recap-studio-mm/deploy/ec2_install.sh
+sudo RECAP_BRANCH=arena/01a10a80-recap-studio-mm bash /tmp/recap_studio_mm-arena-01a10a80-recap-studio-mm/deploy/ec2_install.sh
 ```
 
 Installer က အလိုအလျောက် လုပ်ပေးသည်များ —
@@ -145,7 +145,7 @@ venv ဖန်တီး + `pip install -r requirements.txt`၊ `.env` ဖန်�
 
 ```bash
 curl -fsSL -o /tmp/ec2_install.sh \
-  https://raw.githubusercontent.com/htinkyawzaw2017-maker/recap_studio_mm/arena/01a105ed-recap-studio-mm/deploy/ec2_install.sh
+  https://raw.githubusercontent.com/htinkyawzaw2017-maker/recap_studio_mm/arena/01a10a80-recap-studio-mm/deploy/ec2_install.sh
 sudo bash /tmp/ec2_install.sh
 ```
 
@@ -221,7 +221,7 @@ curl -s http://localhost/api/auth/me   # "mode":"users" ဖြစ်ရမည်
 ### Deploy တကယ် ရောက်/မရောက် အပြင်မှ စစ်ရန် (laptop မှ)
 
 ```bash
-curl -s http://13.212.45.67/healthz            # version ကို စစ်ပါ (4.3.0 ဖြစ်ရမည်)
+curl -s http://13.212.45.67/healthz            # version ကို စစ်ပါ (4.4.0 ဖြစ်ရမည်)
 python tests/verify_deployment.py http://13.212.45.67
 # v4.2 အကောင့်ဖြင့် (အပြည့်အစုံ စစ်ရန်):
 python tests/verify_deployment.py http://13.212.45.67 --username myname --password 'XXXX'
@@ -237,9 +237,9 @@ python tests/verify_deployment.py http://13.212.45.67 --access-key သင့်�
 # server terminal ထဲ
 cd /tmp
 curl -fsSL -o recap.tar.gz \
-  https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a105ed-recap-studio-mm
+  https://codeload.github.com/htinkyawzaw2017-maker/recap_studio_mm/tar.gz/refs/heads/arena/01a10a80-recap-studio-mm
 rm -rf recap_studio_mm-arena-* && tar xzf recap.tar.gz
-sudo bash /tmp/recap_studio_mm-arena-01a105ed-recap-studio-mm/deploy/ec2_install.sh
+sudo RECAP_BRANCH=arena/01a10a80-recap-studio-mm bash /tmp/recap_studio_mm-arena-01a10a80-recap-studio-mm/deploy/ec2_install.sh
 ```
 
 Installer ကိုပဲ ပြန် run လုပ်ခြင်းဖြင့် — code အသစ်၊ package အသစ်၊ service restart အားလုံး ဖြစ်သွားမည်။
@@ -261,7 +261,7 @@ Installer ကိုပဲ ပြန် run လုပ်ခြင်းဖြင�
 | Disk ပြည့် | `df -h` | `sudo journalctl --vacuum-time=3d`; data TTL လျှော့ (`RECAP_WORKSPACE_TTL_HOURS=6`) |
 | ffmpeg မတွေ့ | `ffmpeg -version` | `sudo apt install -y ffmpeg` |
 | Font မလှ | `ls /usr/share/fonts/truetype/noto \| grep Myanmar` | `sudo apt install -y fonts-noto-core fonts-sil-padauk` |
-| Update ရောက်/မရောက် မသိ | `curl -s http://localhost/healthz` | version နှိုင်းယှဉ်ပါ (4.3.0) |
+| Update ရောက်/မရောက် မသိ | `curl -s http://localhost/healthz` | version နှိုင်းယှဉ်ပါ (4.4.0) |
 
 Log ကြည့်ရန် အတိုဆုံး command များ —
 

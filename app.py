@@ -60,6 +60,8 @@ from recapstudio.media import (ffmpeg_available, ffmpeg_version, ffprobe_availab
                                get_video_info, process_registry)
 from recapstudio.pipeline import RecapPipeline
 from recapstudio.tts import VOICE_CATALOG
+from recapstudio import userprefs
+from recapstudio.ai import suggest_thumbnail
 from recapstudio.uploads import upload_manager
 from recapstudio.uploads import VIDEO_EXT
 from recapstudio.util import (cached_dir_size, free_disk_bytes, get_logger, human_bytes,
@@ -487,6 +489,25 @@ def auth_change_password(payload: dict[str, Any], request: Request, response: Re
     auth.audit("password_change", principal=principal, ip=webauth.client_ip(request))
     webauth.clear_session_cookie(response)       # every device must sign in again
     return {"status": "ok", "message": "စကားဝှက် ပြောင်းပြီးပါပြီ — ပြန်လည် login ဝင်ပါ"}
+
+
+@app.get("/api/me/preferences")
+def get_my_preferences(principal: Principal = Depends(guard)) -> dict:
+    """Return this account's Studio choices (SQLite-backed across devices)."""
+    return {"status": "ok", "storage": "sqlite",
+            "preferences": userprefs.get(principal.scope)}
+
+
+@app.put("/api/me/preferences")
+def save_my_preferences(payload: dict[str, Any], request: Request,
+                        principal: Principal = Depends(guard)) -> dict:
+    try:
+        saved = userprefs.save(principal.scope, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    auth.audit("preferences_update", principal=principal,
+               target=principal.scope, ip=webauth.client_ip(request))
+    return {"status": "ok", "storage": "sqlite", "preferences": saved}
 
 
 @app.get("/api/auth/sessions")
@@ -1298,6 +1319,36 @@ def download_file(filename: str, principal: Principal = Depends(guard)) -> FileR
 
 
 # ── tools ────────────────────────────────────────────────────────────────
+@app.post("/api/thumbnail/suggest")
+def thumbnail_suggest(payload: dict[str, Any],
+                      principal: Principal = Depends(guard)) -> dict:
+    """Ask Gemini to inspect a video and plan an honest high-CTR thumbnail."""
+    raw_path = str(payload.get("video_path", ""))
+    if not raw_path:
+        raise HTTPException(status_code=400, detail="ဗီဒီယိုဖိုင် အရင်ရွေးပါ")
+    video_path = _resolve_owned(raw_path, principal)
+    if not video_path.is_file():
+        raise HTTPException(status_code=404, detail="ဗီဒီယိုဖိုင် ရှာမတွေ့ပါ")
+    api_key = _effective_api_key(principal, payload)
+    if not api_key and not key_ring.has_key() and not config.settings.demo_mode:
+        raise HTTPException(status_code=400,
+                            detail="AI thumbnail အတွက် Gemini API Key လိုအပ်ပါသည် — Settings တွင် Key ထည့်ပါ")
+    info = get_video_info(str(video_path))
+    try:
+        design = suggest_thumbnail(
+            str(video_path), info["duration"], api_key=api_key,
+            model=str(payload.get("model") or config.settings.default_model),
+            language=str(payload.get("lang", "my")),
+            key_ring=key_ring if not api_key else None,
+        )
+    except Exception as exc:
+        log.exception("AI thumbnail design failed for %s", principal.scope)
+        raise _json_error(exc) from exc
+    return {"status": "ok", "design": design,
+            "video": {"duration": info["duration"], "width": info["width"],
+                      "height": info["height"]}}
+
+
 @app.post("/api/thumbnail")
 def thumbnail(payload: dict[str, Any],
               principal: Principal = Depends(guard)) -> FileResponse:
@@ -1317,6 +1368,8 @@ def thumbnail(payload: dict[str, Any],
             hook2=str(payload.get("hook_line2", "")) or "ဇာတ်ကွက်များ",
             output_path=str(out_path),
             style=str(payload.get("style", "bold")),
+            aspect=str(payload.get("aspect", "16:9")),
+            text_position=str(payload.get("text_position", "left")),
         )
     except Exception as exc:
         raise _json_error(exc) from exc

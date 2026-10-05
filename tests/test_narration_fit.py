@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Phase 3 · Batch B — narration budget, mode separation and link import.
+"""Studio regression — narration budget, mode separation and even portrait proxies.
 
-offline (network မလို၊ ffmpeg မလို) — ၂၅ checks
+offline (network မလို၊ ffmpeg မလို) — 49 checks
 
     python tests/test_narration_fit.py
 """
@@ -9,15 +9,17 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("RECAP_DEMO_MODE", "1")
 os.environ.setdefault("RECAP_FAKE_TTS", "1")
 
-from recapstudio import ai  # noqa: E402
-from recapstudio.tts import (budget_chars, chars_per_second, condense_line,  # noqa: E402
-                             fit_lines_to_windows)
+from recapstudio import ai, subtitles  # noqa: E402
+import recapstudio.tts as tts_module  # noqa: E402
+from recapstudio.tts import (PlannedLine, TTSEngine, budget_chars, chars_per_second,  # noqa: E402
+                             condense_line, fit_lines_to_windows)
 
 PASS, FAIL = [], []
 
@@ -68,6 +70,47 @@ check("the long window keeps its full text", fitted[2]["text"] == long_my)
 check("the short window was shortened", len(fitted[0]["text"]) < len(long_my))
 check("condensed lines are flagged for the UI", fitted[0].get("condensed") is True)
 check("line order is preserved", [round(d["start"], 1) for d in fitted] == [0.0, 4.0, 6.0])
+dubbed, dub_condensed = fit_lines_to_windows(
+    [dict(d) for d in timeline], 30.0, "my", respect_end=True)
+check("dialogue dubbing never condenses or rewrites source dialogue",
+      dub_condensed == 0 and [d["text"] for d in dubbed] == [d["text"] for d in timeline])
+engine = TTSEngine(cache_dir=Path(tempfile.mkdtemp(prefix="recap_tts_plan_")), workers=1)
+strict_plan = engine.plan_lines([
+    {"start": 0.0, "end": 2.0, "text": "First source utterance."},
+    {"start": 10.0, "end": 12.0, "text": "Second source utterance."},
+], 20.0, "en", strict_timing=True)
+flex_plan = engine.plan_lines([
+    {"start": 0.0, "end": 2.0, "text": "First recap line."},
+    {"start": 10.0, "end": 12.0, "text": "Second recap line."},
+], 20.0, "en", strict_timing=False)
+check("dubbing is bounded by its own end, not the next speaker's start",
+      strict_plan[0].hard_limit_seconds <= 2.0
+      and strict_plan[0].target_seconds < 2.0,
+      f"target={strict_plan[0].target_seconds:.2f}s hard={strict_plan[0].hard_limit_seconds:.2f}s")
+check("recap mode can use its planned narration gap",
+      flex_plan[0].target_seconds > strict_plan[0].target_seconds)
+strict_line = PlannedLine(index=0, start=1.0, end=2.0, text="A source line.",
+                          target_seconds=1.0, hard_limit_seconds=1.04)
+rate_calls = []
+original_duration = tts_module.get_media_duration
+original_synthesize = engine.synthesize
+def fake_tts(text, voice_cfg, out_mp3, rate_override=None):
+    rate_calls.append(rate_override)
+    Path(out_mp3).write_bytes(b"fake-mp3")
+    return True
+tts_module.get_media_duration = lambda path: 1.4
+engine.synthesize = fake_tts
+try:
+    strict_output = engine._fit_to_window(
+        strict_line, {"voice": "en-US-Test", "lang": "en"},
+        Path(tempfile.mkdtemp(prefix="strict_tts_fit_")), "strict_test", strict_timing=True)
+finally:
+    tts_module.get_media_duration = original_duration
+    engine.synthesize = original_synthesize
+check("overlong dialogue is rejected rather than trimmed into a late line",
+      strict_output is None and strict_line.skipped and not strict_line.trimmed)
+check("dubbing speed-up is capped at 12%", "+12%" in rate_calls,
+      ", ".join(str(rate) for rate in rate_calls))
 check("every line can now be spoken calmly",
       all(len(d["text"]) <= budget_chars(
           (fitted[i + 1]["start"] if i + 1 < len(fitted) else 30.0) - d["start"], "my") + 2
@@ -76,15 +119,48 @@ check("every line can now be spoken calmly",
 print("\n=== 4. the two modes are really different (#6) ===")
 recap_prompt = ai._chunk_prompt(0.0, 60.0, "my", "movie", "continuous", 600.0)
 dub_prompt = ai._chunk_prompt(0.0, 60.0, "my", "movie", "dialogue", 600.0)
-check("recap mode asks for continuous narration", "WHOLE-VIDEO RECAP" in recap_prompt)
-check("dubbing mode forbids invented narration",
-      "DIALOGUE DUBBING" in dub_prompt and "never add narration" in dub_prompt)
+check("recap mode asks for professional, visually grounded narration",
+      "PROFESSIONAL MOVIE RECAP" in recap_prompt and "visible action" in recap_prompt)
+check("recap tracks the visible action instead of translating every line",
+      "story consequence" in recap_prompt and "do not translate every spoken line" in recap_prompt)
+check("dubbing mode is audio-led and forbids invented narration",
+      "source audio" in dub_prompt and "ONLY genuine audible speech" in dub_prompt)
+check("dubbing mode forbids narration and gap filling",
+      "DIALOGUE DUBBING" in dub_prompt and "no narrator voice" in dub_prompt
+      and "never add a line to satisfy clip coverage" in dub_prompt)
 check("dubbing mode demands precise speech boundaries", "0.3 seconds" in dub_prompt)
 check("both prompts carry the real character budget",
       "characters per second" in recap_prompt and "characters per second" in dub_prompt)
 check("the budget shown matches tts.budget_chars",
       str(budget_chars(4.0, "my")) in recap_prompt, str(budget_chars(4.0, "my")))
-check("style rules ban filler phrases", "no filler" in recap_prompt)
+check("style rules ban filler phrases", "Avoid filler" in recap_prompt)
+
+captured_proxy_args = {}
+original_run_ffmpeg = ai.run_ffmpeg
+def fake_run_ffmpeg(args, **kwargs):
+    captured_proxy_args["args"] = args
+    return None
+ai.run_ffmpeg = fake_run_ffmpeg
+try:
+    ai.build_proxy("portrait.mp4", 0.0, 5.0,
+                   Path(tempfile.gettempdir()) / "proxy_even_dimensions_test.mp4")
+finally:
+    ai.run_ffmpeg = original_run_ffmpeg
+proxy_filter = captured_proxy_args["args"][captured_proxy_args["args"].index("-vf") + 1]
+check("portrait proxy rounds both x264 dimensions to even values",
+      "force_divisible_by=2" in proxy_filter and "pad=ceil(iw/2)*2:ceil(ih/2)*2" in proxy_filter,
+      proxy_filter)
+check("thumbnail AI schema includes frame, hook and text-side fields",
+      {"timestamp", "headline", "subheadline", "text_position", "rationale"}
+      <= set(ai.THUMBNAIL_SCHEMA["properties"]))
+ass_path = Path(tempfile.gettempdir()) / "recap_subtitle_width_test.ass"
+subtitles.build_ass([], 5.0, ass_path, play_res=(720, 1280), width_percent=80)
+subtitle_style = next(line for line in ass_path.read_text(encoding="utf-8").splitlines()
+                     if line.startswith("Style: SubtitleStyle,"))
+check("burn-in default is 42px and text-box width changes ASS margins",
+      ",42," in subtitle_style and subtitle_style.endswith(",2,72,72,280,1"),
+      subtitle_style[-40:])
+ass_path.unlink(missing_ok=True)
 
 ex = ai.TimelineExtractor(api_key="", fill_mode="dialogue")
 ex_cont = ai.TimelineExtractor(api_key="", fill_mode="continuous")

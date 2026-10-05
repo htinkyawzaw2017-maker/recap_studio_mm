@@ -13,7 +13,7 @@
  *   npm install jsdom          # တစ်ကြိမ်သာ
  *   node tests/test_ui_preview.mjs
  *
- * exit code 0 = အားလုံး အောင်မြင် (31 checks)
+ * exit code 0 = အားလုံး အောင်မြင် (39 checks)
  */
 import { JSDOM, VirtualConsole } from 'jsdom';
 import fs from 'node:fs';
@@ -24,6 +24,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BASE = 'http://127.0.0.1:8000';
 
 let checks = 0; const failures = [];
+const preferenceWrites = [];
+let thumbnailSuggestionRequest = null;
+let thumbnailRenderRequest = null;
 const check = (label, ok, detail = '') => {
   checks += 1;
   console.log(`  [${ok ? 'PASS' : 'FAIL'}] ${label}${detail ? ' — ' + detail : ''}`);
@@ -53,6 +56,15 @@ check('phone + tablet + small-phone breakpoints exist',
   /max-width:\s*1024px/.test(css) && /max-width:\s*620px/.test(css) && /max-width:\s*430px/.test(css));
 check('touch targets handled (pointer: coarse)', /@media \(pointer: coarse\)/.test(css));
 check('landscape phones handled', /orientation: landscape/.test(css));
+check('subtitle tools are colocated with the preview card',
+  /id="preview-card"[\s\S]*id="subtitle-tools"/.test(html));
+check('CapCut caption defaults to 42px and has per-user width/position sliders',
+  /id="sub-font" min="24" max="72" value="42"/.test(html)
+  && /id="sub-width" min="60" max="96" value="90"/.test(html)
+  && /id="sub-position"/.test(html)
+  && /api\/me\/preferences/.test(appjs));
+check('AI thumbnail designer has an explicit analyze action',
+  /id="btn-thumb-ai"/.test(html) && /api\/thumbnail\/suggest/.test(appjs));
 check('iOS zoom-on-focus prevented (16px controls)',
   /input\[type=text\][^}]*font-size:\s*16px/.test(css));
 check('stacked layout re-orders cards (upload → preview → settings)',
@@ -91,9 +103,39 @@ window.fetch = async (input, opts = {}) => {
   if (p === '/api/auth/me') {
     return json({ mode: 'open', required: false, authenticated: true, has_users: true, user: null });
   }
+  if (p === '/api/me/preferences') {
+    if (opts.method === 'PUT') {
+      preferenceWrites.push(JSON.parse(opts.body || '{}'));
+      return json({ status: 'ok', preferences: preferenceWrites.at(-1) });
+    }
+    return json({ status: 'ok', preferences: {
+      lang: 'my', mode: 'auto', fill_mode: 'continuous', voice: 'thiha', quality: 'balanced',
+      output_aspect: '9:16', reframe_mode: 'Smart Blur Background', enable_subtitles: true,
+      sub_font_size: 42, sub_color_hex: '#00f2fe', sub_bg_style: 'Solid Box',
+      sub_v_pos_percent: 22, sub_width_percent: 90
+    } });
+  }
+  if (p === '/api/thumbnail/suggest') {
+    thumbnailSuggestionRequest = JSON.parse(opts.body || '{}');
+    return json({ status: 'ok', design: {
+      timestamp: 4.25, headline: 'မထင်မှတ်တဲ့ အလှည့်အပြောင်း',
+      subheadline: 'အဆုံးထိ ကြည့်ပါ', text_position: 'right',
+      rationale: 'A clear reaction appears at this moment.', demo: false
+    } });
+  }
+  if (p === '/api/thumbnail') {
+    thumbnailRenderRequest = JSON.parse(opts.body || '{}');
+    return new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
+      headers: { 'content-type': 'image/jpeg' }
+    });
+  }
   if (p === '/api/system') {
     return json({
-      app_version: '4.3.0', ffmpeg: true, voices: { my: [{ id: 'thiha', label: 'မင်းသန့်' }] },
+      app_version: '4.4.0', ffmpeg: true, voices: {
+        my: { thiha: { name: 'မင်းသန့်' }, nilar: { name: 'မေသူ' } },
+        en: { christopher: { name: 'Christopher' }, jenny: { name: 'Jenny' },
+              guy: { name: 'Guy' }, aria: { name: 'Aria' } }
+      },
       models: ['gemini-2.5-flash'], default_model: 'gemini-2.5-flash', api_keys: { keys: [] }
     });
   }
@@ -131,6 +173,7 @@ try { window.eval(appjs); } catch (err) { check('app.js evaluates', false, Strin
 stubRect();
 doc.dispatchEvent(new window.Event('DOMContentLoaded'));
 await waitFor(() => !$('auth-overlay') || $('auth-overlay').classList.contains('hidden'), 4000);
+await waitFor(() => ($('subtitle-profile-status').textContent || '').includes('သိမ်းထားသော'), 4000);
 check('app.js runs without errors', jsErrors.length === 0, jsErrors.slice(0, 2).join(' | '));
 
 const wrap = $('preview-wrap');
@@ -179,6 +222,13 @@ check('hook px = 0.058 × frame width × scale',
   num($('overlay-hook').style.fontSize) === Math.round(0.058 * 720 * scale),
   `${$('overlay-hook').style.fontSize} vs ${Math.round(0.058 * 720 * scale)}px`);
 check('hook sits at the ASS margin (top 6%)', $('overlay-hook').style.top === '6%');
+$('fill-mode').value = 'dialogue';
+$('fill-mode').dispatchEvent(new window.Event('change'));
+check('Dialogue Dubbing gets its own CTA and suppresses recap hooks',
+  $('btn-start').textContent.includes('Dialogue Dubbing') && $('overlay-hook').innerHTML === '');
+$('fill-mode').value = 'continuous';
+$('fill-mode').dispatchEvent(new window.Event('change'));
+check('switching back restores recap hook preview', $('overlay-hook').innerHTML.includes('ဒီဇာတ်လမ်းက'));
 
 check('subtitle starts at the ASS MarginV default (22%)',
   $('overlay-sub').style.bottom === '22%', $('overlay-sub').style.bottom);
@@ -247,6 +297,37 @@ if (rendered) {
     ($('preview-video').getAttribute('src') || '').includes('clip_part_1'),
     $('preview-video').getAttribute('src') || '');
 }
+
+/* ── 6. per-user subtitle preferences persist on the server ─────────────── */
+console.log('\n=== 6. per-user caption preferences ===');
+$('sub-width').value = '76';
+$('sub-width').dispatchEvent(new window.Event('input'));
+await waitFor(() => preferenceWrites.some((p) => p.sub_width_percent === 76), 2500);
+check('width slider updates the WYSIWYG caption box',
+  $('overlay-sub').style.maxWidth === '76%' && $('lbl-sub-width').textContent === '76');
+check('caption size/width/position are sent to the SQLite preferences API',
+  preferenceWrites.length > 0 && preferenceWrites.at(-1).sub_width_percent === 76
+  && preferenceWrites.at(-1).sub_font_size === 42
+  && typeof preferenceWrites.at(-1).sub_v_pos_percent === 'number',
+  JSON.stringify(preferenceWrites.at(-1) || {}));
+
+/* ── 7. AI video review selects the thumbnail frame and hook ───────────── */
+console.log('\n=== 7. AI thumbnail design ===');
+$('btn-thumb-ai').click();
+await waitFor(() => thumbnailRenderRequest !== null, 3000);
+await waitFor(() => !$('thumb-result').classList.contains('hidden'), 3000);
+check('AI suggestion reviews the currently selected Studio video',
+  thumbnailSuggestionRequest && thumbnailSuggestionRequest.video_path === 'outputs/clip_part_1.mp4',
+  JSON.stringify(thumbnailSuggestionRequest || {}));
+check('AI-selected moment/text/side are used to render the thumbnail',
+  thumbnailRenderRequest && thumbnailRenderRequest.timestamp === 4.25
+  && thumbnailRenderRequest.hook_line1 === 'မထင်မှတ်တဲ့ အလှည့်အပြောင်း'
+  && thumbnailRenderRequest.text_position === 'right'
+  && thumbnailRenderRequest.aspect === '16:9',
+  JSON.stringify(thumbnailRenderRequest || {}));
+check('generated thumbnail is displayed with the AI rationale',
+  !$('thumb-result').classList.contains('hidden')
+  && $('thumb-rationale').textContent.includes('clear reaction'));
 
 console.log('\n' + '='.repeat(58));
 console.log(`${checks - failures.length}/${checks} checks passed`);
