@@ -121,7 +121,7 @@ class Settings:
     gemini_api_key_2: str = os.getenv("GEMINI_API_KEY_2", "")
     gemini_api_key_3: str = os.getenv("GEMINI_API_KEY_3", "")
     #: how many key slots the UI is allowed to fill (1 = classic behaviour)
-    max_api_keys: int = max(1, _env_int("RECAP_MAX_API_KEYS", 3))
+    max_api_keys: int = max(1, _env_int("RECAP_MAX_API_KEYS", 30))
     #: when a key answers 429 / quota / 403 the engine switches to the next
     #: slot automatically instead of failing the whole job
     api_key_failover: bool = _env_bool("RECAP_API_KEY_FAILOVER", True)

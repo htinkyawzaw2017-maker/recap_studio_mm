@@ -88,7 +88,7 @@ class KeyRing:
 
     def __init__(self, config_file=config.CONFIG_FILE, size: int | None = None):
         self.config_file = config_file
-        self.size = max(1, min(3, size or config.settings.max_api_keys))
+        self.size = max(1, min(100, size or config.settings.max_api_keys))
         self._lock = threading.RLock()
         self._active = 0
         self._cooldowns: dict[int, tuple[float, str]] = {}
@@ -309,3 +309,108 @@ def validate_key(key: str, model: str = "") -> tuple[bool, str]:
             return False, f"⚠️ Key quota ပြည့်နေပါသည် — {text[:160]}"
         return False, f"⛔ စစ်ဆေး၍ မရပါ — {text[:200]}"
 
+
+
+# ── v5 Free Edition: unlimited in-memory key pool (Streamlit) ─────────────
+class UnlimitedKeyPool:
+    """Duck-type replacement for KeyRing with NO slot limit.
+
+    Built for the Streamlit edition, where keys arrive from the UI / Secrets
+    at runtime instead of a server .env file. Keys are kept in memory only
+    (never written to disk), selected least-used-first, and a key that hits
+    quota/429/403 is rested for ``cooldown_seconds`` while the next healthy
+    key takes over — the interface mirrors KeyRing so GeminiClient can use
+    it unchanged (has_key / active_key / active_index / rotate_after_failure).
+    """
+
+    def __init__(self, keys: list[str], cooldown_seconds: int = 900):
+        seen: set[str] = set()
+        self._keys: list[str] = []
+        for k in keys or []:
+            k = str(k or "").strip()
+            if k and k not in seen:
+                seen.add(k)
+                self._keys.append(k)
+        self.cooldown_seconds = max(30, int(cooldown_seconds))
+        self._lock = threading.RLock()
+        self._active = 0
+        self._uses: dict[int, int] = {i: 0 for i in range(len(self._keys))}
+        self._cooldown_until: dict[int, float] = {}
+        self._last_error: dict[int, str] = {}
+
+    def __len__(self) -> int:
+        return len(self._keys)
+
+    # ── queries ──────────────────────────────────────────────────────
+    def has_key(self) -> bool:
+        return bool(self._keys)
+
+    @property
+    def active_index(self) -> int:
+        with self._lock:
+            return self._active
+
+    def _healthy(self, idx: int) -> bool:
+        return time.time() >= self._cooldown_until.get(idx, 0.0)
+
+    def _pick_least_used(self, exclude: int | None = None) -> int | None:
+        candidates = [i for i in range(len(self._keys))
+                      if i != exclude and self._healthy(i)]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda i: self._uses.get(i, 0))
+
+    def active_key(self) -> tuple[str, int]:
+        """(key, 1-based slot) of the least-used healthy key."""
+        with self._lock:
+            if not self._keys:
+                return "", 0
+            if not self._healthy(self._active):
+                nxt = self._pick_least_used()
+                if nxt is not None:
+                    self._active = nxt
+            idx = self._active
+            self._uses[idx] = self._uses.get(idx, 0) + 1
+            return self._keys[idx], idx + 1
+
+    def all_keys(self) -> list[str]:
+        with self._lock:
+            healthy = [self._keys[i] for i in range(len(self._keys)) if self._healthy(i)]
+            cooling = [self._keys[i] for i in range(len(self._keys)) if not self._healthy(i)]
+            return healthy + cooling
+
+    # ── failover ─────────────────────────────────────────────────────
+    def rotate_after_failure(self, slot_number: int, error: str,
+                             message_fn=None) -> Optional[str]:
+        with self._lock:
+            failed = int(slot_number) - 1
+            if 0 <= failed < len(self._keys):
+                self._cooldown_until[failed] = time.time() + self.cooldown_seconds
+                self._last_error[failed] = str(error)[:200]
+            nxt = self._pick_least_used(exclude=failed)
+            if nxt is None:
+                return None
+            self._active = nxt
+            if message_fn:
+                try:
+                    message_fn(f"🔑 Key #{slot_number} quota/error ထိသဖြင့် နားထားပြီး "
+                               f"Key #{nxt + 1} သို့ အလိုအလျောက် ပြောင်းလိုက်ပါသည်")
+                except Exception:
+                    pass
+            return self._keys[nxt]
+
+    # ── UI payload ───────────────────────────────────────────────────
+    def describe(self) -> list[dict]:
+        with self._lock:
+            now = time.time()
+            out = []
+            for i, k in enumerate(self._keys):
+                out.append({
+                    "slot": i + 1,
+                    "masked": mask(k),
+                    "uses": self._uses.get(i, 0),
+                    "active": i == self._active,
+                    "cooldown_seconds": max(0, int(self._cooldown_until.get(i, 0) - now)),
+                    "last_error": self._last_error.get(i, "")[:120],
+                })
+            return out
