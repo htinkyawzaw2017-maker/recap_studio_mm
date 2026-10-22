@@ -381,7 +381,7 @@ class GeminiClient:
                 msg = str(exc).lower()
                 is_key_error = any(k in msg for k in _KEY_ERROR_MARKERS)
                 # 1) a dead / quota-limited key is swapped out immediately
-                if is_key_error and key_switches < 3 and self.rotate_key(exc):
+                if is_key_error and key_switches < 50 and self.rotate_key(exc):
                     key_switches += 1
                     if progress:
                         progress(20, f"🔑 Key #{self.slot} ဖြင့် ပြန်စမ်းနေပါသည်...")
